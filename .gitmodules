@@ -1,0 +1,4 @@
+[submodule "third_party/physx-sdk"]
+	path = third_party/physx-sdk
+	url = https://github.com/NVIDIA-Omniverse/PhysX.git
+	ignore = dirty

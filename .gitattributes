@@ -1,0 +1,5 @@
+# Text is stored with LF line endings. Batch files keep CRLF (cmd.exe needs it); patches are applied byte for byte.
+* text=auto
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.patch -text

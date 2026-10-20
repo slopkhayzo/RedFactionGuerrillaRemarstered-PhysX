@@ -1,0 +1,17 @@
+diff --git a/physx/source/compiler/cmakegpu/CMakeLists.txt b/physx/source/compiler/cmakegpu/CMakeLists.txt
+index 31f8aee..eaba7d7 100644
+--- a/physx/source/compiler/cmakegpu/CMakeLists.txt
++++ b/physx/source/compiler/cmakegpu/CMakeLists.txt
+@@ -70,7 +70,11 @@ SET(SOURCE_DISTRO_FILE_LIST "")
+ # No need to set --generate-code=arch=compute_75,code=[compute_75,sm_75]
+ # since that's the default set in: compiler\internal\CMakeLists.txt (using CMAKE_CUDA_ARCHITECTURES)
+ # see policy CMP0104
+-IF(PX_GENERATE_GPU_REDUCED_ARCHITECTURES)
++# Modified for rfgphys (not part of NVIDIA's release): PX_GPU_SASS_ARCHS / PX_GPU_PTX_ARCH choose the GPU
++# architectures (rfgphys's tools/build_physx.cmd: 75, 86, 89 and 120, with PTX 120 for newer GPUs to JIT).
++IF(DEFINED PX_GPU_SASS_ARCHS)
++	GENERATE_ARCH_CODE_LIST(SASS "${PX_GPU_SASS_ARCHS}" PTX "${PX_GPU_PTX_ARCH}")
++ELSEIF(PX_GENERATE_GPU_REDUCED_ARCHITECTURES)
+ 	GENERATE_ARCH_CODE_LIST(SASS "80,86,89,90,100,120" PTX "120")
+ ELSE()
+ 	# Volta is the minimum compute arch required because NGC supports V100

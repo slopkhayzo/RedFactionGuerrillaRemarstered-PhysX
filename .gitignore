@@ -1,0 +1,18 @@
+# Build outputs
+/build/
+/build-host/
+/dist/
+/third_party/physx-build/
+
+# Local data: game sessions and recordings of play
+/runs/
+/recordings/
+
+# Research notes, analysis scripts and the data they extract from the game (kept local)
+/research/
+
+# Third-party binaries: downloaded, not kept here (third_party/README.md)
+/third_party/ultimate-asi-loader/dinput8.dll
+
+__pycache__/
+*.pyc

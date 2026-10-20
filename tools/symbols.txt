@@ -1,0 +1,307 @@
+# Symbols exported to src/rfgphys/game/rfg_symbols.generated.h by tools/gen_symbols.py.
+# fn NAME [@RVA [as ALIAS]]   function (RVA required only when the name is overloaded; ALIAS names the constant
+#                             when two overloads are both needed)
+# var NAME         global variable
+# enum NAME        enum name table
+
+# main loop and game state
+fn rfg_do_frame
+fn do_game_main_loop_frame
+fn do_game_render_frame
+fn game_handshake_do_frame
+fn game_handshake_do_middle_of_frame
+fn handshake_deferred_render
+fn gameseq_get_state
+fn frametime_calculate
+
+# simulation frame and physics
+fn gamestate_gp_simulate_frame
+fn havok_simulate
+fn hkpWorld::stepDeltaTime
+fn rfg_dyn_do_collide_post
+fn rfg_dyn_do_frame_pre
+fn shape_cutter_do_frame
+fn object_debris_process
+fn explosion_do_frame
+fn ai_system_do_frame
+fn rfgl_do_frame
+fn GeneralCollisionListener::contactPointAddedCallback
+
+# inside the Havok step (hkpSimulation::stepDeltaTime -> integrate, collide, advanceTime)
+fn hkpSimulation::integrate
+fn hkpContinuousSimulation::collideInternal
+fn hkpContinuousSimulation::collideEntitiesBroadPhaseContinuous
+fn hkpContinuousSimulation::advanceTime
+
+# test automation and save safety
+fn main_menu_handle_selection
+fn hud_ui_save_load_selection_made
+fn keen::SaveData::SaveDataProviderWin32Steam::writeFileToSteamStorage
+fn game_save_clear_load_directory_cache
+fn keen::input::setControllerPlayerId @0087AE60
+var Keen_input_system
+var Main_menu_auto_catch_done
+var Num_saved_games
+var Update_list_uisave
+var Directory_cache_loaded
+var Main_menu_loading_options
+var Main_menu_waiting_for_options_load
+var ExitHandbook
+fn human_teleport
+var Stream_follows_player
+
+# body classification, collision filter, load governor
+fn object_from_world_obj
+fn rfgl_find_and_delete_debris_object
+fn rfgl_find_and_delete_object_mover
+var Havok_filter
+enum havok_layer
+enum object_type
+
+# render census (telemetry/render_census.h): constant-buffer uploads, GPU occlusion queries
+fn flushDynamicVertexConstantBuffer
+fn flushDynamicFragmentConstantBuffer
+fn rl_gpu_vis_render_mesh_query
+fn keen::OcclusionQueryManager::pollOcclusionQueryResult
+var RL_gpu_vis_enabled
+fn rl_visibility_manager::bounding_volume_is_visible_for_passes
+
+# render timeline (telemetry/render_timeline.h): the render thread and the scene thread
+fn rl_scene_renderer::render
+fn rl_scene_renderer::clb_render
+fn rl_gpu_vis_render
+fn keen::Event::sleepUntilSignaled
+fn keen::Event::signal
+var s_appInstance
+
+# player track (harness/track.h): camera view, player pose, local player's shots
+fn camera_do_frame_post
+fn weapon::fire_projectile
+fn human::update_pos_and_orient
+fn human_controller_set_vel
+fn human::get_equipped_weapon
+var Rfg_camera
+
+# object creation/deletion census; island solver memory (the game deletes bodies from islands the solver buffer
+# cannot hold)
+fn world::create_object_internal
+fn object_mover_mark_for_fade
+
+# keep all debris (experiments/keep_debris.h): every way the game removes debris, and the object pools
+fn rfg_dyn_create_shard
+fn rfg_dyn_shardify_work
+fn general_mover::apply_damage
+fn object_mover_process_explosion_hit
+fn object_mover::handle_fading
+fn rfgl_maybe_delete_objects
+fn rfgl_desired_values
+fn rfg_dyn_maybe_delete
+fn object_pool_server<general_mover>::init
+fn rfgl_emergency_cleanup
+fn do_debris_cleanup
+fn delete_object_outside_bpo
+var general_moverpool
+var rfg_moverpool
+var object_debrispool
+var rl_destroyable_model_instance::ms_class_factory_info
+var rl_destroyable_model_instance::ms_object_pool
+var rl_destroyable_model_instance_shared_base::ms_class_factory_info
+var rl_fp_kdtree::ms_class_factory_info
+var rl_scene_renderer::ms_visible_renderable_instances_max
+var rl_scene::ms_renderable_instances_max
+fn factory_init
+fn mempool::init
+fn mempool_init_alloc
+fn rfg_init_stage_1_prepare
+var Havok_mempool
+fn havok_memory_listener::allocationFailure
+fn havok_collect_objects_fast @00429B20 as havok_collect_objects_in_sphere
+fn explosion_apply_damage
+fn world::collect_sorted_list
+fn world::object_from_handle @0053BEE0 as world__object_from_handle
+fn world::destroy_object @0051CEF0 as world__destroy_object
+fn world::destroy_object @0053C5E0 as world__destroy_object_by_handle
+# world zone budget: each zone hands out at most 7,280 object handles; the farthest debris is recycled near that
+fn handle_manager<7280>::allocate_handle
+fn object_mover_is_fading_for_delete
+fn object_mover_is_visible
+fn object_mover::has_script_point_effect
+fn game_render_is_object_visible @003C2800 as game_render_is_object_visible_bbox
+fn havok_get_status
+# general_mover object lists: world::system_init sizes the world's object lists from the classes' maxima
+fn world::system_init
+fn alloc_general_mover
+var obj_class_instantiator::hash_size
+var obj_class_instantiator::alloc_funcs
+var obj_class_instantiator::max_objects
+var obj_class_instantiator::class_index
+var obj_class_instantiator::num_registered_classes
+var Permanent_mempool
+# X1 world mirror check: Havok raycasts against the static level, to compare with the PhysX mirror
+fn havok_raycast_against_static_level_only
+fn havok_raycast_against_destroyable_geometry
+# X2 debris offload: moving a render instance taken over from a general_mover, the level's end, explosion kicks
+fn RL_auto_partition_update
+fn game_render_scene_update
+fn game_render_update_render_task_register
+fn rl_compound_mesh_instance::add_to_batch
+fn rl_compound_mesh_instance::add_to_deferred
+fn rl_compound_mesh_instance::render_for_deferred
+fn rl_destroyable_model_instance::render
+fn rl_destroyable_model_instance::release
+fn rl_batched_pass::finalize_construction
+fn rl_batched_pass::partition_batched_instances
+fn rl_renderer::begin_instancing_batch
+var Current_scene_renderer
+var Character_collision_push_away_mass
+var Character_collision_push_away_dim
+var Character_collision_push_away_impulse_factor
+var Character_collision_push_away_rvec_factor
+fn havok_body_create
+fn rl_delete_mesh_recompile_data
+fn rl_start_recompile_mesh_instance
+fn explosion_create
+var Explosion_infos
+var Num_explosion_infos
+fn havok_body_free
+fn havok_body_set_pos_orient @00423790 as havok_body_set_pos_orient_by_handle
+fn general_mover_level_shutdown
+fn object_level_shutdown
+fn gameseq_set_state
+fn havok_body_apply_linear_impulse @00423CB0 as havok_body_apply_linear_impulse_by_handle
+fn raycast_output::raycast_output
+fn raycast_output::~raycast_output
+fn havok_memory_watch_dog_free_memory @0041C5B0
+fn watch_dog_remove_objects_from_island
+fn havok_sim_islands_process_post
+fn hkSolverAllocator::setBuffer
+fn hkFreeListMemorySystem::mainQuit
+var Havok_memory
+var Havok_mem_largest_runtime_block
+# a piece's mesh lives in its building's chunk, a stream2 container the movers using it keep loaded (object::srid);
+# zones stream out in world::do_frame (sim/render handshake), containers unload in stream2_do_frame right after it
+fn world::destream_zone
+fn world::get_zone_by_pos
+fn world::get_world_zone_by_pos
+fn stream2_release
+fn chunk_base_unload_internal
+fn chunk_get_base_uid
+var Stream_thread_id
+
+# multithreaded Havok (experiments/havok_mt.h): the world's simulation type, Havok's job queue, worker thread setup,
+# and the game callbacks that run inside collision jobs
+fn havok_system_init
+fn hkpWorld::hkpWorld @009E6E80
+fn hkpWorld::~hkpWorld
+fn hkpWorld::lock
+fn hkpWorld::unlock
+fn hkpSimulation::stepDeltaTime
+fn hkpMultiThreadedSimulation::stepBeginSt
+fn hkpMultiThreadedSimulation::finishMtStep
+fn hkpMultiThreadedSimulation::processNextJob
+fn hkpJobQueueUtils::popIntegrateJob
+fn hkpJobQueueUtils::finishIntegrateJob
+fn hkpJobQueueUtils::popCollideJob
+fn hkpJobQueueUtils::finishCollideJob
+fn hkJobQueue::hkJobQueue
+fn hkJobQueueHwSetup::hkJobQueueHwSetup
+fn hkJobQueue::processAllJobs
+fn hkBaseSystem::initThread
+fn havok_create_thread_memory_router
+var hkThreadNumber
+var hkSingleton<hkReferencedObjectLock>::s_instance
+fn GeneralCollisionListener::contactPointRemovedCallback
+fn phantom_overlap_listener::collidableAddedCallback
+fn game_aabb_phantom::addOverlappingCollidable
+fn havok_region_callback_shape::phantomEnterEvent
+fn havok_region_callback_shape::phantomLeaveEvent
+
+# record/replay harness: input, frame time, focus, randomness, wall clock, load governor
+fn controls_poll
+fn input_poll
+fn keen::rfg::Application::processInputEvent
+fn os_foreground
+fn rand_regenerate
+fn vrand
+fn math_randomseed
+fn create_cells
+fn timer_get
+fn gamestate_gp_last_havok_sim_time
+fn keen::SystemTimer::getElapsedTime
+fn key_mark
+fn mouse_mark_button
+fn mouse_poll
+fn scroll_info::eval
+fn input_update_idle_time
+var Cached_input_states
+var Current_cached_input_state
+var Next_cached_input_state
+var Os_app_active
+var Frametime_uncompressed
+var Frametime_min
+var Vlib_rand_instance
+
+# frame clock: counters, the FPS average and the game timestamp clock, all advanced by frametime_calculate
+var Framecount
+var Frametime_total_milliseconds
+var Frametime_total_milliseconds_increment_always
+var Sample_count
+var Frametime_total
+var Frames_per_second
+var Frametimes
+var Timestamp_ticker
+var Timestamp_realtime_ticker
+var amount_rounded
+
+# randomness consumers of the Vlib_rand_instance table (diagnostic call tracing)
+fn fl_rand
+fn int_rand_range
+fn fl_rand_range
+fn fl_rand_chance
+fn int_rand_chance
+fn bool_rand
+fn vector::rand_sphere
+fn vector4::rand_sphere
+fn vector::rand_around_z
+fn vector4::rand_around_z
+fn timestamp::set_rand
+fn timestamp_realtime::set_rand
+
+# record/replay harness: start states (Wrecking Crew match, save load) and checkpoint state
+fn verify_gamesave_start
+fn wrecking_crew_match_begin
+fn wrecking_crew_get_map_file_name
+fn wrecking_crew_get_mode_internal_name
+fn wrecking_crew_get_weapon_info
+fn weapons_get_weapon_info @007D9A10
+fn player_get_local_player
+fn keen::graphics::endFrame
+var Wrecking_crew_options
+var Wrecking_crew_num_maps
+var Wrecking_crew_num_weapons
+var Wc_player_infos
+var Menu_wrecking_crew_info
+var Game_save_list
+var Selected_row_uisave
+var Display_start_index_uisave
+var World
+
+# collision types (const uint in .rdata: (system group << 16) | layer)
+var COLLIDE_RFG_NORMAL_FAST
+var COLLIDE_RFG_LITE
+var COLLIDE_RFG_ULTRA_LITE
+var COLLIDE_RFG_WORLD_ONLY
+
+# globals
+var Frametime
+var Frametime_real
+var Gameplay_last_havok_simulate
+var Havok_num_steps_this_frame
+var Havok_world
+var RFG_load
+var Recent_history_objects
+var Movers_destroyed_count
+var Multiplayer
+
+# enums
+enum game_state

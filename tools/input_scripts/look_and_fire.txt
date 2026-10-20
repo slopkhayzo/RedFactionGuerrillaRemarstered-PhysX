@@ -1,0 +1,28 @@
+# Self-test input for record mode (Harness.InputScript): dismiss the Wrecking Crew "how to play" screen, start
+# the turn, turn a little, fire the current weapon a few times, stop.
+# One command per line; times are seconds of game time since recording frame 0.
+#   <t> look <dx per second> <dy per second> <duration s>   relative mouse movement in counts; the game truncates
+#                                                           each frame's movement to whole counts, so at 250 FPS
+#                                                           use at least 250 counts per second
+#   <t> mouse <button 0-4> down|up                          0 = left button (fire), 1 = right button (aim)
+#   <t> key <keen button id 0-255> down|up                  keen ids, not virtual keys: Return 16, Esc 18,
+#                                                           Space 19 (s_buttonIdKeyMap in rfg.exe)
+#   <t> stop                                                end the recording (the game then quits)
+1.0 key 16 down
+1.2 key 16 up
+3.0 key 16 down
+3.2 key 16 up
+6.0 look 1500 0 0.5
+8.0 mouse 0 down
+9.0 mouse 0 up
+12.0 look -1500 -300 0.5
+14.0 mouse 1 down
+14.5 mouse 0 down
+15.5 mouse 0 up
+15.7 mouse 1 up
+19.0 look 750 0 0.5
+21.0 mouse 0 down
+22.0 mouse 0 up
+26.0 mouse 0 down
+27.0 mouse 0 up
+34.0 stop
