@@ -1,5 +1,14 @@
 # rfgphys: GPU physics for Red Faction Guerrilla Re-Mars-tered
 
+> [!WARNING]
+> This patch has been pretty much entirely been generated using AI; 
+> I won't and will never claim to have enough knowledge or expertise to do this 
+> kind of reverse-engineering by myself; I've tested multiple wrecking crew levels (almost all of them)
+> and a couple hours of the singleplayer campaign (reached out of Parker)
+> and so far spotted no major issues (on my machine ofc, if you have issues feel free to open an Issue)
+> this patch currently probably only works for the latest GOG and Steam versions of the game.
+> If you're interested and want more (human generated) info, I have a blog post [here](https://slop-blog.enkhayzomachines.net/posts/red-faction-guerrilla-physx-integration) :)
+
 A mod for *Red Faction Guerrilla Re-Mars-tered* (GOG and Steam) that keeps every piece of debris and keeps heavy
 destruction fast. The debris is simulated by NVIDIA PhysX 5 on the graphics card, in a 64-bit process of its own, while
 the game (a 32-bit program) keeps drawing it.
