@@ -45,6 +45,7 @@ $savesBefore = @(Get-SaveHashes)
 Backup-Saves $root $savesBefore
 $knownDumps = Get-CrashDumpNames $GameDir
 
+Set-SteamLaunchEnv $GameDir
 Write-Output "starting rfg.exe, run folder $run"
 $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
 if ($p.WaitForExit($TimeoutSeconds * 1000)) {
@@ -55,6 +56,7 @@ if ($p.WaitForExit($TimeoutSeconds * 1000)) {
     $code = 124
 }
 Write-Output "rfg.exe exit code: $code"
+Stop-StrayGame
 
 Copy-NewCrashDumps $GameDir $knownDumps $run | Out-Null
 $loaderLog = Join-Path $GameDir 'dinput8.log'

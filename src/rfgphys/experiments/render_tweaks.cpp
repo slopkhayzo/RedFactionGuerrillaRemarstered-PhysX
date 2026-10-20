@@ -42,21 +42,22 @@ uint32_t __fastcall d_bv_visible(uint8_t* vm, void* edx, const float* bv, uint32
 // (4,096 pointers); rl_scene_renderer::render (inline) and add_unbatched_renderable_instance add to it up to 4,096
 // (flag 0x200 past that) while the count (+0x14) keeps counting; finalize_construction clamps the count to 4,096.
 constexpr uint32_t kGameCap = 0x1000;
-constexpr uint32_t kCtorBufferImm = 0x136D08 + 3;    // rl_batched_pass::rl_batched_pass: mov [esi+0x18], imm32
-constexpr uint32_t kSceneRenderCapImm = 0x162430 + 1;  // rl_scene_renderer::render: cmp eax, 0x1000
-constexpr uint32_t kAddUnbatchedCapImm = 0xDF86D + 1;  // rl_batched_pass::add_unbatched_renderable_instance
-constexpr uint32_t kFinalizeCmpImm = 0x155783 + 1;     // rl_batched_pass::finalize_construction: cmp eax, 0x1000
-constexpr uint32_t kFinalizeMovImm = 0x15578A + 1;     //                                         mov eax, 0x1000
-constexpr uint32_t kUnbatchedBuffer = 0x176DBF8;       // Unbatched_renderable_buffer (RVA)
+// The immediate operands patched (function + offset of the operand).
+namespace r = rfg::rva;
+const rfg::CodeSite kCtorBufferImm{r::rl_batched_pass__rl_batched_pass, 0x2B};            // mov [esi+0x18], imm32
+const rfg::CodeSite kSceneRenderCapImm{r::rl_scene_renderer__render, 0x7E1};              // cmp eax, 0x1000
+const rfg::CodeSite kAddUnbatchedCapImm{r::rl_batched_pass__add_unbatched_renderable_instance, 0xE};
+const rfg::CodeSite kFinalizeCmpImm{r::rl_batched_pass__finalize_construction, 0x34};     // cmp eax, 0x1000
+const rfg::CodeSite kFinalizeMovImm{r::rl_batched_pass__finalize_construction, 0x3B};     // mov eax, 0x1000
 
-bool code_u32(uint32_t rva, uint32_t expected) {
+bool code_u32(const rfg::CodeSite& site, uint32_t expected) {
     uint32_t v;
-    memcpy(&v, rfg::addr(rva), 4);
+    memcpy(&v, rfg::addr(site.rva()), 4);
     return v == expected;
 }
 
-void write_u32(uint32_t rva, uint32_t value) {
-    void* p = rfg::addr(rva);
+void write_u32(const rfg::CodeSite& site, uint32_t value) {
+    void* p = rfg::addr(site.rva());
     DWORD old;
     VirtualProtect(p, 4, PAGE_EXECUTE_READWRITE, &old);
     memcpy(p, &value, 4);
@@ -66,7 +67,7 @@ void write_u32(uint32_t rva, uint32_t value) {
 
 void raise_unbatched_cap(int requested) {
     const uint32_t cap = uint32_t(requested > 65536 ? 65536 : requested);
-    const uint32_t game_buffer = uint32_t(rfg::base() + kUnbatchedBuffer);
+    const uint32_t game_buffer = uint32_t(rfg::base() + r::Unbatched_renderable_buffer);
     if (!code_u32(kCtorBufferImm, game_buffer) || !code_u32(kSceneRenderCapImm, kGameCap) ||
         !code_u32(kAddUnbatchedCapImm, kGameCap) || !code_u32(kFinalizeCmpImm, kGameCap) ||
         !code_u32(kFinalizeMovImm, kGameCap)) {
@@ -95,23 +96,22 @@ void raise_unbatched_cap(int requested) {
 // transforms) and rl_renderer::initialize creates the GPU buffer the compiled groups copy them into (0x180000 bytes,
 // one stream's worth). All grow together.
 constexpr uint32_t kBatchedGameCap = 0x6000, kStreamGameCap = 0x7627, kStreamEntry = 0x34;
-constexpr uint32_t kCtorInstancesImm = 0x136D01 + 3;  // rl_batched_pass::rl_batched_pass: mov [esi+0xC], imm32
-constexpr uint32_t kPartitionCapImm = 0x155639 + 2;   // partition_batched_instances: cmp ecx, 0x6000
-constexpr uint32_t kStreamCountImm1 = 0x1556EA + 1;   // begin_construction: mov eax, 0x7627 (allocation size)
-constexpr uint32_t kStreamBytesImm = 0x15570B + 3;    //                     mov [esi+0x14], 0x17FFEC
-constexpr uint32_t kStreamCountImm2 = 0x155712 + 3;   //                     mov [esi+0xC], 0x7627
-constexpr uint32_t kGpuBufferImm = 0x12CFCA + 1;      // rl_renderer::initialize: push 0x180000
-constexpr uint32_t kBatchedBuffer = 0x1708A40;        // Batched_instance_buffer (RVA)
+const rfg::CodeSite kCtorInstancesImm{r::rl_batched_pass__rl_batched_pass, 0x24};          // mov [esi+0xC], imm32
+const rfg::CodeSite kPartitionCapImm{r::rl_batched_pass__partition_batched_instances, 0x7B};  // cmp ecx, 0x6000
+const rfg::CodeSite kStreamCountImm1{r::rl_batched_pass__begin_construction, 0xB};   // mov eax, 0x7627 (allocation)
+const rfg::CodeSite kStreamBytesImm{r::rl_batched_pass__begin_construction, 0x2E};   // mov [esi+0x14], 0x17FFEC
+const rfg::CodeSite kStreamCountImm2{r::rl_batched_pass__begin_construction, 0x35};  // mov [esi+0xC], 0x7627
+const rfg::CodeSite kGpuBufferImm{r::rl_renderer__initialize, 0x5B};                 // push 0x180000
 // The compiled render groups take their draw calls (0x18 bytes each) from Call_pool, a linear block of 0x60000
 // bytes (16,384 calls) made in rl_compiled_render_group_init at start-up; when it is full the rest of a group is not
 // drawn (warning flag 0x800). It grows with the batched cap.
-constexpr uint32_t kCallPoolPushImm = 0xE362F + 1;    // rl_compiled_render_group_init: push 0x60000
-constexpr uint32_t kCallPoolSizeImm = 0xE3634 + 6;    //   mov [Call_pool_memBlock+4], 0x60000
+const rfg::CodeSite kCallPoolPushImm{r::rl_compiled_render_group_init, 0x10};  // push 0x60000
+const rfg::CodeSite kCallPoolSizeImm{r::rl_compiled_render_group_init, 0x1A};  // mov [Call_pool_memBlock+4], 0x60000
 constexpr uint32_t kCallPoolGameBytes = 0x60000, kCallBytes = 0x18;
 
 void raise_batched_cap(int requested) {
     const uint32_t cap = uint32_t(requested > 262144 ? 262144 : requested);
-    const uint32_t game_buffer = uint32_t(rfg::base() + kBatchedBuffer);
+    const uint32_t game_buffer = uint32_t(rfg::base() + r::Batched_instance_buffer);
     if (!code_u32(kCtorInstancesImm, game_buffer) || !code_u32(kPartitionCapImm, kBatchedGameCap) ||
         !code_u32(kStreamCountImm1, kStreamGameCap) || !code_u32(kStreamBytesImm, kStreamGameCap * kStreamEntry) ||
         !code_u32(kStreamCountImm2, kStreamGameCap) || !code_u32(kGpuBufferImm, 0x180000) ||

@@ -1,8 +1,11 @@
-# Symbols exported to src/rfgphys/game/rfg_symbols.generated.h by tools/gen_symbols.py.
-# fn NAME [@RVA [as ALIAS]]   function (RVA required only when the name is overloaded; ALIAS names the constant
+# Symbols exported to src/rfgphys/game/rfg_symbols.generated.h by tools/gen_symbols.py, with their addresses in the
+# GOG build (from its PDB) and in the Steam build (from tools/steam_map.json).
+# fn NAME [@RVA] [as ALIAS]   function (RVA required only when the name is overloaded; ALIAS names the constant
 #                             when two overloads are both needed)
-# var NAME         global variable
-# enum NAME        enum name table
+# var NAME [as ALIAS]         global variable
+# pub NAME as ALIAS           public symbol (a vtable, by its decorated name)
+# enum NAME                   enum name table
+# Places inside a function (patch sites) are written in the code as the function plus an offset (rfg::CodeSite).
 
 # main loop and game state
 fn rfg_do_frame
@@ -140,6 +143,20 @@ var Permanent_mempool
 # X1 world mirror check: Havok raycasts against the static level, to compare with the PhysX mirror
 fn havok_raycast_against_static_level_only
 fn havok_raycast_against_destroyable_geometry
+# patch sites (the functions they are in) and data the plugin reads directly
+fn MyCharacterListener::processConstraintsCallback
+fn rl_batched_pass::rl_batched_pass
+fn rl_batched_pass::add_unbatched_renderable_instance
+fn rl_batched_pass::begin_construction
+fn rl_renderer::initialize
+fn rl_compiled_render_group_init
+var Hk_rigid_bodies
+var Unbatched_renderable_buffer
+var Batched_instance_buffer
+var rl_singleton<rl_render_lib>::ms_instance_p as rl_render_lib_instance
+pub ??_7rl_destroyable_model_instance@@6B@ as rl_destroyable_model_instance_vftable
+pub ??_7rfg_destroyable_shape@@6BhkpBvTreeShape@@@ as rfg_destroyable_shape_bvtree_vftable
+
 # X2 debris offload: moving a render instance taken over from a general_mover, the level's end, explosion kicks
 fn RL_auto_partition_update
 fn game_render_scene_update

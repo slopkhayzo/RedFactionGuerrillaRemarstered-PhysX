@@ -79,12 +79,13 @@ void init() {
     log_system_info();
 
     std::string detail;
-    const bool known_build = verify_build(detail);
+    const int build = identify_build(detail);
     LOG("build check: %s", detail.c_str());
-    if (!known_build) {
+    if (build < 0) {
         LOG("unknown rfg.exe build: plugin stays inactive");
         return;
     }
+    rfg::select_build(build);  // before anything uses a game address
     if (!cfg.enabled) {
         LOG("disabled in config");
         return;

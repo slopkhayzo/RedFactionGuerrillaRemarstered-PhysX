@@ -1,6 +1,6 @@
 # rfgphys: GPU physics for Red Faction Guerrilla Re-Mars-tered
 
-A mod for the GOG version of *Red Faction Guerrilla Re-Mars-tered* that keeps every piece of debris and keeps heavy
+A mod for *Red Faction Guerrilla Re-Mars-tered* (GOG and Steam) that keeps every piece of debris and keeps heavy
 destruction fast. The debris is simulated by NVIDIA PhysX 5 on the graphics card, in a 64-bit process of its own, while
 the game (a 32-bit program) keeps drawing it.
 
@@ -19,8 +19,7 @@ Download a release and extract it into the game folder, the one with `rfg.exe`. 
 ([tools/release/README.txt](tools/release/README.txt)) covers requirements, settings, uninstalling and known
 limitations.
 
-- **GOG version only.** The Steam version's `rfg.exe` is a separately compiled build that the mod doesn't support yet:
-  there it stays inactive and the game runs unmodded.
+- **GOG or Steam version.** With any other `rfg.exe` the mod stays inactive and the game runs unmodded.
 - **64-bit Windows 10 or 11.** GPU physics needs an NVIDIA GTX 16 / RTX 20 series card or newer; with other graphics
   cards the debris runs on the CPU.
 
@@ -28,8 +27,10 @@ limitations.
 
 - `scripts\rfgphys.asi` (32-bit, loaded by [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader))
   hooks the game's functions with [MinHook](https://github.com/TsudaKageyu/minhook), at addresses taken from the debug
-  symbols (`rfg.pdb`) that ship with the GOG version. It first checks that the running `rfg.exe` is that build, and
-  otherwise stays inactive.
+  symbols (`rfg.pdb`) that ship with the GOG version. The Steam version's `rfg.exe` is a separate compile of the same
+  source without symbols; `tools/match_builds.py` found every one of those functions and globals in its code, so each
+  address has a Steam value too. At start-up the plugin recognizes the build by its debug-symbols ID and uses that
+  build's addresses; with any other build it stays inactive.
 - At start-up it launches `scripts\rfgphysx\rfgphysx_host.exe`, a 64-bit process running NVIDIA PhysX 5.12 with GPU
   rigid-body dynamics (on the CPU without a suitable GPU), at 60 steps per second. It is a separate process because the
   game is 32-bit and PhysX 5 is 64-bit only. The two share memory (a command ring and pose snapshots), and the host
@@ -70,8 +71,9 @@ python tools\package.py                                                  # dist\
 - **PhysX** is a submodule, NVIDIA's repository pinned to one commit. `tools\build_physx.cmd` applies our one change
   to its build files, `third_party\physx-sdk-rfgphys.patch`, which selects the GPU architectures (GTX 16 / RTX 20 to
   RTX 50).
-- **The game's addresses** are in `src/rfgphys/game/rfg_symbols.generated.h`. `tools/gen_symbols.py` generates it
-  from `tools/symbols.txt` and the GOG game's `rfg.pdb`, using analysis scripts that aren't part of this repository.
+- **The game's addresses** are in `src/rfgphys/game/rfg_symbols.generated.h`, for both builds. `tools/gen_symbols.py`
+  generates it from `tools/symbols.txt`, the GOG game's `rfg.pdb` (read with analysis scripts that aren't part of this
+  repository) and `tools/steam_map.json`, which `tools/match_builds.py` makes from the two builds' `rfg.exe`.
 
 ## Repository layout
 

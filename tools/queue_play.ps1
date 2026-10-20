@@ -15,6 +15,7 @@ param(
     [switch]$Record,
     [switch]$BlockSaveWrites,
     [switch]$Release,              # the installed release package with its own settings (tools\install_package.ps1)
+    [string]$GameDir = '',         # another copy of the game, e.g. the Steam one (default: the GOG copy)
     [string[]]$Set = @()
 )
 
@@ -26,6 +27,7 @@ if ($DebrisCollide) { $jobArgs += @('-DebrisCollide', '-DebrisCollideMode', "$De
 if ($Record) { $jobArgs += '-Record' }
 if ($BlockSaveWrites) { $jobArgs += '-BlockSaveWrites' }
 if ($Release) { $jobArgs += '-Release' }
+if ($GameDir) { $jobArgs += @('-GameDir', $GameDir) }
 if ($Set.Count) { $jobArgs += @('-Set', ($Set -join ';')) }  # a parameter can only be passed once
 
 $label = "RFG play session (user at the keyboard): $Name"

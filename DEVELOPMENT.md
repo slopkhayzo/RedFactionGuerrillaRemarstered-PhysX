@@ -89,9 +89,33 @@ tools\deploy.ps1 -ResetIni           # back to development builds
 CUDA's `cuobjdump`). The version comes from `project(rfgphys VERSION ...)` in `CMakeLists.txt`. Each release's source
 is tagged `v<version>`.
 
-## Symbols
+## Symbols and builds
 
-`tools/gen_symbols.py` turns the names in `tools/symbols.txt` into `src/rfgphys/game/rfg_symbols.generated.h`: RVAs,
-the PDB signature, enum tables and the build identity, read from the GOG game's `rfg.pdb` with analysis scripts kept
-in `research/scripts` (not part of the repository). The plugin installs no hook on an `rfg.exe` with another PDB
-signature.
+`tools/gen_symbols.py` turns the names in `tools/symbols.txt` into `src/rfgphys/game/rfg_symbols.generated.h`: each
+function's and global's RVA in the GOG and the Steam build, function sizes, enum tables and both builds' identities.
+The GOG addresses come from the GOG game's `rfg.pdb`, read with analysis scripts kept in `research/scripts` (not part
+of the repository).
+
+The Steam `rfg.exe` was compiled from the same source 77 seconds after the GOG one, without symbols. Its code is a
+little different (1.9 KB more, functions shifted unevenly, data one page later). `tools/match_builds.py` finds each GOG
+function in it: the function's bytes, with absolute addresses (from the relocation table) and branches leaving the
+function left out, searched near where the previous function was found. Then it pairs the data the matched code
+refers to. Of 126,396 functions 126,337 match; the 59 others are platform code (options and controller menus,
+multiplayer sessions, start-up), none of them used here. The result is `tools/steam_map.json`, which
+`gen_symbols.py` turns into the Steam column; it stops if any address cannot be mapped.
+
+At start-up the plugin recognizes the build by the PDB GUID in its debug directory and switches every address to
+that build's (`rfg::select_build`), so code reads addresses from `rfg::rva` when it runs, never into constants.
+Places inside functions are written as function + offset (`rfg::CodeSite`). On Steam, diagnostics report code
+addresses as the GOG build's (hang reports, the profiler, the object census, the replay harness's random-number
+streams), so the GOG PDB still names them and recordings replay alike on both builds.
+
+```powershell
+python tools\match_builds.py        # tools\steam_map.json, from both rfg.exe (default install paths)
+python tools\gen_symbols.py         # the header
+```
+
+Test runs on the Steam copy: `-GameDir 'D:\Program Files\Games\Steam\steamapps\common\Red Faction Guerrilla Re-MARS-tered'`
+on `run_game.ps1`, `run_replay.ps1`, `install_package.ps1`, `deploy.ps1` and `queue_play.ps1`. The game is started with
+its Steam app ID in the environment, so it doesn't restart itself through the Steam client. Save backups and checks
+cover the Steam save folder too.

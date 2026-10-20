@@ -86,8 +86,9 @@ constexpr int kDebrisLayers[] = {41, 42, 43, 44};  // RFG_NORMAL_FAST, RFG_LITE,
 // with a group-0 type and is left alone.
 constexpr int kGroup6OnlyLayers[] = {17, 18, 22, 37, 49, 54, 55, 59, 61};
 
-const uint32_t kDebrisTypes[] = {rfg::rva::COLLIDE_RFG_NORMAL_FAST, rfg::rva::COLLIDE_RFG_LITE,
-                                 rfg::rva::COLLIDE_RFG_ULTRA_LITE, rfg::rva::COLLIDE_RFG_WORLD_ONLY};
+// Their addresses, read when used (they are the running build's only after start-up).
+const uint32_t* const kDebrisTypes[] = {&rfg::rva::COLLIDE_RFG_NORMAL_FAST, &rfg::rva::COLLIDE_RFG_LITE,
+                                       &rfg::rva::COLLIDE_RFG_ULTRA_LITE, &rfg::rva::COLLIDE_RFG_WORLD_ONLY};
 uint32_t g_original[4];
 bool g_patched = false;
 int g_last_state = -1000;
@@ -95,7 +96,7 @@ int g_last_state = -1000;
 // The collision types are const globals in .rdata; every user reads them from memory (none is inlined).
 void set_types(bool strip_group) {
     for (int i = 0; i < 4; ++i) {
-        auto* p = static_cast<uint32_t*>(rfg::addr(kDebrisTypes[i]));
+        auto* p = static_cast<uint32_t*>(rfg::addr(*kDebrisTypes[i]));
         DWORD old;
         VirtualProtect(p, 4, PAGE_READWRITE, &old);
         *p = strip_group ? (g_original[i] & 0xFFFF) : g_original[i];
@@ -163,7 +164,7 @@ void on_frame(int state) {
 
 bool install_debris_collision(const Config& cfg) {
     if (!cfg.exp_debris_collide) return true;
-    for (int i = 0; i < 4; ++i) g_original[i] = *static_cast<uint32_t*>(rfg::addr(kDebrisTypes[i]));
+    for (int i = 0; i < 4; ++i) g_original[i] = *static_cast<uint32_t*>(rfg::addr(*kDebrisTypes[i]));
     for (uint32_t v : g_original) {
         if ((v >> 16) != 6) {
             LOG("experiment DebrisCollide: unexpected collision type %08X, not applied", v);

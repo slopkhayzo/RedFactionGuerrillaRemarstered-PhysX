@@ -30,7 +30,6 @@ constexpr int kGameplay = 1;                      // GS_GAMEPLAY
 constexpr double kScanEveryMs = 250;
 constexpr double kScanBudgetMs = 20;              // export work per scan; the rest waits for the next one
 constexpr uint32_t kChunkTriangles = 16384;       // triangles per StaticMesh record
-constexpr uint32_t kDestroyableVtable = 0xED6EAC; // rfg_destroyable_shape's hkpBvTreeShape vtable (RVA)
 constexpr uint32_t kDestroyableExisting = 0x48;   // rfg_destroyable_shape::num_existing_child_shapes
 
 bool g_on = false, g_check = false;
@@ -263,7 +262,7 @@ bool walk_guarded(const uint8_t* shape, const hs::Transform& t, hs::Sink& sink) 
 }
 
 uint32_t signature(const uint8_t* shape) {
-    if (*reinterpret_cast<const uintptr_t*>(shape) == uintptr_t(rfg::addr(kDestroyableVtable)))
+    if (*reinterpret_cast<const uintptr_t*>(shape) == uintptr_t(rfg::addr(rfg::rva::rfg_destroyable_shape_bvtree_vftable)))
         return 1u + *reinterpret_cast<const uint32_t*>(shape + kDestroyableExisting);
     return 0;
 }
@@ -435,7 +434,7 @@ float havok_distance(uint32_t fn_rva, const ipc::Ray& r, HavokHit* what = nullpt
                 }
             }
             if (what && handle != 0xFFFFFFFFu) {
-                const uint8_t* body = static_cast<uint8_t* const*>(rfg::addr(0x236D980))[handle];  // Hk_rigid_bodies
+                const uint8_t* body = static_cast<uint8_t* const*>(rfg::addr(rfg::rva::Hk_rigid_bodies))[handle];
                 if (body) {
                     what->filter_info = *reinterpret_cast<const uint32_t*>(body + kFilterInfo);
                     what->shape_type = hs::body_shape(body) ? hs::type_of(hs::body_shape(body)) : 0xFF;

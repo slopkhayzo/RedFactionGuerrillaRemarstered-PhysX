@@ -1,12 +1,29 @@
 # Shared helpers for the queue job scripts (dot-source: . "$PSScriptRoot\lib\common.ps1").
 
 $RfgSaveDir = Join-Path $env:LOCALAPPDATA 'GOG.com\Galaxy\Applications\51153410217180642\Storage\Shared\Files\autocloud\save'
+$RfgSteamAppId = '667720'
 
-# "name=sha256" for every file in the real save folder.
+# The game's save folders: GOG's, and Steam's for each Steam account on this machine (its cloud save copy).
+function Get-SaveDirs {
+    $dirs = [ordered]@{ 'GOG' = $RfgSaveDir }
+    $userdata = 'C:\Program Files (x86)\Steam\userdata'
+    if (Test-Path $userdata) {
+        Get-ChildItem $userdata -Directory | ForEach-Object {
+            $d = Join-Path $_.FullName "$RfgSteamAppId\remote\autocloud\save"
+            if (Test-Path $d) { $dirs["Steam-$($_.Name)"] = $d }
+        }
+    }
+    $dirs
+}
+
+# "store:name=sha256" for every file in the real save folders.
 function Get-SaveHashes {
-    if (Test-Path $RfgSaveDir) {
-        Get-ChildItem $RfgSaveDir -File | Sort-Object Name | ForEach-Object {
-            "$($_.Name)=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)"
+    $dirs = Get-SaveDirs
+    foreach ($store in $dirs.Keys) {
+        if (Test-Path $dirs[$store]) {
+            Get-ChildItem $dirs[$store] -File | Sort-Object Name | ForEach-Object {
+                "${store}:$($_.Name)=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)"
+            }
         }
     }
 }
@@ -15,13 +32,36 @@ function Get-SaveHashes {
 function Backup-Saves([string]$Root, [string[]]$Hashes) {
     $backupDir = Join-Path $Root 'runs\save_backups'
     New-Item -ItemType Directory -Force $backupDir | Out-Null
+    $dirs = Get-SaveDirs
     foreach ($entry in $Hashes) {
-        $name, $hash = $entry -split '=', 2
-        $copy = Join-Path $backupDir ($hash.Substring(0, 12) + '_' + $name)
+        $file, $hash = $entry -split '=', 2
+        $store, $name = $file -split ':', 2
+        $prefix = if ($store -eq 'GOG') { '' } else { "$store-" }
+        $copy = Join-Path $backupDir ($prefix + $hash.Substring(0, 12) + '_' + $name)
         if (-not (Test-Path $copy)) {
-            Copy-Item (Join-Path $RfgSaveDir $name) $copy
+            Copy-Item (Join-Path $dirs[$store] $name) $copy
             Write-Output "save backed up: $copy"
         }
+    }
+}
+
+# A Steam copy of the game (steam_api.dll next to rfg.exe) started directly rather than by the Steam client: with
+# its app ID in the environment it runs as if Steam had started it, instead of restarting itself through Steam.
+function Set-SteamLaunchEnv([string]$GameDir) {
+    if (Test-Path (Join-Path $GameDir 'steam_api.dll')) {
+        $env:SteamAppId = $RfgSteamAppId
+        $env:SteamGameId = $RfgSteamAppId
+        Write-Output "Steam copy of the game: started with SteamAppId $RfgSteamAppId"
+    }
+}
+
+# After an unattended run: an rfg.exe still running was not started by the run (Steam restarted the game, so the run's
+# settings and watchdogs are not in it); it is ended.
+function Stop-StrayGame {
+    $stray = @(Get-Process -Name rfg -ErrorAction SilentlyContinue)
+    if ($stray.Count) {
+        $stray | Stop-Process -Force
+        Write-Output 'an rfg.exe the run did not start was still running (restarted through Steam?): ended it'
     }
 }
 

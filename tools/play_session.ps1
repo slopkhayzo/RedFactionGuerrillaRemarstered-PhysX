@@ -47,6 +47,7 @@ Backup-Saves $root $savesBefore
 $knownDumps = Get-CrashDumpNames $GameDir
 $started = Get-Date
 
+Set-SteamLaunchEnv $GameDir
 Write-Output "starting rfg.exe for your session (up to $Minutes min), run folder $run"
 $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
 $p.WaitForExit()

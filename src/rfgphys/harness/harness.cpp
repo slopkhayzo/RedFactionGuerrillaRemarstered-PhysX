@@ -292,7 +292,8 @@ int __cdecl d_rand() {
     if (g_phase != Phase::kIdle) {
         if (!gameloop::on_sim_thread()) {
             const uint32_t n = g_rand_other.fetch_add(1, std::memory_order_relaxed);
-            if (n < 4) g_rand_other_callers[n] = reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base();
+            if (n < 4)  // as the GOG build's RVA, comparable between builds
+                g_rand_other_callers[n] = rfg::gog_rva(uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base()));
         } else {
             int value;
             if (rng_guard::crt_rand(reinterpret_cast<uintptr_t>(_ReturnAddress()), value)) return value;
@@ -500,7 +501,7 @@ void fill_header_common(uint32_t start_type) {
     g_header.flags = g_cfg.harness_virtual_clock ? rec::kFlagVirtualClock : 0;
     g_header.clock_anchor_ms = o_timer_get(1000);
     g_header.checkpoint_interval = uint32_t(g_cfg.harness_checkpoint_interval);
-    g_header.exe_timestamp = rfg::kExeTimeDateStamp;
+    g_header.exe_timestamp = rfg::kBuilds[rfg::build()].exe_timestamp;
     capture_clock(g_header.clock);
 }
 
@@ -760,10 +761,18 @@ bool load_recording() {
         return false;
     }
     g_header = g_reader.header();
-    if (g_header.exe_timestamp != rfg::kExeTimeDateStamp) {
-        g_load_error = "recorded with a different rfg.exe build";
+    // Any known build replays any other's recordings: they were compiled from the same source, and the game code
+    // they run is the same (only platform services differ).
+    int recorded_on = -1;
+    for (int i = 0; i < rfg::kBuildCount; ++i)
+        if (g_header.exe_timestamp == rfg::kBuilds[i].exe_timestamp) recorded_on = i;
+    if (recorded_on < 0) {
+        g_load_error = "recorded with an unknown rfg.exe build";
         return false;
     }
+    if (recorded_on != rfg::build())
+        LOG("harness: recorded with the %s build, replayed with the %s build", rfg::kBuilds[recorded_on].name,
+            rfg::build_name());
     if (!g_header.frame_count) {
         g_load_error = "the recording has no frames (not finished?)";
         return false;

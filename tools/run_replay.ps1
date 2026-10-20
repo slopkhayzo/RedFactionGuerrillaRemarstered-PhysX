@@ -102,12 +102,14 @@ for ($i = 1; $i -le $Repeat; $i++) {
         if ($settings) { Set-PluginOverrides $settings | Out-Null }
 
         $knownDumps = Get-CrashDumpNames $GameDir
+        Set-SteamLaunchEnv $GameDir | Out-Null
         Write-Output "[$(Get-Date -Format HH:mm:ss)] run $i/$Repeat variant '$label' -> $run"
         $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
         if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
             Write-Output "  timeout after $TimeoutSeconds s: killing rfg.exe"
             Stop-Process -Id $p.Id -Force
         }
+        Stop-StrayGame
         $crashes = Copy-NewCrashDumps $GameDir $knownDumps $run
 
         $r = [ordered]@{ variant = $label; run = $i; completed = $false; frames = 0; divergence = ''; p50 = ''; p95 = ''; p99 = ''; fps = '';

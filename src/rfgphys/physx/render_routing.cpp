@@ -23,8 +23,6 @@ namespace {
 namespace r = rfg::rva;
 
 constexpr int kGameplay = 1;  // GS_GAMEPLAY
-// rl_destroyable_model_instance's vtable (its constructor stores it); checked against slot 1, its release.
-constexpr uint32_t kDestroyableVtable = 0xEC0F54;
 constexpr uint32_t kInstFlags = 0x40, kInstSortMethod = 0x100;
 
 enum Fn { kBatch, kDeferred, kRender, kRenderDeferred, kFnCount };
@@ -157,7 +155,8 @@ void on_frame(int game_state) {
 
 bool install(const Config& cfg) {
     if (!cfg.render_routing) return true;
-    g_vtable = rfg::base() + kDestroyableVtable;
+    // rl_destroyable_model_instance's vtable (its constructor stores it); checked against slot 1, its release.
+    g_vtable = rfg::base() + r::rl_destroyable_model_instance_vftable;
     const uintptr_t release = static_cast<const uintptr_t*>(reinterpret_cast<const void*>(g_vtable))[1];
     if (release != rfg::base() + r::rl_destroyable_model_instance__release) {
         LOG("render routing: unexpected rl_destroyable_model_instance vtable; diagnostic off");

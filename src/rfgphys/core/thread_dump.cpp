@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "game/rfg.h"
 
 namespace thread_dump {
 namespace {
@@ -67,12 +68,22 @@ bool follows_call(uintptr_t v) {
     return false;
 }
 
+// module+offset. In another build than GOG's, rfg.exe addresses are given as the GOG build's (which
+// tools/hang_report.py names from the GOG PDB) with the build's own after them.
 std::string where(const std::vector<Module>& mods, uintptr_t v) {
-    char buf[48];
-    if (const Module* m = find_module(mods, v))
+    char buf[64];
+    const Module* m = find_module(mods, v);
+    if (m && m->lo == rfg::base() && rfg::build() > 0) {
+        const uint32_t own = unsigned(v - m->lo), gog = rfg::gog_rva(own);
+        if (gog)
+            snprintf(buf, sizeof(buf), "%s+0x%X[%s+0x%X]", m->name, gog, rfg::build_name(), own);
+        else
+            snprintf(buf, sizeof(buf), "%s[%s]+0x%X", m->name, rfg::build_name(), own);
+    } else if (m) {
         snprintf(buf, sizeof(buf), "%s+0x%X", m->name, unsigned(v - m->lo));
-    else
+    } else {
         snprintf(buf, sizeof(buf), "0x%08X", unsigned(v));
+    }
     return buf;
 }
 

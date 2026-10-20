@@ -17,12 +17,12 @@ struct CodeViewRsds {
 
 }  // namespace
 
-bool verify_build(std::string& detail) {
+int identify_build(std::string& detail) {
     auto base = reinterpret_cast<const uint8_t*>(rfg::base());
     auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
         detail = "no MZ header";
-        return false;
+        return -1;
     }
     auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
     const DWORD ts = nt->FileHeader.TimeDateStamp;
@@ -38,13 +38,15 @@ bool verify_build(std::string& detail) {
         }
     }
 
-    const bool ok_ts = ts == rfg::kExeTimeDateStamp;
-    const bool ok_size = size == rfg::kExeSizeOfImage;
-    const bool ok_pdb = rsds && memcmp(&rsds->guid, rfg::kPdbGuid, 16) == 0 && rsds->age == rfg::kPdbAge;
+    int found = -1;
+    for (int i = 0; rsds && i < rfg::kBuildCount; ++i)
+        if (memcmp(&rsds->guid, rfg::kBuilds[i].pdb_guid, 16) == 0 && rsds->age == rfg::kBuilds[i].pdb_age) found = i;
+    const rfg::BuildId* b = found >= 0 ? &rfg::kBuilds[found] : nullptr;
     char buf[320];
-    snprintf(buf, sizeof(buf), "pdb guid/age %s (the compiled code; required); timestamp %08lX (%s), image size %08lX (%s)",
-             rsds ? (ok_pdb ? "ok" : "MISMATCH") : "missing", ts, ok_ts ? "ok" : "differs", size,
-             ok_size ? "ok" : "differs");
+    snprintf(buf, sizeof(buf),
+             "%s build: pdb guid/age %s (the compiled code; required); timestamp %08lX (%s), image size %08lX (%s)",
+             b ? b->name : "unknown", rsds ? (b ? "ok" : "MISMATCH") : "missing", ts,
+             b && ts == b->exe_timestamp ? "ok" : "differs", size, b && size == b->exe_size_of_image ? "ok" : "differs");
     detail = buf;
-    return ok_pdb;
+    return found;
 }

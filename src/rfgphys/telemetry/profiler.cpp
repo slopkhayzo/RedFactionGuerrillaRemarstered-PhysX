@@ -89,7 +89,21 @@ bool sample_thread(const Target& t, Sample& s, uint32_t* stack, int& stack_len) 
     return true;
 }
 
+// In another build than GOG's the samples' rfg.exe code addresses are written as the GOG build's, so that
+// tools/profile_report.py names them from the GOG PDB as usual (0 where the GOG build has no such code).
+void as_gog_build(uint32_t& v) {
+    if (v >= g_text_lo && v < g_text_hi) {
+        const uint32_t gog = rfg::gog_rva(uint32_t(v - rfg::base()));
+        v = gog ? uint32_t(rfg::base()) + gog : 0;
+    }
+}
+
 void write_buffer_locked() {
+    if (rfg::build() > 0)
+        for (Sample& s : g_buf) {
+            as_gog_build(s.eip);
+            for (int i = 0; i < s.nret && i < kMaxRet; ++i) as_gog_build(s.ret[i]);
+        }
     if (g_out && !g_buf.empty()) {
         fwrite(g_buf.data(), sizeof(Sample), g_buf.size(), g_out);
         fflush(g_out);

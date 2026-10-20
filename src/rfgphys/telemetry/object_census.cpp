@@ -57,7 +57,9 @@ public:
             fputs("caller_rva,outer_rva,obj_type,count,gameplay_count\n", f);
             for (int i = 0; i < count_; ++i) {
                 const Entry& e = entries_[i];
-                fprintf(f, "%08X,%08X,%d,%u,%u\n", e.caller, e.outer, e.type, e.total, e.gameplay);
+                // as the GOG build's RVAs, which its PDB names (the same in the GOG build)
+                fprintf(f, "%08X,%08X,%d,%u,%u\n", rfg::gog_rva(e.caller), e.outer ? rfg::gog_rva(e.outer) : 0u,
+                        e.type, e.total, e.gameplay);
             }
             if (dropped_) fprintf(f, "FFFFFFFF,00000000,-1,%u,0\n", dropped_);  // table full
             fclose(f);
@@ -87,7 +89,7 @@ inline bool within(uint32_t rva, uint32_t fn, uint32_t size) { return rva - fn <
 // return address sits a few slots above the call's arguments. Returns it when one of those slots holds the return
 // address of a call to a function that starts just before `caller`.
 uint32_t forwarder_caller(void* const* frame, uintptr_t caller) {
-    const uintptr_t lo = rfg::base() + 0x1000, hi = rfg::base() + rfg::kExeSizeOfImage;
+    const uintptr_t lo = rfg::base() + 0x1000, hi = rfg::base() + rfg::image_size();
     for (int i = 5; i <= 8; ++i) {
         const uintptr_t ret = reinterpret_cast<uintptr_t>(frame[i]);
         if (ret < lo + 5 || ret >= hi) continue;

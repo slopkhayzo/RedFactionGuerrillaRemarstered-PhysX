@@ -15,9 +15,8 @@ Works in the campaign and in Wrecking Crew. Its changes are never applied in mul
 
 Requirements
 ------------
-- Red Faction Guerrilla Re-Mars-tered, GOG version. The mod checks the game executable and stays inactive with any
-  other build. The Steam version's rfg.exe is a separately compiled build, which the mod doesn't support yet: there
-  it stays inactive and the game runs unmodded.
+- Red Faction Guerrilla Re-Mars-tered, GOG or Steam version. The mod checks the game executable and stays inactive
+  with any other build.
 - 64-bit Windows 10 or 11.
 - For GPU physics: an NVIDIA graphics card, GTX 16 / RTX 20 series or newer, with a current driver. With any other
   graphics card the debris runs on the CPU instead, which copes with fewer pieces.
@@ -30,7 +29,9 @@ The mod comes in two archives:
 The mod needs Ultimate ASI Loader, any version from 2018 on, loading .asi files from the scripts folder. Other ASI
 loaders may load it without starting it.
 
-Extract the archive into the game folder, the one that contains rfg.exe, and let it merge the folders.
+Extract the archive into the game folder, the one that contains rfg.exe, and let it merge the folders. In Steam:
+right-click the game, Manage, Browse local files; in GOG Galaxy: the game's settings, Manage installation, Show
+folder.
 It adds:
     dinput8.dll                      Ultimate ASI Loader 9.7.4 (only in the archive with the loader)
     scripts\rfgphys.asi              the mod

@@ -183,12 +183,11 @@ std::atomic<uint64_t> g_host_cpu_100ns{0};  // the PhysX host's CPU during gamep
 // The renderer's warnings (rl_render_lib::m_metrics_p->m_warning_flags), which nothing in this build reads or clears.
 // rl_batched_pass holds at most 4,096 renderables drawn one by one per pass (bit 0x200 when more were dropped) and
 // 24,576 batched instances (bit 0x4): what does not fit is not drawn. Read and cleared once per frame.
-constexpr uint32_t kRenderLibInstance = 0x1636910;  // rl_singleton<rl_render_lib>::ms_instance_p (RVA)
 constexpr uint32_t kWarnUnbatchedFull = 0x200, kWarnBatchedFull = 0x4;
 uint64_t g_gp_unbatched_full_frames = 0, g_gp_batched_full_frames = 0;
 uint32_t g_render_warnings_seen = 0;
 uint32_t take_render_warnings() {
-    const uint8_t* lib = *static_cast<uint8_t* const*>(rfg::addr(kRenderLibInstance));
+    const uint8_t* lib = *static_cast<uint8_t* const*>(rfg::addr(rfg::rva::rl_render_lib_instance));
     if (!lib) return 0;
     uint8_t* metrics = *reinterpret_cast<uint8_t* const*>(lib + 0x5B0);
     if (!metrics) return 0;

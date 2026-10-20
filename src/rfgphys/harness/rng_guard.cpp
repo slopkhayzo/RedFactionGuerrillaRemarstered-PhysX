@@ -90,7 +90,8 @@ public:
     Guard(uint32_t id, void* ret) {
         if (t_depth++ > 0) return;
         const bool sim = gameloop::on_sim_thread();
-        caller_ = uint32_t(reinterpret_cast<uintptr_t>(ret) - rfg::base());
+        // Streams are keyed and seeded by the call site as the GOG build's RVA, so every build replays alike.
+        caller_ = rfg::gog_rva(uint32_t(reinterpret_cast<uintptr_t>(ret) - rfg::base()));
         if (!sim) {
             std::lock_guard<std::mutex> lock(g_other_mutex);
             ++g_other[(uint64_t(id) << 32) | caller_];
@@ -243,7 +244,7 @@ void reseed(uint32_t seed, bool session_start) {
 
 bool crt_rand(uintptr_t caller, int& value) {
     if (!g_isolate.load(std::memory_order_acquire) || g_cells_depth > 0) return false;
-    const uint32_t site = uint32_t(caller - rfg::base());
+    const uint32_t site = rfg::gog_rva(uint32_t(caller - rfg::base()));  // as the GOG build's (see Guard)
     auto it = g_crt_streams.find(site);
     if (it == g_crt_streams.end()) it = g_crt_streams.emplace(site, mix(g_seed + 0x6A09E667u) ^ mix(site)).first;
     trace(kCrtRand, uint16_t(it->second >> 16), site);

@@ -56,7 +56,6 @@ constexpr uint32_t kWorldAllObjects = 0x64, kWorldGeneralMovers = 0x3C4, kWorldG
 constexpr uint32_t kBodyMotionType = 0xE8, kBodyInvMass = 0x1AC, kBodyLinVel = 0x1B0, kBodyAngVel = 0x1C0;
 // rl_scene_entity: rotation rows (rvec, uvec, fvec) at +0x08, position at +0x2C, flags at +0x40, partition at +0x9C.
 constexpr uint32_t kInstRot = 0x08, kInstPos = 0x2C, kInstFlags = 0x40, kInstPartition = 0x9C;
-constexpr uint32_t kHkRigidBodies = 0x236D980;  // Hk_rigid_bodies (RVA): hkpRigidBody* by Havok handle
 constexpr uint32_t kPlayerShape = 0xFFFF0001u;
 
 bool g_on = false;
@@ -319,7 +318,7 @@ void adopt() {
     const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldGeneralMovers);
     const int n = *reinterpret_cast<const int*>(w + kWorldGeneralMoverCount);
     if (!all || !movers || n <= 0) return;
-    uint8_t* const* bodies = static_cast<uint8_t* const*>(rfg::addr(kHkRigidBodies));
+    uint8_t* const* bodies = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies));
     const auto is_fading = rfg::fn<bool(__cdecl*)(uint8_t*)>(r::object_mover_is_fading_for_delete);
     const auto destroy = rfg::fn<bool(__thiscall*)(void*, uint8_t*, bool)>(r::world__destroy_object);
     uint32_t budget = kAdoptPerFrame;
@@ -676,10 +675,12 @@ void update_stand_ins() {
 // leans on a slow body (+0x3D2), reads the subtype of the body's game object (cmp byte ptr [esi+0x7F], 4) without the
 // null check it makes a few lines up; a stand-in has no game object (crashed both test replays). Those 12 bytes
 // (cmp; movss xmm0, [esp+0x5C]; jne) now jump to a stub that checks first: no object counts as "not subtype 4".
-constexpr uint32_t kLeanSite = 0x42CA42, kLeanSubtype4 = 0x42CA4E, kLeanOther = 0x42CA5A;
+const rfg::CodeSite kLeanSite{r::MyCharacterListener__processConstraintsCallback, 0x3D2},
+    kLeanSubtype4{r::MyCharacterListener__processConstraintsCallback, 0x3DE},
+    kLeanOther{r::MyCharacterListener__processConstraintsCallback, 0x3EA};
 
 bool patch_lean_check() {
-    uint8_t* site = static_cast<uint8_t*>(rfg::addr(kLeanSite));
+    uint8_t* site = static_cast<uint8_t*>(rfg::addr(kLeanSite.rva()));
     static const uint8_t kOriginal[12] = {0x80, 0x7E, 0x7F, 0x04, 0xF3, 0x0F, 0x10, 0x44, 0x24, 0x5C, 0x75, 0x0C};
     if (memcmp(site, kOriginal, sizeof(kOriginal)) != 0) return false;
     auto* stub = static_cast<uint8_t*>(VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -699,9 +700,9 @@ bool patch_lean_check() {
     put({0x80, 0x7E, 0x7F, 0x04});              // cmp byte ptr [esi+0x7F], 4
     put({0x75, 0x0B});                          // jne other
     put({0xF3, 0x0F, 0x10, 0x44, 0x24, 0x5C});  // movss xmm0, [esp+0x5C]
-    jump_to(rfg::addr(kLeanSubtype4));
+    jump_to(rfg::addr(kLeanSubtype4.rva()));
     put({0xF3, 0x0F, 0x10, 0x44, 0x24, 0x5C});  // other: movss xmm0, [esp+0x5C]
-    jump_to(rfg::addr(kLeanOther));
+    jump_to(rfg::addr(kLeanOther.rva()));
     FlushInstructionCache(GetCurrentProcess(), stub, size_t(p - stub));
     DWORD old;
     if (!VirtualProtect(site, sizeof(kOriginal), PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -943,7 +944,7 @@ void __cdecl d_impulse(uint32_t handle, const float* impulse) {
     const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
     if (impulse && handle != 0xFFFFFFFFu &&
         caller - r::object_mover_process_explosion_hit < rfg::size::object_mover_process_explosion_hit) {
-        const uint8_t* body = static_cast<uint8_t* const*>(rfg::addr(kHkRigidBodies))[handle];
+        const uint8_t* body = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies))[handle];
         if (body) {
             const double dv = std::sqrt(double(impulse[0]) * impulse[0] + double(impulse[1]) * impulse[1] +
                                         double(impulse[2]) * impulse[2]) *
