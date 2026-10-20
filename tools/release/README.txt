@@ -16,7 +16,8 @@ Works in the campaign and in Wrecking Crew. Its changes are never applied in mul
 Requirements
 ------------
 - Red Faction Guerrilla Re-Mars-tered, GOG version. The mod checks the game executable and stays inactive with any
-  other build.
+  other build. The Steam version's rfg.exe is a separately compiled build, which the mod doesn't support yet: there
+  it stays inactive and the game runs unmodded.
 - 64-bit Windows 10 or 11.
 - For GPU physics: an NVIDIA graphics card, GTX 16 / RTX 20 series or newer, with a current driver. With any other
   graphics card the debris runs on the CPU instead, which copes with fewer pieces.

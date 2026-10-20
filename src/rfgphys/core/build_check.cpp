@@ -41,10 +41,10 @@ bool verify_build(std::string& detail) {
     const bool ok_ts = ts == rfg::kExeTimeDateStamp;
     const bool ok_size = size == rfg::kExeSizeOfImage;
     const bool ok_pdb = rsds && memcmp(&rsds->guid, rfg::kPdbGuid, 16) == 0 && rsds->age == rfg::kPdbAge;
-    char buf[256];
-    snprintf(buf, sizeof(buf), "timestamp %08lX (%s), image size %08lX (%s), pdb guid/age %s", ts,
-             ok_ts ? "ok" : "MISMATCH", size, ok_size ? "ok" : "MISMATCH",
-             rsds ? (ok_pdb ? "ok" : "MISMATCH") : "missing");
+    char buf[320];
+    snprintf(buf, sizeof(buf), "pdb guid/age %s (the compiled code; required); timestamp %08lX (%s), image size %08lX (%s)",
+             rsds ? (ok_pdb ? "ok" : "MISMATCH") : "missing", ts, ok_ts ? "ok" : "differs", size,
+             ok_size ? "ok" : "differs");
     detail = buf;
-    return ok_ts && ok_size && ok_pdb;
+    return ok_pdb;
 }
