@@ -64,7 +64,7 @@ Requirements:
 - Python 3 and Git
 
 ```powershell
-git clone --recurse-submodules <this repository's URL> rfgphys
+git clone --recurse-submodules https://github.com/slopkhayzo/RedFactionGuerrillaRemarstered-PhysX rfgphys
 cd rfgphys
 tools\build_physx.cmd                                                    # PhysX 5.12 with its GPU module (CUDA kernels: takes a while)
 powershell -ExecutionPolicy Bypass -File tools\build_host.ps1            # build-host\Release\rfgphysx_host.exe, PhysXGpu_64.dll
