@@ -168,6 +168,18 @@ Mode=off
 RecordingsDir=$recordings
 "@
 }
+if (-not (Select-String -Path $ini -Pattern '^\[FlyCamera\]' -Quiet)) {
+    Add-Content -Path $ini -Encoding ASCII -Value @"
+
+[FlyCamera]
+; Free camera for screenshots (single player, not with the harness): Key (virtual-key code, 121 = F10) toggles it. W/S/A/D, Space/Ctrl up and down, Q/E roll, mouse or arrow keys turn, Shift faster, Alt slower, wheel zooms, middle button resets the zoom. Speed: m/s; LookSpeed: percent.
+Enabled=0
+Key=121
+Speed=10
+LookSpeed=100
+HideHud=1
+"@
+}
 
 New-Item -ItemType Directory -Force (Join-Path $GameDir 'CrashDumps') | Out-Null
 Write-Output "deployed rfgphys ($((Get-Item $asi).LastWriteTime)) and Ultimate ASI Loader to $GameDir"

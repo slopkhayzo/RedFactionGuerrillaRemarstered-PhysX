@@ -85,6 +85,10 @@ fn human_controller_set_vel
 fn human::get_equipped_weapon
 var Rfg_camera
 
+# fly camera (dev/fly_camera.h): the render camera's setup in the sim/render handshake, the HUD
+fn game_render_setup_frame
+fn hud_hide
+
 # object creation/deletion census; island solver memory (the game deletes bodies from islands the solver buffer
 # cannot hold)
 fn world::create_object_internal

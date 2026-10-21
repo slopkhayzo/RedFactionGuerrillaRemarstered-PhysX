@@ -69,6 +69,8 @@ inline uint32_t weapon__fire_projectile = 0x007E1860;  // Steam 0x007E1C30; weap
 inline uint32_t human__update_pos_and_orient = 0x0069AB90;  // Steam 0x0069AF70; human::update_pos_and_orient, 78 bytes: void __thiscall human::(vector*, matrix*, bool)
 inline uint32_t human_controller_set_vel = 0x0067B140;  // Steam 0x0067B510; human_controller_set_vel, 97 bytes: void __cdecl(human*, vector*)
 inline uint32_t human__get_equipped_weapon = 0x0067AFC0;  // Steam 0x0067B390; human::get_equipped_weapon, 79 bytes: weapon* __thiscall human::()
+inline uint32_t game_render_setup_frame = 0x003CFBF0;  // Steam 0x003CFBD0; game_render_setup_frame, 3771 bytes: void __cdecl(rl_renderer*)
+inline uint32_t hud_hide = 0x00441AE0;  // Steam 0x00441A90; hud_hide, 34 bytes: void __cdecl(bool)
 inline uint32_t world__create_object_internal = 0x0053E550;  // Steam 0x0053E6B0; world::create_object_internal, 529 bytes: object* __thiscall world::(uint, obj_prop_block*, world_zone*, uint)
 inline uint32_t object_mover_mark_for_fade = 0x006139A0;  // Steam 0x00613D30; object_mover_mark_for_fade, 52 bytes: void __cdecl(object_mover*, int)
 inline uint32_t rfg_dyn_create_shard = 0x00337C60;  // Steam 0x00337CE0; rfg_dyn_create_shard, 980 bytes: general_mover* __cdecl(rfg_mover*, rfg_subpiece*, enum rfg_move_type, bool)
@@ -345,6 +347,8 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::human__update_pos_and_orient, {0x0069AB90, 0x0069AF70}},
     {&rva::human_controller_set_vel, {0x0067B140, 0x0067B510}},
     {&rva::human__get_equipped_weapon, {0x0067AFC0, 0x0067B390}},
+    {&rva::game_render_setup_frame, {0x003CFBF0, 0x003CFBD0}},
+    {&rva::hud_hide, {0x00441AE0, 0x00441A90}},
     {&rva::world__create_object_internal, {0x0053E550, 0x0053E6B0}},
     {&rva::object_mover_mark_for_fade, {0x006139A0, 0x00613D30}},
     {&rva::rfg_dyn_create_shard, {0x00337C60, 0x00337CE0}},
@@ -617,6 +621,8 @@ inline constexpr uint32_t weapon__fire_projectile = 1749;
 inline constexpr uint32_t human__update_pos_and_orient = 78;
 inline constexpr uint32_t human_controller_set_vel = 97;
 inline constexpr uint32_t human__get_equipped_weapon = 79;
+inline constexpr uint32_t game_render_setup_frame = 3771;
+inline constexpr uint32_t hud_hide = 34;
 inline constexpr uint32_t world__create_object_internal = 529;
 inline constexpr uint32_t object_mover_mark_for_fade = 52;
 inline constexpr uint32_t rfg_dyn_create_shard = 980;

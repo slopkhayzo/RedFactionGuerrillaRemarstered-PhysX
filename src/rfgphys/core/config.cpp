@@ -75,6 +75,7 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_batched_cap = get_int(ini_path, L"Experiment", L"BatchedCap", 0);
     c.test_hang_after_s = get_int(ini_path, L"Test", L"HangAfterSeconds", 0);
     c.test_zone_cycle = get_int(ini_path, L"Test", L"ZoneCycle", 0) != 0;
+    c.test_fly_camera = get_int(ini_path, L"Test", L"FlyCamera", 0) != 0;
     c.auto_load_save = get_int(ini_path, L"Test", L"AutoLoadSave", 0) != 0;
     c.block_save_writes = get_int(ini_path, L"Test", L"BlockSaveWrites", 0) != 0;
     // DebrisCollide replaced WorldOnlyDebrisCollide (which only changed layers and so had no visible effect).
@@ -117,6 +118,14 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_debris_drop_meshes = get_int(ini_path, L"Experiment", L"PhysXDebrisDropMeshes", 1);
     c.exp_physx_solid_debris = get_int(ini_path, L"Experiment", L"PhysXSolidDebris", 0);
     c.exp_physx_solid_mass_kg = get_int(ini_path, L"Experiment", L"PhysXSolidMassKg", 0);
+    c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
+    c.fly_camera_key = get_int(ini_path, L"FlyCamera", L"Key", VK_F10);
+    if (c.fly_camera_key < 1 || c.fly_camera_key > 0xFE) c.fly_camera_key = VK_F10;
+    c.fly_camera_speed = get_int(ini_path, L"FlyCamera", L"Speed", 10);
+    if (c.fly_camera_speed < 1) c.fly_camera_speed = 1;
+    c.fly_camera_look_speed = get_int(ini_path, L"FlyCamera", L"LookSpeed", 100);
+    if (c.fly_camera_look_speed < 1) c.fly_camera_look_speed = 1;
+    c.fly_camera_hide_hud = get_int(ini_path, L"FlyCamera", L"HideHud", 1) != 0;
 
     const std::wstring mode = get_string(ini_path, L"Harness", L"Mode", L"off");
     c.harness_mode = _wcsicmp(mode.c_str(), L"record") == 0 ? 1 : _wcsicmp(mode.c_str(), L"replay") == 0 ? 2 : 0;
@@ -150,7 +159,7 @@ Config load_config(const std::wstring& ini_path) {
 }
 
 std::string describe(const Config& c) {
-    char buf[2048];
+    char buf[3072];
     static const char* const kModes[] = {"off", "record", "replay"};
     snprintf(buf, sizeof(buf),
              "enabled=%d output_dir='%s' keep_sessions=%d hang_s=%d telemetry=%d contact_counters=%d profiler=%d (interval %d us, gameplay only "
@@ -158,7 +167,8 @@ std::string describe(const Config& c) {
              "block_save_writes=%d exp_debris_collide=%d (solver buffer %d MB) exp_gpu_occlusion=%d "
              "exp_shadow_min_radius_cm=%d/%d/%d exp_havok_threads=%d%s (min island size %d) exp_keep_debris=%d (debris "
              "pool %d, render instances %d, Havok heap %d MB, zone reserve %d) exp_physx=%d (%d Hz, %d slots, test %d bodies, "
-             "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d) exp_physx_debris=%d harness=%s (recordings '%s', recording '%s', seed %08X, "
+             "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d) exp_physx_debris=%d fly_camera=%d "
+             "(key %d, %d m/s, look speed %d%%, hide HUD %d) harness=%s (recordings '%s', recording '%s', seed %08X, "
              "checkpoint every %d, virtual clock %d, auto start '%s', input script '%s', max frames %d, trace rng %d, "
              "screenshots '%s' every %d, track %d, lock track %d within %d cm)",
              c.enabled, narrow(c.output_dir).c_str(), c.keep_sessions, c.hang_s, c.telemetry, c.contact_counters, c.profiler,
@@ -170,6 +180,7 @@ std::string describe(const Config& c) {
              c.exp_debris_pool, c.exp_render_instances, c.exp_havok_heap_mb, c.exp_zone_reserve, c.exp_physx,
              c.exp_physx_rate, c.exp_physx_max_bodies, c.exp_physx_test, c.exp_physx_test_crash_after_s,
              c.exp_collision_survey, c.exp_physx_world, c.exp_physx_world_check, c.exp_physx_debris,
+             c.fly_camera, c.fly_camera_key, c.fly_camera_speed, c.fly_camera_look_speed, c.fly_camera_hide_hud,
              kModes[c.harness_mode],
              narrow(c.harness_recordings_dir).c_str(), narrow(c.harness_recording).c_str(), c.harness_seed,
              c.harness_checkpoint_interval, c.harness_virtual_clock, narrow(c.harness_auto_start).c_str(),

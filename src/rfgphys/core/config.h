@@ -30,6 +30,7 @@ struct Config {
                                       // gameplay (tests the hang watch, core/hang_watch.h)
     bool test_zone_cycle = false;     // blow up buildings near the player, teleport away until their zone streams
                                       // out, and back (test/zone_cycle.h)
+    bool test_fly_camera = false;     // a scripted fly camera flight with screenshots (dev/fly_camera.h)
     bool auto_load_save = false;      // main menu -> Load Game -> most recent save, without input
     bool block_save_writes = false;   // never write or erase save data (always on for unattended runs)
 
@@ -101,6 +102,13 @@ struct Config {
     // stands on rubble; the player's capsule in PhysX pushes only the light ones.
     int exp_physx_solid_debris = 0;
     int exp_physx_solid_mass_kg = 0;  // with it: pieces this heavy or more are solid (0: the game's push-away mass)
+
+    // Fly camera for screenshots (dev/fly_camera.h; development, off in the release settings).
+    bool fly_camera = false;
+    int fly_camera_key = 0x79;        // virtual-key code of the toggle (F10)
+    int fly_camera_speed = 10;        // m/s
+    int fly_camera_look_speed = 100;  // mouse and arrow-key turning, percent
+    bool fly_camera_hide_hud = true;  // the HUD is hidden while flying
 
     // Record/replay harness (harness/harness.h).
     int harness_mode = 0;                 // 0 off, 1 record, 2 replay

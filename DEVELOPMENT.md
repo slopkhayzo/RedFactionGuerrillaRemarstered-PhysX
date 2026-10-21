@@ -41,7 +41,26 @@ python tools\profile_report.py runs\<run-folder>
 ```
 
 `Test.ZoneCycle=1` adds a zone-streaming test to such a run: buildings near the start are blown up, then the player is
-teleported away until the start's zone streams out, and back.
+teleported away until the start's zone streams out, and back. `Test.FlyCamera=1` adds a scripted flight of the fly
+camera (below), 15 s into gameplay: screenshots `fly_0_game.png` to `fly_5_control.png` in the run folder, and checks
+in the log (`fly camera test: passed`; with a message box on screen the game ignores the mouse, and the input check is
+reported as not verified).
+
+## Fly camera
+
+For screenshots: with `[FlyCamera] Enabled=1` (off by default, in the release settings too), F10 (`Key`, a virtual-key
+code) takes the view off the game camera in single player. W/S/A/D move along the view, Space/Ctrl along its up
+vector, Q/E roll, the mouse or the arrow keys turn about the view's own axes, Shift moves 4x faster and Alt 4x slower,
+the wheel zooms and the middle button resets the zoom. `Speed` (m/s) and `LookSpeed` (percent) set the rates. The game
+gets no input while flying, so the player stands still, and the HUD is hidden (`HideHud=0` keeps it; message boxes
+such as tutorial hints stay, so close them first). F10 again gives the view back to the game camera, which never
+moved; leaving gameplay (a menu, loading, death) does too.
+
+Only the drawn view changes (`render_pos` and `render_orient` of `Rfg_camera`, written in `game_render_setup_frame`,
+and its `real_fov` while that runs), so the game camera's state stays with the player, and so does world streaming:
+far from the player, places show their distant versions. It is not installed with the record/replay harness, which
+uses F10 too. The remaster has a free camera of its own (`s_freeCamera`, `overwriteFreeCamera` in `render_frame`,
+moved by `DebugAxisInput`), but nothing turns it on.
 
 ## Play sessions and recordings
 

@@ -10,6 +10,7 @@
 #include "core/hang_watch.h"
 #include "core/log.h"
 #include "core/session.h"
+#include "dev/fly_camera.h"
 #include "experiments/debris_collision.h"
 #include "experiments/havok_mt.h"
 #include "experiments/keep_debris.h"
@@ -110,6 +111,7 @@ void init() {
     debris_offload::install(cfg);  // after the bridge: it moves pieces from the snapshot the bridge takes
     zone_cycle::install(cfg);
     harness::install(cfg);
+    fly_camera::install(cfg);  // never with the harness: both take over the game's input
     hang_watch::start(cfg);
     if (!hooks::enable_all()) return;
     if (cfg.telemetry && cfg.profiler) profiler::start(cfg);

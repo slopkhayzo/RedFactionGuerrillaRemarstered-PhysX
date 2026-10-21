@@ -26,6 +26,7 @@ add_library(rfgphys SHARED
     src/rfgphys/core/game_lock.cpp
     src/rfgphys/core/thread_dump.cpp
     src/rfgphys/core/hang_watch.cpp
+    src/rfgphys/dev/fly_camera.cpp
     src/rfgphys/hooks/hooks.cpp
     src/rfgphys/game/rfg.cpp
     src/rfgphys/telemetry/telemetry.cpp

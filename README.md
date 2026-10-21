@@ -88,7 +88,7 @@ python tools\package.py                                                  # dist\
 
 | Path | Contents |
 | --- | --- |
-| `src/rfgphys/` | the plugin: `core/` (settings, log, main-loop hook, build check, hang watch), `hooks/`, `game/` (the game's addresses and helpers), `physx/` (the link to the host, the static-world mirror, the debris hand-over), `experiments/` (debris collision, debris limits, render tweaks, multithreaded Havok), `telemetry/`, `harness/` (record and replay for testing), `test/` (unattended-run automation) |
+| `src/rfgphys/` | the plugin: `core/` (settings, log, main-loop hook, build check, hang watch), `hooks/`, `game/` (the game's addresses and helpers), `physx/` (the link to the host, the static-world mirror, the debris hand-over), `experiments/` (debris collision, debris limits, render tweaks, multithreaded Havok), `telemetry/`, `harness/` (record and replay for testing), `test/` (unattended-run automation), `dev/` (a fly camera for screenshots) |
 | `src/shared/` | the shared-memory protocol between plugin and host, the version resource |
 | `host/` | the 64-bit PhysX host (`src/host_main.cpp`) and a standalone pile benchmark |
 | `tools/` | build, package and test scripts; `release/` holds the release's settings and README |
