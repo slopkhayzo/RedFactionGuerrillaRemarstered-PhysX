@@ -44,10 +44,16 @@ limitations.
   rigid-body dynamics (on the CPU without a suitable GPU), at 60 steps per second. It is a separate process because the
   game is 32-bit and PhysX 5 is 64-bit only. The two share memory (a command ring and pose snapshots), and the host
   runs in a job object, so it ends with the game.
-- The game's static world (terrain and buildings) is mirrored into PhysX. Debris pieces are handed over as they appear:
-  their Havok bodies and game objects go, their render instances stay and follow the poses PhysX computes. Resting
-  pieces are frozen until something touches them, explosions are passed on, and heavy pieces near the player get Havok
-  stand-ins, so the player stands on rubble.
+- The game's static world (terrain and buildings) is mirrored into PhysX. Debris pieces are handed over two seconds
+  after they appear (until then the game's physics has them, so they break what they hit and weigh on what they land
+  on, as the game's own debris does): their Havok bodies and game objects go, their render instances stay and follow
+  the poses PhysX computes. Pieces at rest, or only rocking in place, are frozen until something touches them, and
+  explosions are passed on. Collision hulls are grown by Havok's convex radius, as the game's own shapes are.
+- Vehicles, walkers and loose chunks of buildings stay in Havok; each of their bodies has a kinematic copy in PhysX
+  that pushes the pieces out of its way (a piece pressed through the ground is put back on top).
+- Where the game needs to see the pieces, they get Havok stand-ins with their own collision shapes: near the player
+  (heavy pieces are solid, so the player stands on rubble; melee blows and bullets that hit a piece push it), ahead of
+  rockets and other projectiles, which then strike the pile, and along the player's line of fire.
 - The game's debris removal is switched off and its limits raised: pools for debris objects and render instances,
   Havok's heap, and the renderer's instancing capacity.
 

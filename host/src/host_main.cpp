@@ -18,6 +18,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <share.h>
 #include <string>
 #include <unordered_map>
@@ -190,16 +191,59 @@ struct Host {
     std::vector<uint32_t> now_awake;     // scratch for step()
     std::vector<uint32_t> freeze_list;   // scratch for step()
     std::vector<uint8_t> was_awake;
+    std::vector<uint32_t> awake_since;   // by slot: the step its body last woke (for the restless count in the log)
+    static constexpr uint32_t kRestlessSteps = 300;  // awake this long without a break: restless
     // Freezing (06 §12): a pile is one island and never falls asleep, so a piece that stays calm for kFreezeSteps
     // becomes kinematic until an explosion or the player comes near it. That cuts the pile's island apart, so the
     // rest can sleep, and the game stops moving its render instance.
     static constexpr uint16_t kFreezeSteps = 60;
     static constexpr float kCalmSpeed = 0.15f, kCalmSpin = 0.5f;
-    static constexpr float kMaxDepenetration = 3.0f;  // m/s, PxRigidBody::setMaxDepenetrationVelocity of debris
+    // Or a piece that went nowhere for kFreezeSteps (less than kStillDist, turned less than 12 degrees): one rocking in
+    // place in a pile never slows down enough to be calm (a thousand of them rocked in a Wrecking Crew match, the
+    // piles bubbling), yet stays where it is.
+    static constexpr float kStillDist = 0.06f, kStillCos = 0.99452f;  // cos(12 deg / 2): quaternion dot product
+    // Overlaps (pieces coming over from Havok's piles, the player's capsule walked into a pile) are resolved at this
+    // speed at most: faster, pieces popped up out of piles and fell back.
+    static constexpr float kMaxDepenetration = 1.5f;  // m/s, PxRigidBody::setMaxDepenetrationVelocity of debris
+    // A piece that waited in Havok comes over overlapping some (pieces that moved into it meanwhile, the pieces of its
+    // own shatter, which Havok had pushed apart only so far; more than 3 cm deep for most pieces, measured): for its
+    // first kGentleSteps that is undone at kGentleDepenetration at most, without piles bubbling up.
+    static constexpr float kGentleDepenetration = 0.2f;
+    static constexpr uint32_t kGentleSteps = 180;
+    std::deque<std::pair<uint32_t, uint32_t>> gentle;  // slot, the step its gentleness ends
     std::vector<uint16_t> calm;
+    std::vector<ipc::BodyPose> still_from;  // by slot: where its current going-nowhere window began
+    std::vector<uint32_t> still_step;       // and when
+    // Pieces pushed upward in their first second here: they came over inside or under other pieces and PhysX pushed
+    // them out (the piles bubbling). Ones that came over rising, or that an explosion or a blow moved, do not count.
+    static constexpr uint32_t kBubbleSteps = 60;
+    static constexpr float kBubbleSpeed = 0.3f;  // m/s upwards
+    std::vector<uint32_t> born_step;
+    std::vector<uint8_t> born_excused;           // by slot: 1 once it no longer counts
+    uint32_t stat_bubbled = 0;
     std::vector<uint8_t> frozen, user_kinematic, heavy;  // heavy: the player's capsule does not touch it
+    // Pushers: kinematic bodies standing for heavy game bodies (vehicles and walkers, ipc::kBodyPusher). A frozen
+    // piece is kinematic too, and two kinematic bodies pass through each other, so every step a pusher wakes the
+    // frozen pieces it is about to reach, whatever their mass.
+    // A pusher wakes them once a point of it has gone kPushStep since it last did: a loose chunk of a building lying
+    // in a pile jitters by millimetres, and woke the whole pile every step for nothing (100,000 thaws in a Wrecking
+    // Crew match, the awake pieces doubled). How far its points went is told by its shape (pusher_moved), not its
+    // origin: a chunk has its building's origin, often 10-20 m away, and a chunk of a metre rolling over at 0.3 m/s
+    // swung that origin half a metre a step; it woke everything within metres of it every step (its speed widens
+    // the reach), and the piles around it bubbled as the woken pieces settled again.
+    static constexpr float kPushReach = 1.0f;       // m beyond the pusher's bounds
+    static constexpr float kPushLookahead = 4.0f;   // steps of its current speed, also beyond its bounds
+    static constexpr float kPushStep = 0.1f;        // m
+    static constexpr float kPlayerThawStep = 0.05f; // m
+    std::vector<uint8_t> pusher;
+    std::vector<uint32_t> pusher_slots;  // may hold stale entries; pusher[] is the truth
+    std::vector<ipc::BodyPose> pusher_woke_at;  // per slot: the pose it last woke pieces from
+    std::vector<PxVec3> pusher_mid;      // per slot: the middle of its shapes' bounds, in its own frame
+    std::vector<float> pusher_half;      // and how far its shapes reach from there
+    std::vector<uint32_t> pusher_wakes, pusher_woken;  // per slot, this log window: wake events and pieces woken
+    uint32_t stat_pushed_awake = 0, stat_impulses = 0, stat_unsupported_bodies = 0;
     std::vector<uint32_t> frozen_slots;  // may hold stale entries; frozen[] is the truth
-    uint32_t frozen_count = 0, stat_frozen = 0, stat_thawed = 0;
+    uint32_t frozen_count = 0, stat_frozen = 0, stat_frozen_still = 0, stat_thawed = 0;
     // A frozen piece does not notice when what it rests on goes, and would hang in the air. So removed statics wake
     // the frozen pieces in and above their bounds, and a woken piece that then moves (2 cm within 4 steps: it lost its
     // support or was pushed) wakes the frozen pieces touching it from above, which do the same, ring by ring. A woken
@@ -318,6 +362,8 @@ struct Host {
         std::fill(was_awake.begin(), was_awake.end(), uint8_t(0));
         frozen_slots.clear();
         frozen_count = 0;
+        pusher_slots.clear();
+        gentle.clear();
         slots_used = 0;
         logf("reset: scene emptied");
     }
@@ -340,6 +386,7 @@ struct Host {
         }
         calm[slot] = 0;
         user_kinematic[slot] = 0;
+        pusher[slot] = 0;
         --live;
     }
 
@@ -353,13 +400,22 @@ struct Host {
         parts.push_back(shape);
     }
 
-    // Cooks the convex hull of the points around their centre (returned; the shape's local pose puts it back).
-    // PhysX's QuickHull looped forever on a building piece of the open world, sent in world coordinates thousands
-    // of metres from the origin (Wrecking Crew maps sit near it): the points are centred and welded within 1 mm,
-    // a flat set gets 2 mm of thickness along its thin axis, and what is left without a hull (a line, a point,
-    // NaN) is skipped.
-    uint32_t stat_hull_skipped = 0;
-    PxConvexMesh* cook_hull(const ipc::Vec3* v, uint32_t count, PxVec3& centre) {
+    // Cooks the convex hull of the points around their centre (returned; the shape's local pose puts it back), grown
+    // by Havok's convex radius. Havok rounds every shape by it (the game sets 1 cm): pieces lie that far apart there,
+    // and their meshes are drawn about that much larger than their points. Without it a piece sank by it into what it
+    // lay on (thin pieces on glass showed through underneath), and panels and sheets, flat in their points, came over
+    // without any thickness: tilted, they cooked to slivers without a usable mass and hung in the air where they were
+    // taken over (Vista's sphere of panels). Growing thin hulls by a share of their size instead (for PhysX's GPU code)
+    // made big panels thicker than in Havok and small ones thinner: piles bubbled where pieces came over overlapping
+    // their neighbours, and thin pieces jittered for a long time.
+    // The points are copied out along their principal axes and the diagonals between them; along each principal axis
+    // the hull is at least kMinThickness thick. PhysX's QuickHull looped forever on a building piece of the open world,
+    // sent in world coordinates thousands of metres from the origin (Wrecking Crew maps sit near it): the points are
+    // centred and welded within 1 mm, and what is left without a hull (a point, NaN) is skipped.
+    static constexpr float kMinThickness = 0.004f;
+    static constexpr uint32_t kHullPoints = 128;  // welded points used
+    uint32_t stat_hull_skipped = 0, stat_hull_thickened = 0, stat_hull_boxes = 0;
+    PxConvexMesh* cook_hull(const ipc::Vec3* v, uint32_t count, float radius, PxVec3& centre) {
         PxBounds3 b = PxBounds3::empty();
         for (uint32_t i = 0; i < count; ++i) b.include(PxVec3(v[i].x, v[i].y, v[i].z));
         centre = b.getCenter();
@@ -368,50 +424,118 @@ struct Host {
             ++stat_hull_skipped;
             return nullptr;
         }
-        PxVec3 pts[256];
+        PxVec3 pts[kHullPoints];
         uint32_t n = 0;
-        for (uint32_t i = 0; i < count && n < 128; ++i) {
+        for (uint32_t i = 0; i < count && n < kHullPoints; ++i) {
             const PxVec3 p = PxVec3(v[i].x, v[i].y, v[i].z) - centre;
             bool dup = false;
             for (uint32_t k = 0; k < n && !dup; ++k) dup = (pts[k] - p).magnitudeSquared() < 1e-6f;
             if (!dup) pts[n++] = p;
         }
-        if (extent.minElement() < 0.002f) {  // flat: a copy of the points 2 mm along the thin axis
-            const uint32_t axis = extent.x <= extent.y && extent.x <= extent.z ? 0 : extent.y <= extent.z ? 1 : 2;
-            PxVec3 shift(0.0f);
-            shift[axis] = 0.002f;
-            const uint32_t flat = n;
-            for (uint32_t i = 0; i < flat; ++i) pts[n++] = pts[i] + shift;
+        if (n < 2) {
+            ++stat_hull_skipped;
+            return nullptr;
         }
-        if (n < 4) {
+        PxVec3 mean(0.0f);
+        for (uint32_t i = 0; i < n; ++i) mean += pts[i];
+        mean *= 1.0f / float(n);
+        PxMat33 cov(PxZero);
+        for (uint32_t i = 0; i < n; ++i) {
+            const PxVec3 d = pts[i] - mean;
+            cov.column0 += d * d.x;
+            cov.column1 += d * d.y;
+            cov.column2 += d * d.z;
+        }
+        PxQuat q;
+        PxDiagonalize(cov, q);
+        const PxMat33 axes(q);  // columns: the principal axes
+        float size[3];
+        for (uint32_t k = 0; k < 3; ++k) {
+            float lo = PX_MAX_F32, hi = -PX_MAX_F32;
+            for (uint32_t i = 0; i < n; ++i) {
+                const float d = pts[i].dot(axes[k]);
+                lo = std::min(lo, d), hi = std::max(hi, d);
+            }
+            size[k] = hi - lo;
+        }
+        if (!(radius > 0.0f && radius < 0.5f)) radius = 0.0f;  // none, NaN or absurd
+        float grow[3];
+        bool thickened = false;
+        for (uint32_t k = 0; k < 3; ++k) {
+            grow[k] = std::max(radius, 0.5f * (kMinThickness - size[k]));
+            thickened |= grow[k] > radius;
+        }
+        stat_hull_thickened += thickened ? 1 : 0;
+        PxVec3 dirs[14];  // along the principal axes; with a radius also along the diagonals between them
+        uint32_t nd = 0;
+        for (uint32_t k = 0; k < 3; ++k)
+            if (grow[k] > 0.0f) {
+                dirs[nd++] = axes[k] * grow[k];
+                dirs[nd++] = axes[k] * -grow[k];
+            }
+        if (radius > 0.0f) {
+            const float d = radius * 0.57735027f;  // 1/sqrt(3)
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sy = -1; sy <= 1; sy += 2)
+                    for (int sz = -1; sz <= 1; sz += 2)
+                        dirs[nd++] = (axes[0] * float(sx) + axes[1] * float(sy) + axes[2] * float(sz)) * d;
+        }
+        PxVec3 grown[kHullPoints * 14];
+        const PxVec3* hull = pts;
+        uint32_t hull_n = n;
+        if (nd) {
+            hull_n = 0;
+            for (uint32_t i = 0; i < n; ++i)
+                for (uint32_t j = 0; j < nd; ++j) grown[hull_n++] = pts[i] + dirs[j];
+            hull = grown;
+        }
+        if (hull_n < 4) {
             ++stat_hull_skipped;
             return nullptr;
         }
         PxCookingParams params(physics->getTolerancesScale());
         params.buildGPUData = gpu;
         PxConvexMeshDesc desc;
-        desc.points.count = n;
+        desc.points.count = hull_n;
         desc.points.stride = sizeof(PxVec3);
-        desc.points.data = pts;
+        desc.points.data = hull;
         desc.flags = PxConvexFlag::eCOMPUTE_CONVEX | PxConvexFlag::eSHIFT_VERTICES;
         desc.vertexLimit = 64;
         return PxCreateConvexMesh(params, desc, physics->getPhysicsInsertionCallback());
     }
 
-    PxShape* make_convex(const ipc::Vec3* v, uint32_t count) {
+    PxShape* make_convex(const ipc::Vec3* v, uint32_t count, float radius) {
         PxVec3 centre;
-        PxConvexMesh* mesh = cook_hull(v, count, centre);
-        if (!mesh) return nullptr;
-        PxShape* shape = physics->createShape(PxConvexMeshGeometry(mesh), *material, false, PxShapeFlag::eSIMULATION_SHAPE);
-        mesh->release();  // the shape keeps its reference
+        PxConvexMesh* mesh = cook_hull(v, count, radius, centre);
+        PxShape* shape = nullptr;
+        if (mesh) {
+            shape = physics->createShape(PxConvexMeshGeometry(mesh), *material, false, PxShapeFlag::eSIMULATION_SHAPE);
+            mesh->release();  // the shape keeps its reference
+        } else {
+            // A piece without a shape gets no body and hangs where it was taken over: a box around its points.
+            PxBounds3 b = PxBounds3::empty();
+            for (uint32_t i = 0; i < count; ++i) b.include(PxVec3(v[i].x, v[i].y, v[i].z));
+            if (b.isEmpty() || !b.isFinite() || b.getDimensions().maxElement() >= 1000.0f) return nullptr;
+            centre = b.getCenter();
+            const float r = radius > 0.0f && radius < 0.5f ? radius : 0.0f;
+            const PxVec3 e = b.getExtents() + PxVec3(r);
+            const float least = 0.5f * kMinThickness;
+            const PxVec3 half(std::max(e.x, least), std::max(e.y, least), std::max(e.z, least));
+            shape = physics->createShape(PxBoxGeometry(half), *material, false, PxShapeFlag::eSIMULATION_SHAPE);
+            ++stat_hull_boxes;
+        }
         if (shape) shape->setLocalPose(PxTransform(centre));
         return shape;
     }
 
+    uint32_t stat_no_shape = 0, stat_inertia_fixed = 0, stat_born_frozen = 0;
     void create_body(const ipc::CreateBody& c) {
         if (c.slot >= max_bodies) return;
         auto it = shapes.find(c.shape);
-        if (it == shapes.end() || it->second.empty()) return;
+        if (it == shapes.end() || it->second.empty()) {
+            ++stat_no_shape;
+            return;
+        }
         release_body(c.slot);
         const PxTransform pose(PxVec3(c.pos.x, c.pos.y, c.pos.z), PxQuat(c.rot.x, c.rot.y, c.rot.z, c.rot.w).getNormalized());
         PxRigidDynamic* a = physics->createRigidDynamic(pose);
@@ -420,15 +544,39 @@ struct Host {
             PxRigidBodyExt::setMassAndUpdateInertia(*a, c.density);
         else
             PxRigidBodyExt::updateMassAndInertia(*a, c.density > 0 ? c.density : 2000.0f);
+        // A hull without a volume gives no usable inertia (the piece does not move): a box's of its bounds instead.
+        const PxVec3 inertia = a->getMassSpaceInertiaTensor();
+        const float mass = a->getMass();
+        if (!(mass > 0.0f) || !inertia.isFinite() || !(inertia.minElement() > 1e-7f * mass) ||
+            !a->getCMassLocalPose().isFinite()) {
+            const float m = mass > 0.0f && std::isfinite(mass) ? mass : (c.density > 0 ? c.density : 10.0f);
+            PxBounds3 wb = PxBounds3::empty();
+            for (PxShape* shape : it->second) wb.include(PxShapeExt::getWorldBounds(*shape, *a, 1.0f));
+            const PxVec3 e = wb.getDimensions().maximum(PxVec3(0.01f));
+            a->setMass(m);
+            a->setCMassLocalPose(PxTransform(PxIdentity));
+            a->setMassSpaceInertiaTensor(PxVec3(e.y * e.y + e.z * e.z, e.x * e.x + e.z * e.z, e.x * e.x + e.y * e.y) *
+                                         (m / 12.0f));
+            ++stat_inertia_fixed;
+        }
         a->setSolverIterationCounts(4, 1);
-        // Overlaps (pieces adopted slightly inside each other, the player's capsule walked into a pile) are resolved
-        // at this speed at most instead of shooting pieces away.
-        a->setMaxDepenetrationVelocity(kMaxDepenetration);
+        const bool gentle_start = (c.flags & ipc::kBodyGentle) != 0;
+        a->setMaxDepenetrationVelocity(gentle_start ? kGentleDepenetration : kMaxDepenetration);
+        if (gentle_start) gentle.emplace_back(c.slot, step_index + kGentleSteps);
         a->setLinearVelocity(PxVec3(c.lin_vel.x, c.lin_vel.y, c.lin_vel.z));
         a->setAngularVelocity(PxVec3(c.ang_vel.x, c.ang_vel.y, c.ang_vel.z));
         a->userData = reinterpret_cast<void*>(uintptr_t(c.slot));
         if (c.flags & ipc::kBodyKinematic) a->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
         user_kinematic[c.slot] = (c.flags & ipc::kBodyKinematic) ? 1 : 0;
+        pusher[c.slot] = (c.flags & ipc::kBodyKinematic) && (c.flags & ipc::kBodyPusher) ? 1 : 0;
+        if (pusher[c.slot] && std::find(pusher_slots.begin(), pusher_slots.end(), c.slot) == pusher_slots.end()) {
+            pusher_slots.push_back(c.slot);
+            pusher_wakes[c.slot] = pusher_woken[c.slot] = 0;  // a pusher before it went out of the list unlogged
+        }
+        // Made where it stands: it wakes nothing until it moves (frozen pieces it overlaps are kinematic too, so they
+        // do not touch it until then).
+        pusher_woke_at[c.slot].pos = c.pos;
+        pusher_woke_at[c.slot].rot = {pose.q.x, pose.q.y, pose.q.z, pose.q.w};
         heavy[c.slot] = (it->second[0]->getSimulationFilterData().word0 & ipc::kShapeHeavy) ? 1 : 0;
         float radius = 0;
         for (PxShape* shape : it->second) {
@@ -436,7 +584,23 @@ struct Host {
             radius = std::max(radius, (b.getCenter() - pose.p).magnitude() + b.getExtents().magnitude());
         }
         body_radius[c.slot] = radius;
+        if (pusher[c.slot]) {
+            PxBounds3 local = PxBounds3::empty();
+            for (PxShape* shape : it->second) {
+                PxBounds3 b;
+                PxGeometryQuery::computeGeomBounds(b, shape->getGeometry(), shape->getLocalPose(), 0.0f, 1.0f);
+                local.include(b);
+            }
+            pusher_mid[c.slot] = local.getCenter();
+            pusher_half[c.slot] = local.getExtents().magnitude();
+        }
         calm[c.slot] = 0;
+        awake_since[c.slot] = step_index;
+        still_from[c.slot].pos = c.pos;
+        still_from[c.slot].rot = {pose.q.x, pose.q.y, pose.q.z, pose.q.w};
+        still_step[c.slot] = step_index;
+        born_step[c.slot] = step_index;
+        born_excused[c.slot] = c.lin_vel.y > kBubbleSpeed ? 1 : 0;
         bodies[c.slot].actor = a;
         pending_add.push_back(a);
         ipc::BodyPose& p = poses[c.slot];
@@ -447,6 +611,96 @@ struct Host {
         p.flags = ipc::kPoseAlive;
         ++live;
         slots_used = std::max(slots_used, c.slot + 1);
+        // A piece that lay still in Havok starts frozen. A whole pile that had settled there came over awake and in
+        // contact at once, and the solver could not quite settle it again: hundreds of pieces rocked for good.
+        if ((c.flags & ipc::kBodyAtRest) && !user_kinematic[c.slot]) {
+            a->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+            frozen[c.slot] = 1;
+            p.flags = ipc::kPoseAlive | ipc::kPoseFrozen;
+            frozen_slots.push_back(c.slot);
+            grid_add(c.slot);
+            ++frozen_count;
+            ++stat_born_frozen;
+        }
+        if (!user_kinematic[c.slot] && ++overlap_count % kOverlapEvery == 0) measure_overlap(a, c.slot);
+    }
+
+    // Diagnostic: how deep a piece overlaps what is already here when it comes over (the pieces near it, the static
+    // world), which PhysX then pushes out: the bubbling of piles. One piece in kOverlapEvery is measured, with
+    // PxGeometryQuery::computePenetration, into the next log line.
+    static constexpr uint32_t kOverlapEvery = 32;
+    uint32_t overlap_count = 0;
+    uint32_t stat_overlap[5] = {};  // measured pieces by their deepest overlap: none, under 1 cm, 1-3, 3-10, deeper
+    // Over 3 cm deep into: the static world, a frozen piece, an awake one, a pusher, an awake one that came over in the
+    // last kOverlapYoungSteps (the pieces of the same shatter, or of the same collapse).
+    uint32_t stat_overlap_deep[5] = {};
+    static constexpr uint32_t kOverlapYoungSteps = 30;
+    void measure_overlap(PxRigidDynamic* a, uint32_t slot) {
+        PxShape* own[16];
+        const PxU32 n_own = a->getShapes(own, 16);
+        const PxTransform pose = a->getGlobalPose();
+        PxBounds3 b = PxBounds3::empty();
+        for (PxU32 i = 0; i < n_own; ++i) b.include(PxShapeExt::getWorldBounds(*own[i], *a, 1.0f));
+        float deepest = 0.0f, deepest_in[5] = {};
+        uint32_t kind = 0;  // what `against` measures: 0 statics, 1 frozen pieces, 2 awake pieces, 3 pushers, 4 young ones
+        auto against = [&](const PxGeometry& geom, const PxTransform& at) {
+            for (PxU32 i = 0; i < n_own; ++i) {
+                PxVec3 dir;
+                PxF32 depth = 0.0f;
+                if (PxGeometryQuery::computePenetration(dir, depth, own[i]->getGeometry(), pose * own[i]->getLocalPose(),
+                                                        geom, at)) {
+                    deepest = std::max(deepest, depth);
+                    deepest_in[kind] = std::max(deepest_in[kind], depth);
+                }
+            }
+        };
+        // The static world, through the scene's queries.
+        PxOverlapHit hits[32];
+        for (PxU32 i = 0; i < n_own; ++i) {
+            PxOverlapBuffer buf(hits, 32);
+            scene->overlap(own[i]->getGeometry(), pose * own[i]->getLocalPose(), buf,
+                           PxQueryFilterData(PxQueryFlag::eSTATIC | PxQueryFlag::eNO_BLOCK));
+            for (PxU32 h = 0; h < buf.getNbTouches(); ++h) {
+                const PxOverlapHit& t = buf.getTouch(h);
+                against(t.shape->getGeometry(), PxShapeExt::getGlobalPose(*t.shape, *t.actor));
+            }
+        }
+        // The pieces near it (not in the scene's queries): frozen ones through the grid, awake ones by their spheres.
+        auto piece = [&](uint32_t f) {
+            if (f == slot || !bodies[f].actor) return;
+            kind = pusher[f] ? 3 : frozen[f] ? 1 : step_index - born_step[f] < kOverlapYoungSteps ? 4 : 2;
+            PxRigidDynamic* o = bodies[f].actor;
+            PxShape* other[256];
+            const PxU32 n_o = o->getShapes(other, 256);
+            const PxTransform op = o->getGlobalPose();
+            for (PxU32 j = 0; j < n_o; ++j)
+                if (PxShapeExt::getWorldBounds(*other[j], *o, 1.0f).intersects(b))
+                    against(other[j]->getGeometry(), op * other[j]->getLocalPose());
+        };
+        const int x0 = cell_of(b.minimum.x - kCell), x1 = cell_of(b.maximum.x + kCell),
+                  y0 = cell_of(b.minimum.y - kCell), y1 = cell_of(b.maximum.y + kCell),
+                  z0 = cell_of(b.minimum.z - kCell), z1 = cell_of(b.maximum.z + kCell);
+        if (x1 - x0 < 16 && y1 - y0 < 16 && z1 - z0 < 16)
+            for (int x = x0; x <= x1; ++x)
+                for (int y = y0; y <= y1; ++y)
+                    for (int z = z0; z <= z1; ++z) {
+                        auto it = frozen_grid.find(cell_key(x, y, z));
+                        if (it == frozen_grid.end()) continue;
+                        for (uint32_t f : it->second)
+                            if (frozen[f]) piece(f);
+                    }
+        const float r = body_radius[slot];
+        for (uint32_t f : awake_slots) {
+            const ipc::Vec3& q = poses[f].pos;
+            const PxVec3 d(q.x - pose.p.x, q.y - pose.p.y, q.z - pose.p.z);
+            if (!frozen[f] && d.magnitude() < r + body_radius[f]) piece(f);
+        }
+        for (uint32_t f : pusher_slots)  // kinematic copies of vehicles and loose chunks: not in the grid
+            if (pusher[f] && bodies[f].actor && bodies[f].actor->getScene() &&
+                bodies[f].actor->getWorldBounds().intersects(b))
+                piece(f);
+        ++stat_overlap[deepest <= 0.0f ? 0 : deepest < 0.01f ? 1 : deepest < 0.03f ? 2 : deepest < 0.1f ? 3 : 4];
+        for (uint32_t k = 0; k < 5; ++k) stat_overlap_deep[k] += deepest_in[k] > 0.03f ? 1 : 0;
     }
 
     void flush_pending() {
@@ -506,10 +760,10 @@ struct Host {
     }
 
     void static_convex(const ipc::StaticConvex& c, uint32_t size) {
-        if (c.vertex_count < 4 || sizeof(c) + size_t(c.vertex_count) * sizeof(ipc::Vec3) > size) return;
+        if (c.vertex_count < 3 || sizeof(c) + size_t(c.vertex_count) * sizeof(ipc::Vec3) > size) return;
         const double t0 = now_ms();
         PxVec3 centre;
-        PxConvexMesh* mesh = cook_hull(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count, centre);
+        PxConvexMesh* mesh = cook_hull(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count, c.radius, centre);
         stat_cook_ms += now_ms() - t0;
         if (!mesh) {
             ++stat_cook_failed;
@@ -589,14 +843,30 @@ struct Host {
              double(c.row_scale), double(c.column_scale), double(c.height_scale), c.group);
     }
 
-    // A whole body leaves the mirror: in the open world mostly a zone streaming out, whose ground comes back with
-    // it. Frozen pieces there stay where they are (waking them would drop them through the world); sleeping ones
-    // PhysX wakes as it loses their contacts. Buildings losing pieces go through remove_static_keys, which wakes.
+    // A whole body leaves the mirror. Terrain (a height field) goes when its zone streams out, the pieces lying there
+    // with it, and frozen pieces near it stay where they are (woken they would drop through the world). Anything
+    // else is a building or structure that was destroyed or came loose as a whole (the sphere of panels on Vista):
+    // the frozen pieces resting on it wake, or they would hang in the air for good. Sleeping ones PhysX wakes as it
+    // loses their contacts. Buildings losing single pieces go through remove_static_keys, which wakes too.
     void remove_statics(uint32_t group) {
         auto it = groups.find(group);
         if (it == groups.end()) return;
-        release_group(it->second);
+        Group& g = it->second;
+        PxBounds3 bounds = PxBounds3::empty();
+        bool terrain = false;
+        if (g.pieces) bounds.include(g.pieces->getWorldBounds());
+        for (PxRigidStatic* st : g.actors) {
+            PxShape* shape = nullptr;
+            if (st->getShapes(&shape, 1) == 1 && shape->getGeometry().getType() == PxGeometryType::eHEIGHTFIELD)
+                terrain = true;
+            bounds.include(st->getWorldBounds());
+        }
+        release_group(g);
         groups.erase(it);
+        if (!terrain) {
+            const uint32_t woken = wake_unsupported(bounds);
+            stat_unsupported_bodies += woken ? 1 : 0;
+        }
     }
 
     void raycast_batch(const ipc::RaycastBatch& c, uint32_t size) {
@@ -630,6 +900,8 @@ struct Host {
         a->wakeUp();
         frozen[s] = 0;
         calm[s] = 0;
+        still_from[s] = poses[s];
+        still_step[s] = step_index;
         poses[s].flags &= ~ipc::kPoseFrozen;
         --frozen_count;
         ++stat_thawed;
@@ -701,19 +973,160 @@ struct Host {
         }
     }
 
-    // Statics went (a building lost pieces): frozen pieces in and above their bounds move again.
-    void wake_unsupported(PxBounds3 b) {
-        if (b.isEmpty() || !frozen_count) return;
+    // Frozen pieces whose bounds reach into the box `b`, found in the grid of frozen pieces, move again.
+    uint32_t wake_in_box(const PxBounds3& b) {
+        uint32_t n = 0;
+        const float reach = kCell;  // a piece in a cell outside the box can still reach into it
+        const int x0 = cell_of(b.minimum.x - reach), x1 = cell_of(b.maximum.x + reach), y0 = cell_of(b.minimum.y - reach),
+                  y1 = cell_of(b.maximum.y + reach), z0 = cell_of(b.minimum.z - reach), z1 = cell_of(b.maximum.z + reach);
+        for (int x = x0; x <= x1; ++x)
+            for (int y = y0; y <= y1; ++y)
+                for (int z = z0; z <= z1; ++z) {
+                    auto it = frozen_grid.find(cell_key(x, y, z));
+                    if (it == frozen_grid.end()) continue;
+                    for (uint32_t f : it->second) {
+                        if (!frozen[f]) continue;  // stale
+                        const ipc::Vec3& p = poses[f].pos;
+                        const float r = body_radius[f];
+                        if (p.x > b.minimum.x - r && p.x < b.maximum.x + r && p.y > b.minimum.y - r &&
+                            p.y < b.maximum.y + r && p.z > b.minimum.z - r && p.z < b.maximum.z + r) {
+                            wake(f);
+                            ++n;
+                        }
+                    }
+                }
+        return n;
+    }
+
+    // Frozen pieces near a pusher's parts (each part's bounds, `reach` around them) move again. Its parts, not a sphere
+    // around its origin: a loose chunk of a building reaches 30 m and more from its origin, and woke everything that
+    // far whenever it moved.
+    uint32_t wake_near_parts(PxRigidDynamic* a, float reach) {
+        PxShape* parts[256];
+        const PxU32 n = a->getShapes(parts, 256);
+        uint32_t woken = 0;
+        for (PxU32 i = 0; i < n; ++i) {
+            PxBounds3 b = PxShapeExt::getWorldBounds(*parts[i], *a, 1.0f);
+            b.fattenFast(reach);
+            woken += wake_in_box(b);
+        }
+        return woken;
+    }
+
+    // How far any point of pusher s went from pose (pa, qa) to (pb, qb), at most: its shapes' middle, and its turn
+    // times how far they reach from there.
+    float pusher_moved(uint32_t s, const ipc::Vec3& pa, const ipc::Quat& qa, const ipc::Vec3& pb, const ipc::Quat& qb) const {
+        const PxQuat a(qa.x, qa.y, qa.z, qa.w), b(qb.x, qb.y, qb.z, qb.w);
+        const PxVec3 ma = PxVec3(pa.x, pa.y, pa.z) + a.rotate(pusher_mid[s]);
+        const PxVec3 mb = PxVec3(pb.x, pb.y, pb.z) + b.rotate(pusher_mid[s]);
+        const float half_turn_cos = std::min(1.0f, std::fabs(a.dot(b)));
+        return (mb - ma).magnitude() + 2.0f * std::sqrt(1.0f - half_turn_cos * half_turn_cos) * pusher_half[s];
+    }
+
+    // Once per step: each pusher wakes the frozen pieces ahead of it.
+    void run_pushers() {
+        if (pusher_slots.empty() || !frozen_count) return;
+        size_t keep = 0;
+        for (size_t i = 0; i < pusher_slots.size(); ++i) {
+            const uint32_t s = pusher_slots[i];
+            if (!pusher[s] || !bodies[s].actor) continue;  // gone
+            pusher_slots[keep++] = s;
+            const ipc::BodyPose& p = poses[s];
+            ipc::BodyPose& at = pusher_woke_at[s];
+            // Still about where it last woke what it reaches.
+            if (pusher_moved(s, at.pos, at.rot, p.pos, p.rot) < kPushStep) continue;
+            at = p;
+            const float speed_per_step = pusher_moved(s, p.prev_pos, p.prev_rot, p.pos, p.rot);
+            const uint32_t woken =
+                wake_near_parts(bodies[s].actor, kPushReach + kPushLookahead * std::min(speed_per_step, 2.0f));
+            stat_pushed_awake += woken;
+            ++pusher_wakes[s];
+            pusher_woken[s] += woken;
+        }
+        pusher_slots.resize(keep);
+    }
+
+    // A push on one piece at a point (a hammer blow, a bullet): it moves again if it was frozen.
+    void impulse(const ipc::Impulse& c) {
+        if (c.slot >= max_bodies || !bodies[c.slot].actor || user_kinematic[c.slot]) return;
+        flush_pending();
+        if (frozen[c.slot]) wake(c.slot);
+        born_excused[c.slot] = 1;
+        PxRigidDynamic* a = bodies[c.slot].actor;
+        const PxVec3 j(c.impulse.x, c.impulse.y, c.impulse.z), at(c.point.x, c.point.y, c.point.z);
+        if (!j.isFinite() || !at.isFinite()) return;
+        PxRigidBodyExt::addForceAtPos(*a, c.mode == ipc::kExplosionVelocityChange ? j * a->getMass() : j, at,
+                                      PxForceMode::eIMPULSE);
+        ++stat_impulses;
+    }
+
+    // Statics went (a building lost pieces, or a whole structure went): frozen pieces in and above their bounds move
+    // again. Found in the grid of frozen pieces, or in the list of them when that is shorter; a body larger than
+    // 400 m across is not looked at.
+    uint32_t wake_unsupported(PxBounds3 b) {
+        if (b.isEmpty() || !frozen_count || !b.isFinite()) return 0;
         b.minimum -= PxVec3(0.5f, 0.5f, 0.5f);
         b.maximum += PxVec3(0.5f, 3.0f, 0.5f);
-        for (size_t i = 0; i < frozen_slots.size(); ++i) {
-            const uint32_t s = frozen_slots[i];
-            if (!frozen[s]) continue;
-            const ipc::Vec3& p = poses[s].pos;
-            if (b.contains(PxVec3(p.x, p.y, p.z))) {
-                wake(s);
-                ++stat_unsupported;
+        if (b.getDimensions().maxElement() > 400.0f) return 0;
+        uint32_t n = 0;
+        const int x0 = cell_of(b.minimum.x), x1 = cell_of(b.maximum.x), y0 = cell_of(b.minimum.y),
+                  y1 = cell_of(b.maximum.y), z0 = cell_of(b.minimum.z), z1 = cell_of(b.maximum.z);
+        const double cells = double(x1 - x0 + 1) * double(y1 - y0 + 1) * double(z1 - z0 + 1);
+        if (cells > double(frozen_slots.size())) {
+            for (size_t i = 0; i < frozen_slots.size(); ++i) {
+                const uint32_t s = frozen_slots[i];
+                if (!frozen[s]) continue;
+                const ipc::Vec3& p = poses[s].pos;
+                if (b.contains(PxVec3(p.x, p.y, p.z))) {
+                    wake(s);
+                    ++stat_unsupported;
+                    ++n;
+                }
             }
+            return n;
+        }
+        for (int x = x0; x <= x1; ++x)
+            for (int y = y0; y <= y1; ++y)
+                for (int z = z0; z <= z1; ++z) {
+                    auto it = frozen_grid.find(cell_key(x, y, z));
+                    if (it == frozen_grid.end()) continue;
+                    for (uint32_t s : it->second) {
+                        if (!frozen[s]) continue;  // stale
+                        const ipc::Vec3& p = poses[s].pos;
+                        if (b.contains(PxVec3(p.x, p.y, p.z))) {
+                            wake(s);
+                            ++stat_unsupported;
+                            ++n;
+                        }
+                    }
+                }
+        return n;
+    }
+
+    // Pieces forced through the ground fall under the terrain and were lost, one in ten in a Wrecking Crew match: a
+    // walker's foot or a building chunk coming down on them (pushers, kinematic and so infinitely heavy here) pinned
+    // them against it. Ten times a second, a piece falling fast whose nearest static straight above it is the terrain
+    // (seen from below) is put back on top of it, at rest.
+    static constexpr float kFallingSpeed = 6.0f;  // m/s downwards
+    uint32_t stat_rescued = 0;
+    void rescue_fallen() {
+        if (step_index % 6) return;
+        const PxQueryFilterData statics_only(PxQueryFlag::eSTATIC);
+        for (uint32_t s : awake_slots) {
+            if (user_kinematic[s] || frozen[s] || !bodies[s].actor) continue;
+            PxRigidDynamic* a = bodies[s].actor;
+            if (a->getLinearVelocity().y > -kFallingSpeed) continue;
+            const PxTransform t = a->getGlobalPose();
+            PxRaycastBuffer hit;
+            if (!scene->raycast(t.p, PxVec3(0.0f, 1.0f, 0.0f), 500.0f, hit,
+                                PxHitFlag::eDEFAULT | PxHitFlag::eMESH_BOTH_SIDES, statics_only) ||
+                !hit.hasBlock || !hit.block.shape ||
+                hit.block.shape->getGeometry().getType() != PxGeometryType::eHEIGHTFIELD)
+                continue;
+            a->setGlobalPose(PxTransform(PxVec3(t.p.x, hit.block.position.y + body_radius[s] + 0.05f, t.p.z), t.q));
+            a->setLinearVelocity(PxVec3(0.0f));
+            a->setAngularVelocity(PxVec3(0.0f));
+            ++stat_rescued;
         }
     }
 
@@ -761,6 +1174,7 @@ struct Host {
             if (a->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) continue;
             a->addForce(dir * (e.impulse * (1.0f - dist / e.radius)),
                         e.mode == ipc::kExplosionVelocityChange ? PxForceMode::eVELOCITY_CHANGE : PxForceMode::eIMPULSE);
+            born_excused[s] = 1;
             ++pushed;
         }
         logf("explosion at (%.1f, %.1f, %.1f) r %.1f m: %u bodies pushed", c.x, c.y, c.z, e.radius, pushed);
@@ -834,7 +1248,7 @@ struct Host {
             case ipc::Cmd::ShapeConvex: {
                 const auto& c = reinterpret_cast<const ipc::ShapeConvex&>(h);
                 if (c.vertex_count >= 4 && sizeof(c) + size_t(c.vertex_count) * sizeof(ipc::Vec3) <= h.size)
-                    add_shape(c.shape, make_convex(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count));
+                    add_shape(c.shape, make_convex(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count, 0.0f));
                 break;
             }
             case ipc::Cmd::CreateBody:
@@ -842,7 +1256,14 @@ struct Host {
                 break;
             case ipc::Cmd::DestroyBody: {
                 const auto& c = reinterpret_cast<const ipc::DestroyBody&>(h);
-                if (c.slot < max_bodies) release_body(c.slot);
+                if (c.slot >= max_bodies) break;
+                // A pusher going (a loose chunk that broke up, a vehicle out of range, a proxy rebuilt): the frozen
+                // pieces resting on it move again, or they would hang in the air.
+                PxBounds3 gone = PxBounds3::empty();
+                if (pusher[c.slot] && bodies[c.slot].actor && bodies[c.slot].actor->getScene())
+                    gone = bodies[c.slot].actor->getWorldBounds();
+                release_body(c.slot);
+                if (!gone.isEmpty()) wake_unsupported(gone);
                 break;
             }
             case ipc::Cmd::Explosion:
@@ -881,8 +1302,8 @@ struct Host {
                 break;
             case ipc::Cmd::ShapePart: {
                 const auto& c = reinterpret_cast<const ipc::ShapePart&>(h);
-                if (c.vertex_count >= 4 && sizeof(c) + size_t(c.vertex_count) * sizeof(ipc::Vec3) <= h.size) {
-                    PxShape* s = make_convex(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count);
+                if (c.vertex_count >= 3 && sizeof(c) + size_t(c.vertex_count) * sizeof(ipc::Vec3) <= h.size) {
+                    PxShape* s = make_convex(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count, c.radius);
                     if (s && c.flags) s->setSimulationFilterData(filter_for(c.flags));
                     add_shape(c.shape, s, c.part == 0);
                 }
@@ -893,11 +1314,18 @@ struct Host {
                 if (c.slot < max_bodies && bodies[c.slot].actor &&
                     (bodies[c.slot].actor->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)) {
                     flush_pending();
-                    bodies[c.slot].actor->setKinematicTarget(
-                        PxTransform(PxVec3(c.pos.x, c.pos.y, c.pos.z), PxQuat(c.rot.x, c.rot.y, c.rot.z, c.rot.w).getNormalized()));
+                    const PxTransform pose(PxVec3(c.pos.x, c.pos.y, c.pos.z),
+                                           PxQuat(c.rot.x, c.rot.y, c.rot.z, c.rot.w).getNormalized());
+                    // A jump is a teleport: swept to its target, a kinematic body would hit everything in between at
+                    // the speed of the jump (pieces flung out of a pile when the player got out of a vehicle).
+                    if (c.flags & ipc::kTargetTeleport) bodies[c.slot].actor->setGlobalPose(pose);
+                    else bodies[c.slot].actor->setKinematicTarget(pose);
                 }
                 break;
             }
+            case ipc::Cmd::Impulse:
+                impulse(reinterpret_cast<const ipc::Impulse&>(h));
+                break;
         }
     }
 
@@ -929,16 +1357,36 @@ struct Host {
             p.pos = {t.p.x, t.p.y, t.p.z};
             p.rot = {t.q.x, t.q.y, t.q.z, t.q.w};
             p.flags = ipc::kPoseAlive | ipc::kPoseAwake;
+            if (!was_awake[s]) awake_since[s] = step_index;
             was_awake[s] = 0;
             now_awake.push_back(s);
             if (user_kinematic[s]) continue;
             const PxRigidDynamic* d = static_cast<PxRigidDynamic*>(active[i]);
+            if (!born_excused[s] && step_index - born_step[s] < kBubbleSteps &&
+                d->getLinearVelocity().y > kBubbleSpeed) {
+                born_excused[s] = 1;
+                ++stat_bubbled;
+            }
+            bool freeze = false;
             if (d->getLinearVelocity().magnitudeSquared() < kCalmSpeed * kCalmSpeed &&
                 d->getAngularVelocity().magnitudeSquared() < kCalmSpin * kCalmSpin) {
-                if (++calm[s] >= kFreezeSteps) freeze_list.push_back(s);
+                freeze = ++calm[s] >= kFreezeSteps;
             } else {
                 calm[s] = 0;
             }
+            if (step_index - still_step[s] >= kFreezeSteps) {
+                const ipc::BodyPose& from = still_from[s];
+                const float dx = p.pos.x - from.pos.x, dy = p.pos.y - from.pos.y, dz = p.pos.z - from.pos.z;
+                const float dot = std::fabs(p.rot.x * from.rot.x + p.rot.y * from.rot.y + p.rot.z * from.rot.z +
+                                            p.rot.w * from.rot.w);
+                if (!freeze && dx * dx + dy * dy + dz * dz < kStillDist * kStillDist && dot > kStillCos) {
+                    freeze = true;
+                    ++stat_frozen_still;
+                }
+                still_from[s] = p;
+                still_step[s] = step_index;
+            }
+            if (freeze) freeze_list.push_back(s);
         }
         // Made kinematic after the loop: the active-actor buffer belongs to the scene until the next simulate.
         for (uint32_t s : freeze_list) {
@@ -952,12 +1400,26 @@ struct Host {
         }
         freeze_list.clear();
         run_cascade();
+        run_pushers();
+        rescue_fallen();
+        while (!gentle.empty() && step_index >= gentle.front().second) {  // the usual speed again
+            const auto [g, ends] = gentle.front();
+            gentle.pop_front();
+            if (bodies[g].actor && born_step[g] + kGentleSteps == ends)
+                bodies[g].actor->setMaxDepenetrationVelocity(kMaxDepenetration);
+        }
         if (step_index % 600 == 0) grid_rebuild();
-        // The player and other user kinematic bodies wake what they come near, ten times a second.
+        // The player (a user kinematic body that is not a pusher) wakes the light pieces it comes near, ten times a
+        // second once it has moved kPlayerThawStep since it last did (pusher_woke_at). Standing still on a pile it
+        // kept the pieces around it awake, and they never came to rest.
         if (step_index % 6 == 0 && frozen_count) {
             for (uint32_t s = 0; s < slots_used; ++s)
-                if (user_kinematic[s] && bodies[s].actor) {
+                if (user_kinematic[s] && !pusher[s] && bodies[s].actor) {
                     const ipc::Vec3& p = poses[s].pos;
+                    ipc::Vec3& last = pusher_woke_at[s].pos;
+                    const float dx = p.x - last.x, dy = p.y - last.y, dz = p.z - last.z;
+                    if (dx * dx + dy * dy + dz * dz < kPlayerThawStep * kPlayerThawStep) continue;
+                    last = p;
                     thaw_near(PxVec3(p.x, p.y, p.z), 2.5f, true);
                 }
         }
@@ -1013,12 +1475,59 @@ struct Host {
             stat_cook_ms = 0;
         }
         if (!stat_steps) return;
-        logf("%u steps: step %.2f ms mean, %.2f max; work %.2f ms mean; %u bodies, %u awake, %u frozen (+%u, -%u; woken "
-             "by removed statics %u, by the cascade %u); %u commands; frame command latency %.2f ms",
+        logf("%u steps: step %.2f ms mean, %.2f max; work %.2f ms mean; %u bodies, %u awake, %u frozen (+%u (%u going "
+             "nowhere), -%u; woken by removed statics %u (%u whole bodies), by the cascade %u, by %zu pushers %u); %u "
+             "impulses; %u commands; frame command latency %.2f ms",
              stat_steps, stat_step_ms / stat_steps, stat_step_max, stat_work_ms / stat_steps, live,
-             uint32_t(awake_slots.size()), frozen_count, stat_frozen, stat_thawed, stat_unsupported, stat_cascade,
-             stat_commands, stat_cmd_latency_n ? stat_cmd_latency_ms / stat_cmd_latency_n : 0.0);
-        stat_frozen = stat_thawed = stat_unsupported = stat_cascade = 0;
+             uint32_t(awake_slots.size()), frozen_count, stat_frozen, stat_frozen_still, stat_thawed, stat_unsupported,
+             stat_unsupported_bodies, stat_cascade, pusher_slots.size(), stat_pushed_awake, stat_impulses, stat_commands,
+             stat_cmd_latency_n ? stat_cmd_latency_ms / stat_cmd_latency_n : 0.0);
+        stat_frozen = stat_frozen_still = stat_thawed = stat_unsupported = stat_cascade = stat_pushed_awake = 0;
+        stat_impulses = stat_unsupported_bodies = 0;
+        if (stat_overlap[0] + stat_overlap[1] + stat_overlap[2] + stat_overlap[3] + stat_overlap[4])
+            logf("  pieces coming over, 1 in %u measured, by their deepest overlap: none %u, under 1 cm %u, 1-3 cm %u, "
+                 "3-10 cm %u, deeper %u", kOverlapEvery, stat_overlap[0], stat_overlap[1], stat_overlap[2],
+                 stat_overlap[3], stat_overlap[4]);
+        if (stat_overlap_deep[0] + stat_overlap_deep[1] + stat_overlap_deep[2] + stat_overlap_deep[3] +
+            stat_overlap_deep[4])
+            logf("  of them over 3 cm deep into the static world %u, a frozen piece %u, an awake one %u (one that came "
+                 "over in the last 0.5 s %u), a pusher %u",
+                 stat_overlap_deep[0], stat_overlap_deep[1], stat_overlap_deep[2] + stat_overlap_deep[4],
+                 stat_overlap_deep[4], stat_overlap_deep[3]);
+        for (uint32_t& o : stat_overlap) o = 0;
+        for (uint32_t& o : stat_overlap_deep) o = 0;
+        if (stat_bubbled)
+            logf("  pieces pushed upward in their first second here (they came over inside others): %u", stat_bubbled);
+        stat_bubbled = 0;
+        // Pieces that have not come to rest for kRestlessSteps: a pile that jitters keeps them awake.
+        uint32_t restless = 0, restless_light = 0;
+        double restless_speed = 0, restless_spin = 0;
+        for (uint32_t s : awake_slots) {
+            if (user_kinematic[s] || !bodies[s].actor || step_index - awake_since[s] < kRestlessSteps) continue;
+            ++restless;
+            restless_light += heavy[s] ? 0 : 1;
+            restless_speed += bodies[s].actor->getLinearVelocity().magnitude();
+            restless_spin += bodies[s].actor->getAngularVelocity().magnitude();
+        }
+        if (restless)
+            logf("  restless pieces (awake over %u steps): %u (%u light), %.2f m/s and %.2f rad/s mean", kRestlessSteps,
+                 restless, restless_light, restless_speed / restless, restless_spin / restless);
+        if (stat_hull_thickened || stat_hull_boxes || stat_no_shape || stat_inertia_fixed || stat_born_frozen ||
+            stat_rescued)
+            logf("  hulls thickened to 4 mm %u, boxes for hulls that did not cook %u; bodies without a shape %u, with "
+                 "their inertia replaced %u, made frozen (at rest in Havok) %u; pieces put back on the ground %u",
+                 stat_hull_thickened, stat_hull_boxes, stat_no_shape, stat_inertia_fixed, stat_born_frozen, stat_rescued);
+        stat_hull_thickened = stat_hull_boxes = stat_no_shape = stat_inertia_fixed = stat_born_frozen = 0;
+        stat_rescued = 0;
+        // The pushers that woke the most pieces in this window.
+        std::vector<uint32_t> top;
+        for (uint32_t s : pusher_slots)
+            if (pusher_woken[s]) top.push_back(s);
+        std::sort(top.begin(), top.end(), [this](uint32_t a, uint32_t b) { return pusher_woken[a] > pusher_woken[b]; });
+        for (size_t i = 0; i < top.size() && i < 3; ++i)
+            logf("  pusher %u (%.1f m across, reaching %.1f m from its origin): %u wake-ups, %u pieces woken", top[i],
+                 double(2 * pusher_half[top[i]]), double(body_radius[top[i]]), pusher_wakes[top[i]], pusher_woken[top[i]]);
+        for (uint32_t s : pusher_slots) pusher_wakes[s] = pusher_woken[s] = 0;
         stat_steps = stat_commands = stat_cmd_latency_n = 0;
         stat_step_ms = stat_step_max = stat_work_ms = stat_cmd_latency_ms = 0;
         if (steps_csv) fflush(steps_csv);
@@ -1060,10 +1569,21 @@ int wmain(int argc, wchar_t** argv) {
     host.bodies.resize(host.max_bodies);
     host.poses.assign(host.max_bodies, ipc::BodyPose{});
     host.was_awake.assign(host.max_bodies, 0);
+    host.awake_since.assign(host.max_bodies, 0);
     host.calm.assign(host.max_bodies, 0);
+    host.still_from.assign(host.max_bodies, ipc::BodyPose{});
+    host.still_step.assign(host.max_bodies, 0);
+    host.born_step.assign(host.max_bodies, 0);
+    host.born_excused.assign(host.max_bodies, 1);
     host.frozen.assign(host.max_bodies, 0);
     host.user_kinematic.assign(host.max_bodies, 0);
     host.heavy.assign(host.max_bodies, 0);
+    host.pusher.assign(host.max_bodies, 0);
+    host.pusher_woke_at.assign(host.max_bodies, ipc::BodyPose{});
+    host.pusher_mid.assign(host.max_bodies, PxVec3(0.0f));
+    host.pusher_half.assign(host.max_bodies, 0.0f);
+    host.pusher_wakes.assign(host.max_bodies, 0);
+    host.pusher_woken.assign(host.max_bodies, 0);
     host.body_radius.assign(host.max_bodies, 0.0f);
     host.cascade_mark.assign(host.max_bodies, 0);
     host.wake_pos.assign(host.max_bodies, ipc::Vec3{0, 0, 0});

@@ -41,7 +41,38 @@ python tools\profile_report.py runs\<run-folder>
 ```
 
 `Test.ZoneCycle=1` adds a zone-streaming test to such a run: buildings near the start are blown up, then the player is
-teleported away until the start's zone streams out, and back. `Test.FlyCamera=1` adds a scripted flight of the fly
+teleported away until the start's zone streams out, and back.
+
+`Test.VehiclePush=1` (campaign, with `-AutoLoadSave`, 75 s of gameplay): 15 s in, a building next to the nearest
+vehicle is blown up; 20 s later the vehicle is moved through the rubble, and the log compares how many pieces near its
+path moved with how many farther off did.
+
+`-ReleaseSettings` on `run_game.ps1`, `run_replay.ps1` and `queue_play.ps1` runs the deployed build with the release
+package's behaviour settings (the `[Experiment]` section of `tools\release\rfgphys.ini`); unlike `-Release` it keeps
+`-Record` and `-Set`, which override it.
+
+`Test.StandInProbe=1` checks the pieces' Havok stand-ins every 2 s: a ray with the game's default filter (the one
+melee and bullets use) through a piece that has one, and a hammer-like blow through the zone object's
+`process_melee_hit`; the log says whether the ray found the stand-in and whether the piece moved in the host.
+
+`physx_host.log` sums up every 5 s: bodies, awake and frozen ones (frozen as calm or as going nowhere), what woke them,
+the restless pieces (awake for over 5 s without a break: a pile that jitters), how many pieces were put back on the
+ground after something pressed them through it, how deep the pieces coming over overlap what is already there (1 in 32
+measured with PhysX's exact penetration, split by what they overlap) and how many were pushed upward in their first
+second (bubbling; landings and tumbles count too). `rfgphys.log` ends with how many pieces fell through the world anyway
+(given up below -400 m).
+
+`Test.InspectFrames=4400,5000` (replays; pair it with `Harness.ScreenshotFrames`) describes the view at those replay
+frames in the log: what the game's default ray, its destroyable-geometry ray and a fan of rays around the view hit
+(object, motion, pieces left in a building), the pieces in PhysX near the hit and along the view ray (frozen, awake or
+asleep, and any the host has no body for), the Havok bodies around, and the view ray against the static world in the
+host.
+
+A Wrecking Crew match without anyone at the keyboard: `Harness.Mode=record;Harness.AutoStart=wc` with
+`Harness.AutoStartOptions=<hex>` (the match setup, as `options_hex` in a recording's manifest) and
+`Harness.InputScript=...\tools\input_scripts\start_turn.txt` (starts the turn, then stands still for 40 s). For
+example Watchtower in Behemoth mode, with the civilian walker:
+`04000000010000000100000000000000040000000000000000000000010000000200000000010000FFFFFFFF`. `Test.FlyCamera=1` adds a scripted flight of the fly
 camera (below), 15 s into gameplay: screenshots `fly_0_game.png` to `fly_5_control.png` in the run folder, and checks
 in the log (`fly camera test: passed`; with a message box on screen the game ignores the mouse, and the input check is
 reported as not verified).

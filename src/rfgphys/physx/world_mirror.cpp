@@ -173,13 +173,14 @@ struct Export : hs::Sink {
         lookup.clear();
     }
 
-    void convex(const float (*v)[3], int n, float, uint32_t key) override {
-        if (n < 4 || (only && !only->count(key))) return;
+    void convex(const float (*v)[3], int n, float radius, uint32_t key) override {
+        if (n < 3 || (only && !only->count(key))) return;
         if (n > 255) n = 255;
         ipc::StaticConvex c{};
         c.group = group;
         c.vertex_count = uint32_t(n);
         c.key = key;
+        c.radius = radius;
         auto buf = record(ipc::Cmd::StaticConvex, c, size_t(n) * sizeof(ipc::Vec3));
         memcpy(buf.data() + sizeof(c), v, size_t(n) * sizeof(ipc::Vec3));
         queue(std::move(buf));

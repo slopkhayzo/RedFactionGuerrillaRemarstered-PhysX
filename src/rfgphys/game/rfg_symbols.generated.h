@@ -129,6 +129,13 @@ inline uint32_t rl_start_recompile_mesh_instance = 0x00129010;  // Steam 0x00129
 inline uint32_t explosion_create = 0x002EC640;  // Steam 0x002EC720; explosion_create, 520 bytes: void __cdecl(explosion_info*, object*, object*, vector*, matrix*, vector*, weapon_info*, bool)
 inline uint32_t havok_body_free = 0x004231A0;  // Steam 0x00423110; havok_body_free, 126 bytes: void __cdecl(uint, bool, bool, bool)
 inline uint32_t havok_body_set_pos_orient_by_handle = 0x00423790;  // Steam 0x00423700; havok_body_set_pos_orient, 145 bytes: void __cdecl(uint, vector*, matrix*)
+inline uint32_t havok_body_set_linear_velocity_by_handle = 0x00423870;  // Steam 0x004237E0; havok_body_set_linear_velocity, 125 bytes: void __cdecl(uint, vector*)
+inline uint32_t hkReferencedObject__addReference = 0x00413FD0;  // Steam 0x00413F20; hkReferencedObject::addReference, 46 bytes: void __thiscall hkReferencedObject::()
+inline uint32_t hkReferencedObject__removeReference = 0x0031A620;  // Steam 0x0031A6A0; hkReferencedObject::removeReference, 65 bytes: void __thiscall hkReferencedObject::()
+inline uint32_t obj_zone__process_melee_hit = 0x00671240;  // Steam 0x00671600; obj_zone::process_melee_hit, 5 bytes: bool __thiscall obj_zone::(object*, float, vector*, vector*, vector*, uint, weapon_info*)
+inline uint32_t object__process_bullet_hit = 0x00310C00;  // Steam 0x00310C90; object::process_bullet_hit, 3 bytes: void __thiscall object::(human*, float, weapon_fire_info*)
+inline uint32_t havok_raycast = 0x00435AA0;  // Steam 0x00435A30; havok_raycast, 1709 bytes: bool __cdecl(raycast_input*, raycast_output*)
+inline uint32_t raycast_input__raycast_input = 0x001E22B0;  // Steam 0x001E2370; raycast_input::raycast_input, 34 bytes: void __thiscall raycast_input::()
 inline uint32_t general_mover_level_shutdown = 0x0065EBD0;  // Steam 0x0065EF90; general_mover_level_shutdown, 46 bytes: void __cdecl()
 inline uint32_t object_level_shutdown = 0x006B3660;  // Steam 0x006B3A50; object_level_shutdown, 100 bytes: void __cdecl()
 inline uint32_t gameseq_set_state = 0x003D8730;  // Steam 0x003D8710; gameseq_set_state, 165 bytes: void __cdecl(enum game_state, bool)
@@ -248,6 +255,8 @@ inline uint32_t Character_collision_push_away_impulse_factor = 0x02366828;  // S
 inline uint32_t Character_collision_push_away_rvec_factor = 0x0224174C;  // Steam 0x0224274C; float
 inline uint32_t Explosion_infos = 0x019E5CD8;  // Steam 0x019E6CD8; explosion_info[18960 bytes]
 inline uint32_t Num_explosion_infos = 0x019ED490;  // Steam 0x019EE490; uint
+inline uint32_t obj_zone_vftable = 0x00F15524;  // Steam 0x00F16554; ??_7obj_zone@@6B@
+inline uint32_t Bullet_movable_scalar = 0x01293534;  // Steam 0x01294534; float
 inline uint32_t Havok_memory = 0x027812A0;  // Steam 0x027822A0; hkMemorySystem*
 inline uint32_t Havok_mem_largest_runtime_block = 0x0278129C;  // Steam 0x0278229C; uint
 inline uint32_t Stream_thread_id = 0x016C2B4C;  // Steam 0x016C3B4C; uint
@@ -407,6 +416,13 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::explosion_create, {0x002EC640, 0x002EC720}},
     {&rva::havok_body_free, {0x004231A0, 0x00423110}},
     {&rva::havok_body_set_pos_orient_by_handle, {0x00423790, 0x00423700}},
+    {&rva::havok_body_set_linear_velocity_by_handle, {0x00423870, 0x004237E0}},
+    {&rva::hkReferencedObject__addReference, {0x00413FD0, 0x00413F20}},
+    {&rva::hkReferencedObject__removeReference, {0x0031A620, 0x0031A6A0}},
+    {&rva::obj_zone__process_melee_hit, {0x00671240, 0x00671600}},
+    {&rva::object__process_bullet_hit, {0x00310C00, 0x00310C90}},
+    {&rva::havok_raycast, {0x00435AA0, 0x00435A30}},
+    {&rva::raycast_input__raycast_input, {0x001E22B0, 0x001E2370}},
     {&rva::general_mover_level_shutdown, {0x0065EBD0, 0x0065EF90}},
     {&rva::object_level_shutdown, {0x006B3660, 0x006B3A50}},
     {&rva::gameseq_set_state, {0x003D8730, 0x003D8710}},
@@ -525,6 +541,8 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::Character_collision_push_away_rvec_factor, {0x0224174C, 0x0224274C}},
     {&rva::Explosion_infos, {0x019E5CD8, 0x019E6CD8}},
     {&rva::Num_explosion_infos, {0x019ED490, 0x019EE490}},
+    {&rva::obj_zone_vftable, {0x00F15524, 0x00F16554}},
+    {&rva::Bullet_movable_scalar, {0x01293534, 0x01294534}},
     {&rva::Havok_memory, {0x027812A0, 0x027822A0}},
     {&rva::Havok_mem_largest_runtime_block, {0x0278129C, 0x0278229C}},
     {&rva::Stream_thread_id, {0x016C2B4C, 0x016C3B4C}},
@@ -681,6 +699,13 @@ inline constexpr uint32_t rl_start_recompile_mesh_instance = 227;
 inline constexpr uint32_t explosion_create = 520;
 inline constexpr uint32_t havok_body_free = 126;
 inline constexpr uint32_t havok_body_set_pos_orient_by_handle = 145;
+inline constexpr uint32_t havok_body_set_linear_velocity_by_handle = 125;
+inline constexpr uint32_t hkReferencedObject__addReference = 46;
+inline constexpr uint32_t hkReferencedObject__removeReference = 65;
+inline constexpr uint32_t obj_zone__process_melee_hit = 5;
+inline constexpr uint32_t object__process_bullet_hit = 3;
+inline constexpr uint32_t havok_raycast = 1709;
+inline constexpr uint32_t raycast_input__raycast_input = 34;
 inline constexpr uint32_t general_mover_level_shutdown = 46;
 inline constexpr uint32_t object_level_shutdown = 100;
 inline constexpr uint32_t gameseq_set_state = 165;

@@ -1,0 +1,8 @@
+# Wrecking Crew without a player at the keyboard (Harness.InputScript): dismiss the "how to play" screen, start the
+# turn, then stand still until the recording stops. For censuses and unattended tests that need a match running.
+# Format: see look_and_fire.txt.
+1.0 key 16 down
+1.2 key 16 up
+3.0 key 16 down
+3.2 key 16 up
+40.0 stop

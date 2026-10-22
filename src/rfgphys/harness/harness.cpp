@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <map>
@@ -66,6 +67,7 @@ rec::Header g_header{};
 rec::Frame g_cur{};         // record: the frame being captured; replay: the frame being fed
 rec::Frame g_transition{};  // replay: the load transition frame, fed during every frame while a start is pending
 uint32_t g_frame = 0;       // frames since the transition frame
+std::atomic<int32_t> g_replay_frame{-1};  // harness::replay_frame()
 bool g_seen_load = false;
 uint32_t g_pending_frames = 0;
 uint32_t g_gov_index = 0;
@@ -129,6 +131,7 @@ std::string g_load_error;
 // Record with AutoStart=wc and AutoStartFrom: the Wrecking Crew setup of that recording.
 rec::Header g_setup_from{};
 bool g_has_setup_from = false;
+bool g_setup_options_only = false;  // from AutoStartOptions: the players' characters stay as the menu has them
 
 // Start automation (replay, and record with AutoStart=wc).
 int g_last_state = -1000;
@@ -920,7 +923,7 @@ void drive_start(int state) {
             if (setup) {
                 memcpy(options, setup->wc_options, kWcOptionsSize);
                 auto* players = static_cast<uint8_t*>(rfg::addr(rfg::rva::Wc_player_infos));
-                for (int i = 0; i < 4; ++i)
+                for (int i = 0; i < 4 && !(setup == &g_setup_from && g_setup_options_only); ++i)
                     memcpy(players + i * kWcPlayerInfoSize + kWcPlayerCharacterIndex, &setup->wc_character_index[i], 4);
             }
             LOG("harness: starting the Wrecking Crew match: %s", describe_wc(options).c_str());
@@ -1013,6 +1016,8 @@ void frame_begin() {
     if (g_phase == Phase::kPending) seed_rngs(false);
     rng_guard::set_frame(g_phase == Phase::kActive ? int32_t(g_frame) : -1);
     track::set_frame(g_phase == Phase::kActive ? int32_t(g_frame) : -1);
+    g_replay_frame.store(g_mode == Mode::kReplay && g_phase == Phase::kActive ? int32_t(g_frame) : -1,
+                         std::memory_order_relaxed);
     set_app_active();
 }
 
@@ -1241,6 +1246,19 @@ bool install(const Config& cfg) {
                 error.c_str());
         }
     }
+    if (g_mode == Mode::kRecord && !g_has_setup_from && !cfg.harness_auto_start_options.empty()) {
+        // AutoStartOptions: the wrecking_crew_options bytes as hex (a recording's manifest has them as options_hex).
+        const std::string hex = narrow(cfg.harness_auto_start_options);
+        if (hex.size() == size_t(kWcOptionsSize) * 2) {
+            for (uint32_t i = 0; i < kWcOptionsSize; ++i)
+                g_setup_from.wc_options[i] = uint8_t(strtoul(hex.substr(size_t(i) * 2, 2).c_str(), nullptr, 16));
+            g_has_setup_from = true;
+            g_setup_options_only = true;
+            LOG("harness: auto start uses the Wrecking Crew setup %s", describe_wc(g_setup_from.wc_options).c_str());
+        } else {
+            LOG("harness: AutoStartOptions needs %u hex digits, not %zu", kWcOptionsSize * 2, hex.size());
+        }
+    }
     g_synthetic = g_mode == Mode::kReplay || g_has_script;
     if (g_mode == Mode::kReplay && !load_recording()) {
         LOG("harness: cannot replay: %s", g_load_error.c_str());
@@ -1283,5 +1301,7 @@ bool install(const Config& cfg) {
         ok ? "" : ", SOME HOOKS FAILED");
     return ok;
 }
+
+int32_t replay_frame() { return g_replay_frame.load(std::memory_order_relaxed); }
 
 }  // namespace harness

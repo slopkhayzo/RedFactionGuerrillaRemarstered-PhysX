@@ -12,6 +12,8 @@ param(
     [int]$Repeat = 1,
     [string[]]$Variants = @('base'),
     [string[]]$Set = @(),                               # overrides for every run
+    [switch]$ReleaseSettings,                           # the release package's behaviour settings for every run
+                                                        # (tools\release\rfgphys.ini; $Set and variants override them)
     [switch]$Report,                                    # also write report.md for each run
     [switch]$WithProfiler,                              # run the sampling profiler (it perturbs thread timing,
                                                         # and heavy-destruction replays then stop being repeatable)
@@ -91,6 +93,7 @@ for ($i = 1; $i -le $Repeat; $i++) {
         $env:RFGPHYS_EXPERIMENT_PHYSXSOLIDDEBRIS = '0'
         $env:RFGPHYS_EXPERIMENT_PHYSXDEBRISDROPMESHES = '1'
         $env:RFGPHYS_EXPERIMENT_PHYSXSOLIDMASSKG = '0'
+        $env:RFGPHYS_EXPERIMENT_PHYSXADOPTDELAYMS = '2000'
         $env:RFGPHYS_HARNESS_LEAVELEVELATEND = '0'
         $env:RFGPHYS_GENERAL_HANGSECONDS = '30'
         $env:RFGPHYS_TEST_HANGAFTERSECONDS = '0'
@@ -98,6 +101,7 @@ for ($i = 1; $i -le $Repeat; $i++) {
         $env:RFGPHYS_EXPERIMENT_UNBATCHEDCAP = '0'
         $env:RFGPHYS_EXPERIMENT_BATCHEDCAP = '0'
         $env:RFGPHYS_PROFILER_ENABLED = $(if ($WithProfiler) { '1' } else { '0' })
+        if ($ReleaseSettings) { Set-PluginOverrides (Get-ReleaseSettings $root) | Out-Null }
         Set-PluginOverrides $Set | Out-Null
         if ($settings) { Set-PluginOverrides $settings | Out-Null }
 

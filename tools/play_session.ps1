@@ -9,6 +9,8 @@ param(
     [switch]$Record,                   # record every Wrecking Crew match / save load as a replayable recording
     [switch]$BlockSaveWrites,          # never write saves during this session (otherwise the game saves normally)
     [string[]]$Set = @(),              # more plugin overrides: 'Section.Key=Value'
+    [switch]$ReleaseSettings,          # the release package's behaviour settings (tools\release\rfgphys.ini) on the
+                                       # deployed build, with -Record and -Set as usual (they override it)
     [switch]$Release,                  # an installed release package (tools\install_package.ps1) as a player has it:
                                        # no overrides, its own ini decides; its logs are copied into the run folder
     [string]$GameDir = 'D:\Program Files\Games\GOG\Red Faction Guerrilla Re-Mars-tered'
@@ -38,6 +40,7 @@ if ($Release) {
     $env:RFGPHYS_HARNESS_RECORDINGSDIR = $recordings
     $env:RFGPHYS_TEST_BLOCKSAVEWRITES = $(if ($BlockSaveWrites) { '1' } else { '0' })
     $env:RFGPHYS_TEST_AUTOLOADSAVE = '0'
+    if ($ReleaseSettings) { Set-PluginOverrides (Get-ReleaseSettings $root) }
     Set-PluginOverrides $Set
     Write-Output "session settings: DebrisCollide=$env:RFGPHYS_EXPERIMENT_DEBRISCOLLIDE Harness.Mode=$env:RFGPHYS_HARNESS_MODE BlockSaveWrites=$env:RFGPHYS_TEST_BLOCKSAVEWRITES"
 }
@@ -80,8 +83,10 @@ if ($Release) {
     if (Test-Path $report) {
         Get-Content $report | Select-Object -First 30
     }
+} elseif (Test-Path (Join-Path $run 'rfgphys.log')) {
+    Write-Output "telemetry was off (no reports); the plugin's log is $run\rfgphys.log"
 } else {
-    Write-Output 'no telemetry was written: the plugin did not run'
+    Write-Output 'no rfgphys.log: the plugin did not run'
 }
 if ($Record) {
     $new = @(Get-ChildItem $recordings -Directory | Where-Object { $_.CreationTime -ge $started })

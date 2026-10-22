@@ -78,6 +78,18 @@ function Set-PluginOverrides([string[]]$Settings) {
     }
 }
 
+# The release package's behaviour settings (the [Experiment] section of tools\release\rfgphys.ini) as
+# 'Experiment.Key=Value', to run a development deployment the way the package behaves.
+function Get-ReleaseSettings([string]$Root) {
+    $section = ''
+    $settings = @()
+    foreach ($line in Get-Content (Join-Path $Root 'tools\release\rfgphys.ini')) {
+        if ($line -match '^\[(\w+)\]') { $section = $Matches[1]; continue }
+        if ($section -eq 'Experiment' -and $line -match '^(\w+)=(.*)$') { $settings += "Experiment.$($Matches[1])=$($Matches[2])" }
+    }
+    return $settings
+}
+
 # Names of the crash reports currently in the game's CrashDumps folder.
 function Get-CrashDumpNames([string]$GameDir) {
     $dir = Join-Path $GameDir 'CrashDumps'

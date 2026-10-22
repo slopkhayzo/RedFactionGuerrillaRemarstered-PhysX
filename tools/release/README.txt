@@ -8,6 +8,10 @@ What it does
   thousands of pieces keep a high frame rate.
 - Debris pieces collide with each other and pile up, explosions throw piles around, and you can stand on heavy
   rubble while lighter pieces get pushed aside.
+- Vehicles and walkers push rubble out of their way, rockets strike piles, and the sledgehammer and bullets knock
+  pieces around.
+- Flying and falling debris still smashes what it hits, as in the game: new pieces stay with the game's own physics
+  for two seconds before PhysX takes them over.
 - The game's own physics (Havok) runs on several CPU cores.
 - Tweaks for heavy scenes: no GPU occlusion queries, and small far-away objects cast no shadows.
 
@@ -61,6 +65,8 @@ Known limitations
 - Debris lying in an area you leave far behind (roughly half a kilometre and more) is removed when the game unloads
   that area, as the game does with its own debris. Destroyed buildings stay destroyed.
 - A few percent of the pieces can fall through the ground just after an area loads, and disappear.
+- Vehicles and walkers push the pieces but do not feel them: they plough through piles instead of riding over them.
+- Where fresh debris lands in a pile, the pile can bubble for a moment, pieces rising and settling again.
 - Very large piles need a fast CPU and graphics card. Tested on an NVIDIA RTX 4090 with an 8-core CPU.
 
 License

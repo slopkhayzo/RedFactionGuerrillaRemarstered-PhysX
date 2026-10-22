@@ -186,6 +186,16 @@ var Explosion_infos
 var Num_explosion_infos
 fn havok_body_free
 fn havok_body_set_pos_orient @00423790 as havok_body_set_pos_orient_by_handle
+fn havok_body_set_linear_velocity @00423870 as havok_body_set_linear_velocity_by_handle
+# stand-ins with the pieces' own shapes, hits on them (melee, bullets: the zone object they carry), projectiles
+fn hkReferencedObject::addReference
+fn hkReferencedObject::removeReference
+pub ??_7obj_zone@@6B@ as obj_zone_vftable
+fn obj_zone::process_melee_hit
+fn object::process_bullet_hit
+var Bullet_movable_scalar
+fn havok_raycast @00435AA0
+fn raycast_input::raycast_input @001E22B0
 fn general_mover_level_shutdown
 fn object_level_shutdown
 fn gameseq_set_state

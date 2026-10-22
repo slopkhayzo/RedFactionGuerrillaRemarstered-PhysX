@@ -76,6 +76,9 @@ Config load_config(const std::wstring& ini_path) {
     c.test_hang_after_s = get_int(ini_path, L"Test", L"HangAfterSeconds", 0);
     c.test_zone_cycle = get_int(ini_path, L"Test", L"ZoneCycle", 0) != 0;
     c.test_fly_camera = get_int(ini_path, L"Test", L"FlyCamera", 0) != 0;
+    c.test_stand_in_probe = get_int(ini_path, L"Test", L"StandInProbe", 0) != 0;
+    c.test_vehicle_push = get_int(ini_path, L"Test", L"VehiclePush", 0) != 0;
+    c.test_inspect_frames = get_string(ini_path, L"Test", L"InspectFrames", L"");
     c.auto_load_save = get_int(ini_path, L"Test", L"AutoLoadSave", 0) != 0;
     c.block_save_writes = get_int(ini_path, L"Test", L"BlockSaveWrites", 0) != 0;
     // DebrisCollide replaced WorldOnlyDebrisCollide (which only changed layers and so had no visible effect).
@@ -118,7 +121,7 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_debris_drop_meshes = get_int(ini_path, L"Experiment", L"PhysXDebrisDropMeshes", 1);
     c.exp_physx_solid_debris = get_int(ini_path, L"Experiment", L"PhysXSolidDebris", 0);
     c.exp_physx_solid_mass_kg = get_int(ini_path, L"Experiment", L"PhysXSolidMassKg", 0);
-    c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
+    c.exp_physx_adopt_delay_ms = get_int(ini_path, L"Experiment", L"PhysXAdoptDelayMs", 2000);    c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
     c.fly_camera_key = get_int(ini_path, L"FlyCamera", L"Key", VK_F10);
     if (c.fly_camera_key < 1 || c.fly_camera_key > 0xFE) c.fly_camera_key = VK_F10;
     c.fly_camera_speed = get_int(ini_path, L"FlyCamera", L"Speed", 10);
@@ -143,6 +146,7 @@ Config load_config(const std::wstring& ini_path) {
     c.harness_virtual_clock = get_int(ini_path, L"Harness", L"VirtualClock", 1) != 0;
     c.harness_auto_start = get_string(ini_path, L"Harness", L"AutoStart", L"");
     c.harness_auto_start_from = get_string(ini_path, L"Harness", L"AutoStartFrom", L"");
+    c.harness_auto_start_options = get_string(ini_path, L"Harness", L"AutoStartOptions", L"");
     c.harness_input_script = get_string(ini_path, L"Harness", L"InputScript", L"");
     c.harness_input_from = get_string(ini_path, L"Harness", L"InputFromRecording", L"");
     c.harness_max_frames = get_int(ini_path, L"Harness", L"MaxFrames", 0);

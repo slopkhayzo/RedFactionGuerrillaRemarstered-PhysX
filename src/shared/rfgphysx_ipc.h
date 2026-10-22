@@ -23,7 +23,7 @@
 namespace rfgphysx {
 
 constexpr uint32_t kMagic = 0x58505246;  // "FRPX"
-constexpr uint32_t kVersion = 4;
+constexpr uint32_t kVersion = 6;
 constexpr uint32_t kMaxRays = 4096;  // per RaycastBatch
 
 enum class HostState : uint32_t {
@@ -109,6 +109,7 @@ enum class Cmd : uint16_t {
     StaticHeightField, // StaticHeightField + rows * columns int16 heights (row-major)
     ShapePart,         // ShapePart + vertex_count Vec3: one convex part of a body shape, in the body's frame
     KinematicTarget,   // KinematicTarget: where a kinematic body is by the next step
+    Impulse,           // Impulse: a push on one body at a point (a hammer blow, a bullet)
 };
 
 struct CmdHeader {
@@ -148,8 +149,10 @@ struct ShapePart {
     CmdHeader h;
     uint32_t shape;
     uint32_t part;
-    uint32_t vertex_count;  // Vec3 vertices follow (at most 255)
+    uint32_t vertex_count;  // Vec3 vertices follow (at least 3, at most 255)
     uint32_t flags;         // ShapeFlags (the shape's first part decides)
+    float radius;           // Havok's convex radius: the part is that much larger all round than its vertices
+    uint32_t pad;
 };
 
 // What a body shape is, for contact filtering: the player's capsule does not touch heavy pieces (the player stands
@@ -161,7 +164,11 @@ enum ShapeFlags : uint32_t {
 
 enum BodyFlags : uint32_t {
     kBodyKinematic = 1u << 0,
-    kBodyMass = 1u << 1,  // CreateBody::density holds the body's mass in kg (inertia from its shape)
+    kBodyMass = 1u << 1,    // CreateBody::density holds the body's mass in kg (inertia from its shape)
+    kBodyPusher = 1u << 2,  // kinematic, standing for a heavy game body (a vehicle's): wakes every frozen piece it
+                            // is about to reach, whatever its mass
+    kBodyAtRest = 1u << 3,  // it lay still in Havok: it starts frozen, as a piece that came to rest in the host
+    kBodyGentle = 1u << 4,  // it waited in Havok: what it overlaps when it comes over is pushed apart slowly
 };
 
 struct CreateBody {
@@ -198,13 +205,28 @@ struct Explosion {
     uint32_t pad;
 };
 
+enum TargetFlags : uint32_t {
+    kTargetTeleport = 1u << 0,  // there at once, not swept through what lies between (a respawn, a seat change)
+};
+
 struct KinematicTarget {
     CmdHeader h;
     uint32_t slot;
-    uint32_t pad;
+    uint32_t flags;  // TargetFlags
     Vec3 pos;
     float pad2;
     Quat rot;
+};
+
+// A push on one body at a world-space point. A frozen body moves again.
+struct Impulse {
+    CmdHeader h;
+    uint32_t slot;
+    uint32_t mode;  // ExplosionMode: `impulse` in N*s, or in m/s whatever the mass
+    Vec3 impulse;
+    float pad;
+    Vec3 point;
+    float pad2;
 };
 
 struct Frame {
@@ -228,9 +250,9 @@ struct StaticMesh {
 struct StaticConvex {
     CmdHeader h;
     uint32_t group;
-    uint32_t vertex_count;  // at most 255
+    uint32_t vertex_count;  // at least 3, at most 255
     uint32_t key;
-    uint32_t pad;
+    float radius;           // as ShapePart's
 };
 
 struct RemoveStaticKeys {
@@ -322,8 +344,8 @@ static_assert(sizeof(CmdHeader) == 8 && sizeof(StaticPlane) % 8 == 0 && sizeof(S
               sizeof(DestroyBody) % 8 == 0 && sizeof(Explosion) % 8 == 0 && sizeof(Frame) % 8 == 0 &&
               sizeof(StaticMesh) == 24 && sizeof(StaticConvex) == 24 && sizeof(RemoveStatics) == 16 &&
               sizeof(Ray) == 32 && sizeof(RaycastBatch) == 16 && sizeof(RemoveStaticKeys) == 16 &&
-              sizeof(StaticHeightField) == 64 && sizeof(ShapePart) == 24 && sizeof(Explosion) == 40 &&
-              sizeof(KinematicTarget) == 48);
+              sizeof(StaticHeightField) == 64 && sizeof(ShapePart) == 32 && sizeof(Explosion) == 40 &&
+              sizeof(KinematicTarget) == 48 && sizeof(Impulse) == 48);
 static_assert(sizeof(CreateBody) == 80 && sizeof(Frame) == 24 && offsetof(Frame, qpc) == 16);
 static_assert(sizeof(SnapshotHeader) == 64 && offsetof(SnapshotHeader, sim_time) == 8 && sizeof(BodyPose) == 64);
 

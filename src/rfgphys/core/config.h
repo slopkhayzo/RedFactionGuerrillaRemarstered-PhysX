@@ -31,6 +31,11 @@ struct Config {
     bool test_zone_cycle = false;     // blow up buildings near the player, teleport away until their zone streams
                                       // out, and back (test/zone_cycle.h)
     bool test_fly_camera = false;     // a scripted fly camera flight with screenshots (dev/fly_camera.h)
+    bool test_stand_in_probe = false; // every 2 s: a ray through a piece's stand-in and a blow on it, checked
+                                      // (physx/debris_offload.cpp)
+    bool test_vehicle_push = false;   // a vehicle moved through rubble in PhysX, checked (test/vehicle_push.h)
+    std::wstring test_inspect_frames; // replay frames (comma-separated) at which what the camera looks at is logged
+                                      // (physx/debris_offload.cpp)
     bool auto_load_save = false;      // main menu -> Load Game -> most recent save, without input
     bool block_save_writes = false;   // never write or erase save data (always on for unattended runs)
 
@@ -102,6 +107,8 @@ struct Config {
     // stands on rubble; the player's capsule in PhysX pushes only the light ones.
     int exp_physx_solid_debris = 0;
     int exp_physx_solid_mass_kg = 0;  // with it: pieces this heavy or more are solid (0: the game's push-away mass)
+    // A new piece stays in Havok this long (game ms) before it goes to PhysX: what it hits and lies on the game feels.
+    int exp_physx_adopt_delay_ms = 2000;
 
     // Fly camera for screenshots (dev/fly_camera.h; development, off in the release settings).
     bool fly_camera = false;
@@ -120,6 +127,7 @@ struct Config {
     bool harness_virtual_clock = true;    // wall-clock reads on the sim thread follow recorded frame times
     std::wstring harness_auto_start;      // record: "wc" starts a Wrecking Crew match without input (self-tests)
     std::wstring harness_auto_start_from; // record: with AutoStart=wc, use this recording's Wrecking Crew setup
+    std::wstring harness_auto_start_options;  // record: with AutoStart=wc, this setup (wrecking_crew_options as hex)
     std::wstring harness_input_script;    // record: scripted input instead of keyboard and mouse (self-tests)
     std::wstring harness_input_from;      // record: another recording's input frames instead of keyboard and mouse
     int harness_max_frames = 0;           // record: end the recording after this many frames (0: no limit)

@@ -27,6 +27,7 @@
 #include "telemetry/profiler.h"
 #include "telemetry/telemetry.h"
 #include "test/automation.h"
+#include "test/vehicle_push.h"
 #include "test/zone_cycle.h"
 
 namespace {
@@ -110,6 +111,7 @@ void init() {
     render_routing::install(cfg);
     debris_offload::install(cfg);  // after the bridge: it moves pieces from the snapshot the bridge takes
     zone_cycle::install(cfg);
+    vehicle_push::install(cfg);
     harness::install(cfg);
     fly_camera::install(cfg);  // never with the harness: both take over the game's input
     hang_watch::start(cfg);

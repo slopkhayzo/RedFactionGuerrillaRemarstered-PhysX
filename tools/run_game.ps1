@@ -11,6 +11,8 @@ param(
     [switch]$Release,       # an installed release package (tools\install_package.ps1): its own ini sets the behaviour
     [int]$TimeoutSeconds = 300,
     [string[]]$Set = @(),   # plugin setting overrides: 'Section.Key=Value', e.g. 'Profiler.GameplayOnly=0'
+    [switch]$ReleaseSettings,  # the release package's behaviour settings (tools\release\rfgphys.ini) on the deployed
+                               # build; -Set overrides them
     [string]$GameDir = 'D:\Program Files\Games\GOG\Red Faction Guerrilla Re-Mars-tered'
 )
 
@@ -39,6 +41,7 @@ if ($Release) {
     $env:RFGPHYS_HARNESS_MODE = 'off'     # -Set 'Harness.Mode=record' for scripted self-test recordings
     $env:RFGPHYS_HARNESS_RECORDINGSDIR = Join-Path $root 'recordings'
 }
+if ($ReleaseSettings -and -not $Release) { Set-PluginOverrides (Get-ReleaseSettings $root) }
 Set-PluginOverrides $Set
 
 $savesBefore = @(Get-SaveHashes)

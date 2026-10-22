@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 struct Config;
 
@@ -13,5 +14,9 @@ struct Config;
 namespace harness {
 
 bool install(const Config& cfg);
+
+// The replay's current frame (the recording's frame numbers, as its markers and checkpoints use them); -1 when not
+// replaying. Any thread.
+int32_t replay_frame();
 
 }  // namespace harness
