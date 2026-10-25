@@ -1,6 +1,7 @@
 #include "core/thread_dump.h"
 
 #include <windows.h>
+#include <intrin.h>
 #include <psapi.h>
 
 #include <cstdint>
@@ -130,6 +131,20 @@ void log_thread(unsigned long tid, const char* label) {
         }
     }
     if (!line.empty()) LOG("hang:     %s", line.c_str());
+}
+
+void log_own_stack(const char* label, int max_frames) {
+    uint32_t stack[2048];  // 8 KB above this function's frame
+    const int n = copy_stack(stack, reinterpret_cast<uintptr_t>(_AddressOfReturnAddress()), int(std::size(stack)));
+    const std::vector<Module> mods = list_modules();
+    std::string line;
+    for (int i = 0, shown = 0; i < n && shown < max_frames; ++i) {
+        const uintptr_t v = stack[i];
+        if (!find_module(mods, v) || !follows_call(v)) continue;
+        line += ' ' + where(mods, v);
+        ++shown;
+    }
+    LOG("%s:%s", label, line.c_str());
 }
 
 }  // namespace thread_dump

@@ -46,6 +46,13 @@ inline uint32_t hkpContinuousSimulation__collideInternal = 0x009FD5B0;  // Steam
 inline uint32_t hkpContinuousSimulation__collideEntitiesBroadPhaseContinuous = 0x009FB720;  // Steam 0x009FBAB0; hkpContinuousSimulation::collideEntitiesBroadPhaseContinuous, 1751 bytes: void __thiscall hkpContinuousSimulation::(hkpEntity**, int, hkpWorld*, char*)
 inline uint32_t hkpContinuousSimulation__advanceTime = 0x009FE7D0;  // Steam 0x009FEB60; hkpContinuousSimulation::advanceTime, 191 bytes: enum hkpStepResult __thiscall hkpContinuousSimulation::()
 inline uint32_t main_menu_handle_selection = 0x004F7C30;  // Steam 0x004F7C30; main_menu_handle_selection, 528 bytes: void __cdecl(int)
+inline uint32_t main_menu_autosave_cb = 0x004F18D0;  // Steam 0x004F18D0; main_menu_autosave_cb, 103 bytes: bool __cdecl(int, int, enum msgbox_choice)
+inline uint32_t main_menu_difficulty_cb = 0x004F1940;  // Steam 0x004F1940; main_menu_difficulty_cb, 118 bytes: bool __cdecl(int, int, enum msgbox_choice)
+inline uint32_t main_menu_golden_hammer_cb = 0x004F19C0;  // Steam 0x004F19C0; main_menu_golden_hammer_cb, 118 bytes: bool __cdecl(int, int, enum msgbox_choice)
+inline uint32_t video_cutscene_play_process = 0x00309FD0;  // Steam 0x0030A070; video_cutscene_play_process, 800 bytes: void __cdecl()
+inline uint32_t video_cutscene_play = 0x0030A4A0;  // Steam 0x0030A540; video_cutscene_play, 357 bytes: void __cdecl(rchar*, uint, rchar*, bool, bool, mempool_base*, mempool_base*, dlc_level_info*)
+inline uint32_t main_menu_process_delayed_selection = 0x004F75F0;  // Steam 0x004F75F0; main_menu_process_delayed_selection, 1592 bytes: void __cdecl()
+inline uint32_t ui_hide_msgbox = 0x004DCE30;  // Steam 0x004DCE30; ui_hide_msgbox, 299 bytes: bool __cdecl(int, bool)
 inline uint32_t hud_ui_save_load_selection_made = 0x00507630;  // Steam 0x005076E0; hud_ui_save_load_selection_made, 711 bytes: void __cdecl(bool)
 inline uint32_t keen__SaveData__SaveDataProviderWin32Steam__writeFileToSteamStorage = 0x008CD280;  // Steam 0x008CD5E0; keen::SaveData::SaveDataProviderWin32Steam::writeFileToSteamStorage, 232 bytes: enum keen::SaveData::OperationResult __thiscall keen::SaveData::SaveDataProviderWin32Steam::(rchar*, void*, uint)
 inline uint32_t game_save_clear_load_directory_cache = 0x003C3720;  // Steam 0x003C3740; game_save_clear_load_directory_cache, 8 bytes: void __cdecl()
@@ -78,6 +85,7 @@ inline uint32_t rfg_dyn_shardify_work = 0x0033CD70;  // Steam 0x0033CDF0; rfg_dy
 inline uint32_t general_mover__apply_damage = 0x0068A920;  // Steam 0x0068ACF0; general_mover::apply_damage, 1008 bytes: bool __thiscall general_mover::(float, enum damaged_by_types, vector*, vector*, object*, uint, bool)
 inline uint32_t object_mover_process_explosion_hit = 0x006A2390;  // Steam 0x006A2770; object_mover_process_explosion_hit, 805 bytes: void __cdecl(object_mover*, object*, float, vector*, vector*, explosion_info*, vector*, vector*, weapon_info*)
 inline uint32_t object_mover__handle_fading = 0x006A26C0;  // Steam 0x006A2AA0; object_mover::handle_fading, 256 bytes: int __thiscall object_mover::(float, float)
+inline uint32_t general_mover__update_render_opacity = 0x006B34D0;  // Steam 0x006B38C0; general_mover::update_render_opacity, 259 bytes: void __thiscall general_mover::()
 inline uint32_t rfgl_maybe_delete_objects = 0x00324C10;  // Steam 0x00324C90; rfgl_maybe_delete_objects, 157 bytes: void __cdecl()
 inline uint32_t rfgl_desired_values = 0x0031D000;  // Steam 0x0031D080; rfgl_desired_values, 257 bytes: void __cdecl(rfgl_balance_values*, int, int)
 inline uint32_t rfg_dyn_maybe_delete = 0x00315210;  // Steam 0x00315290; rfg_dyn_maybe_delete, 132 bytes: bool __cdecl(object_mover*, float, vector*, float)
@@ -134,6 +142,7 @@ inline uint32_t hkReferencedObject__addReference = 0x00413FD0;  // Steam 0x00413
 inline uint32_t hkReferencedObject__removeReference = 0x0031A620;  // Steam 0x0031A6A0; hkReferencedObject::removeReference, 65 bytes: void __thiscall hkReferencedObject::()
 inline uint32_t obj_zone__process_melee_hit = 0x00671240;  // Steam 0x00671600; obj_zone::process_melee_hit, 5 bytes: bool __thiscall obj_zone::(object*, float, vector*, vector*, vector*, uint, weapon_info*)
 inline uint32_t object__process_bullet_hit = 0x00310C00;  // Steam 0x00310C90; object::process_bullet_hit, 3 bytes: void __thiscall object::(human*, float, weapon_fire_info*)
+inline uint32_t human_combat_process_hits = 0x006D1510;  // Steam 0x006D1930; human_combat_process_hits, 2532 bytes: void __cdecl(human*, raycast_input*, bool)
 inline uint32_t havok_raycast = 0x00435AA0;  // Steam 0x00435A30; havok_raycast, 1709 bytes: bool __cdecl(raycast_input*, raycast_output*)
 inline uint32_t raycast_input__raycast_input = 0x001E22B0;  // Steam 0x001E2370; raycast_input::raycast_input, 34 bytes: void __thiscall raycast_input::()
 inline uint32_t general_mover_level_shutdown = 0x0065EBD0;  // Steam 0x0065EF90; general_mover_level_shutdown, 46 bytes: void __cdecl()
@@ -144,9 +153,25 @@ inline uint32_t raycast_output__raycast_output = 0x002757C0;  // Steam 0x0027588
 inline uint32_t raycast_output___raycast_output = 0x002757E0;  // Steam 0x002758A0; raycast_output::~raycast_output, 71 bytes: void __thiscall raycast_output::()
 inline uint32_t havok_memory_watch_dog_free_memory = 0x0041C5B0;  // Steam 0x0041C510; havok_memory_watch_dog_free_memory, 250 bytes: void __cdecl(hkpWorld*, hkpSimulationIsland*, int)
 inline uint32_t watch_dog_remove_objects_from_island = 0x0041C490;  // Steam 0x0041C3F0; watch_dog_remove_objects_from_island, 142 bytes: int __cdecl(hkpSimulationIsland*, int, int*)
+inline uint32_t world__restore_object = 0x00534B70;  // Steam 0x00534CE0; world::restore_object, 42 bytes: bool __thiscall world::(uint)
+inline uint32_t restore_destroy_object = 0x0053D890;  // Steam 0x0053D9F0; restore_destroy_object, 91 bytes: void __cdecl(hash_table<unsigned int,&hash_uint,2048,unsigned short>*, uint)
 inline uint32_t havok_sim_islands_process_post = 0x00431C10;  // Steam 0x00431BA0; havok_sim_islands_process_post, 538 bytes: void __cdecl()
 inline uint32_t hkSolverAllocator__setBuffer = 0x0090FF00;  // Steam 0x00910270; hkSolverAllocator::setBuffer, 77 bytes: void __thiscall hkSolverAllocator::(void*, int)
 inline uint32_t hkFreeListMemorySystem__mainQuit = 0x008F3C60;  // Steam 0x008F3FB0; hkFreeListMemorySystem::mainQuit, 117 bytes: hkResult __thiscall hkFreeListMemorySystem::(hkFlags<enum hkMemorySystem::FlagBits,int>)
+inline uint32_t havok_memory_watch_dog_free_island = 0x0041C5B0;  // Steam 0x0041C510; havok_memory_watch_dog_free_memory, 250 bytes: void __cdecl(hkpWorld*, hkpSimulationIsland*, int)
+inline uint32_t hkpConstraintSolverSetup__calcBufferSize = 0x00A0B8D0;  // Steam 0x00A0BCA0; hkpConstraintSolverSetup::calcBufferSize, 174 bytes: int __cdecl hkpConstraintSolverSetup::(hkpSimulationIsland*) [static]
+inline uint32_t hkSolverBuildJacobianFromAtomsNotContact = 0x00A92280;  // Steam 0x00A92680; hkSolverBuildJacobianFromAtomsNotContact, 24500 bytes: void __cdecl(hkpConstraintAtom*, int, hkpConstraintQueryIn*, hkpConstraintQueryOut*)
+inline uint32_t hkpWorldOperationUtil__addConstraintToCriticalLockedIsland = 0x00A05F10;  // Steam 0x00A062E0; hkpWorldOperationUtil::addConstraintToCriticalLockedIsland, 58 bytes: void __cdecl hkpWorldOperationUtil::(hkpWorld*, hkpConstraintInstance*) [static]
+inline uint32_t hkpWorldOperationUtil__removeConstraintFromCriticalLockedIsland = 0x00A05F50;  // Steam 0x00A06320; hkpWorldOperationUtil::removeConstraintFromCriticalLockedIsland, 55 bytes: void __cdecl hkpWorldOperationUtil::(hkpWorld*, hkpConstraintInstance*) [static]
+inline uint32_t havok_update_status = 0x00416820;  // Steam 0x00416770; havok_update_status, 372 bytes: void __cdecl()
+inline uint32_t hkpConstraintSolverSetup__solve = 0x00A0C480;  // Steam 0x00A0C850; hkpConstraintSolverSetup::solve, 2390 bytes: int __cdecl hkpConstraintSolverSetup::(hkStepInfo*, hkpSolverInfo*, hkpConstraintQueryIn*, hkpSimulationIsland*, void*, int, hkpEntity**, int) [static]
+inline uint32_t hkSolveConstraints = 0x00AA4000;  // Steam 0x00AA43E0; hkSolveConstraints, 9304 bytes: bool __cdecl(hkpSolverInfo*, hkpJacobianSchema*, hkpVelocityAccumulator*, hkpSolverElemTemp*)
+inline uint32_t hkpConstraintSolverSetup___buildJacobianElements = 0x00A0D690;  // Steam 0x00A0DA60; hkpConstraintSolverSetup::_buildJacobianElements, 1058 bytes: void __cdecl hkpConstraintSolverSetup::(hkpConstraintQueryIn*, hkpEntity**, int, hkpVelocityAccumulator*, hkpJacobianSchema*, hkpJacobianSchema*, hkpJacobianSchema*) [static]
+inline uint32_t hkpWorldConstraintUtil__removeConstraint = 0x00A0EB30;  // Steam 0x00A0EF10; hkpWorldConstraintUtil::removeConstraint, 350 bytes: void __cdecl hkpWorldConstraintUtil::(hkpConstraintInstance*) [static]
+inline uint32_t hkCpuPostCollideJob = 0x00A28500;  // Steam 0x00A288F0; hkCpuPostCollideJob, 412 bytes: enum hkJobQueue::JobStatus __cdecl(hkpMtThreadStructure*, hkJobQueue*, hkJobQueue::JobQueueEntry*)
+inline uint32_t hkCpuSplitSimulationIslandJobImpl = 0x00A2A360;  // Steam 0x00A2A760; hkCpuSplitSimulationIslandJobImpl, 65 bytes: void __cdecl(hkpSimulationIsland*, hkArray<hkpSimulationIsland *,hkContainerHeapAllocator>*)
+inline uint32_t hkCpuAgentSectorJob = 0x00A287A0;  // Steam 0x00A28BA0; hkCpuAgentSectorJob, 1912 bytes: enum hkJobQueue::JobStatus __cdecl(hkpMtThreadStructure*, hkJobQueue*, hkJobQueue::JobQueueEntry*)
+inline uint32_t hkpWorldOperationUtil__mergeIslands = 0x00A07BE0;  // Steam 0x00A07FB0; hkpWorldOperationUtil::mergeIslands, 84 bytes: void __cdecl hkpWorldOperationUtil::(hkpWorld*, hkpEntity*, hkpEntity*) [static]
 inline uint32_t world__destream_zone = 0x0051D610;  // Steam 0x0051D790; world::destream_zone, 80 bytes: void __thiscall world::(world_zone*)
 inline uint32_t world__get_zone_by_pos = 0x0052CD00;  // Steam 0x0052CE70; world::get_zone_by_pos, 112 bytes: obj_zone* __thiscall world::(vector*)
 inline uint32_t world__get_world_zone_by_pos = 0x00523A20;  // Steam 0x00523BA0; world::get_world_zone_by_pos, 96 bytes: world_zone* __thiscall world::(vector*)
@@ -166,6 +191,9 @@ inline uint32_t hkpJobQueueUtils__popIntegrateJob = 0x00A2D870;  // Steam 0x00A2
 inline uint32_t hkpJobQueueUtils__finishIntegrateJob = 0x00A2DCE0;  // Steam 0x00A2E0E0; hkpJobQueueUtils::finishIntegrateJob, 1676 bytes: enum hkJobQueue::JobCreationStatus __cdecl hkpJobQueueUtils::(hkJobQueue*, hkJobQueue::DynamicData*, hkJobQueue::JobQueueEntry*, hkJobQueue::JobQueueEntryInput*) [static]
 inline uint32_t hkpJobQueueUtils__popCollideJob = 0x00A2D9E0;  // Steam 0x00A2DDE0; hkpJobQueueUtils::popCollideJob, 177 bytes: enum hkJobQueue::JobPopFuncResult __cdecl hkpJobQueueUtils::(hkJobQueue*, hkJobQueue::DynamicData*, hkJobQueue::JobQueueEntry*, hkJobQueue::JobQueueEntry*) [static]
 inline uint32_t hkpJobQueueUtils__finishCollideJob = 0x00A2DB00;  // Steam 0x00A2DF00; hkpJobQueueUtils::finishCollideJob, 127 bytes: enum hkJobQueue::JobCreationStatus __cdecl hkpJobQueueUtils::(hkJobQueue*, hkJobQueue::DynamicData*, hkJobQueue::JobQueueEntry*, hkJobQueue::JobQueueEntryInput*) [static]
+inline uint32_t hkpSingleThreadedJobsOnIsland__cpuBroadPhaseJob = 0x00A297F0;  // Steam 0x00A29BF0; hkpSingleThreadedJobsOnIsland::cpuBroadPhaseJob, 2902 bytes: enum hkJobQueue::JobStatus __cdecl hkpSingleThreadedJobsOnIsland::(hkpMtThreadStructure*, hkJobQueue*, hkJobQueue::JobQueueEntry*) [static]
+inline uint32_t hkpAgentSectorHeader__allocate = 0x00A2DB80;  // Steam 0x00A2DF80; hkpAgentSectorHeader::allocate, 133 bytes: hkpAgentSectorHeader* __cdecl hkpAgentSectorHeader::(int, int) [static]
+inline uint32_t hkJobQueue__addJobEntry = 0x00BBBFE0;  // Steam 0x00BBC3D0; hkJobQueue::addJob, 60 bytes: void __thiscall hkJobQueue::(hkJobQueue::JobQueueEntry*, enum hkJobQueue::JobPriority)
 inline uint32_t hkJobQueue__hkJobQueue = 0x00BBC820;  // Steam 0x00BBCC10; hkJobQueue::hkJobQueue, 307 bytes: void __thiscall hkJobQueue::(hkJobQueueCinfo*)
 inline uint32_t hkJobQueueHwSetup__hkJobQueueHwSetup = 0x00BBC7F0;  // Steam 0x00BBCBE0; hkJobQueueHwSetup::hkJobQueueHwSetup, 43 bytes: void __thiscall hkJobQueueHwSetup::()
 inline uint32_t hkJobQueue__processAllJobs = 0x00BBC650;  // Steam 0x00BBCA40; hkJobQueue::processAllJobs, 416 bytes: enum hkJobQueue::JobStatus __thiscall hkJobQueue::(bool)
@@ -204,6 +232,7 @@ inline uint32_t vector__rand_around_z = 0x00181940;  // Steam 0x00181A40; vector
 inline uint32_t vector4__rand_around_z = 0x001861D0;  // Steam 0x001862D0; vector4::rand_around_z, 226 bytes: void __thiscall vector4::(float, float)
 inline uint32_t timestamp__set_rand = 0x0018E5A0;  // Steam 0x0018E6B0; timestamp::set_rand, 103 bytes: void __thiscall timestamp::(int, int)
 inline uint32_t timestamp_realtime__set_rand = 0x0018E720;  // Steam 0x0018E830; timestamp_realtime::set_rand, 103 bytes: void __thiscall timestamp_realtime::(int, int)
+inline uint32_t ingame_options_exit_to_main_menu = 0x00490FA0;  // Steam 0x00490FB0; ingame_options_exit_to_main_menu, 287 bytes: void __cdecl()
 inline uint32_t verify_gamesave_start = 0x003E76A0;  // Steam 0x003E7650; verify_gamesave_start, 34 bytes: void __cdecl(game_save_info*, bool)
 inline uint32_t wrecking_crew_match_begin = 0x003A6940;  // Steam 0x003A69B0; wrecking_crew_match_begin, 461 bytes: void __cdecl()
 inline uint32_t wrecking_crew_get_map_file_name = 0x00360440;  // Steam 0x003604D0; wrecking_crew_get_map_file_name, 29 bytes: rchar* __cdecl(int)
@@ -213,6 +242,11 @@ inline uint32_t weapons_get_weapon_info = 0x007D9A10;  // Steam 0x007D9DE0; weap
 inline uint32_t player_get_local_player = 0x00610540;  // Steam 0x006108D0; player_get_local_player, 6 bytes: player* __cdecl()
 inline uint32_t keen__graphics__endFrame = 0x0086FFF0;  // Steam 0x00870320; keen::graphics::endFrame, 165 bytes: bool __cdecl(keen::GraphicsSystem*)
 
+inline uint32_t Main_menu_delayed_selection = 0x012621C8;  // Steam 0x012631C8; enum menu_option_types
+inline uint32_t Main_menu_delayed_selection_state = 0x012621CC;  // Steam 0x012631CC; enum main_menu_selection_states
+inline uint32_t Message_box_handle_main = 0x012621C0;  // Steam 0x012631C0; int
+inline uint32_t Video_cutscene_bink_handle = 0x01A2A470;  // Steam 0x01A2B470; int
+inline uint32_t Button_info = 0x027F0E30;  // Steam 0x027F1E30; ui_button_info
 inline uint32_t Keen_input_system = 0x018E76C0;  // Steam 0x018E86C0; keen::InputSystem*
 inline uint32_t Main_menu_auto_catch_done = 0x02802571;  // Steam 0x02803571; bool
 inline uint32_t Num_saved_games = 0x0280711C;  // Steam 0x0280811C; int
@@ -226,6 +260,7 @@ inline uint32_t Havok_filter = 0x02241F84;  // Steam 0x02242F84; havok_game_filt
 inline uint32_t RL_gpu_vis_enabled = 0x010F9137;  // Steam 0x010FA137; bool
 inline uint32_t s_appInstance = 0x01636A58;  // Steam 0x01637A58; keen::rfg::Application
 inline uint32_t Rfg_camera = 0x019E3B50;  // Steam 0x019E4B50; rfg_camera
+inline uint32_t Lparam_super_overbrighten = 0x0123E178;  // Steam 0x0123F178; uint
 inline uint32_t general_moverpool = 0x02DA2A30;  // Steam 0x02DA3A30; object_pool<general_mover,3072,1>
 inline uint32_t rfg_moverpool = 0x01B58580;  // Steam 0x01B59580; object_pool<rfg_mover,4000,1>
 inline uint32_t object_debrispool = 0x02CC3F50;  // Steam 0x02CC4F50; object_pool<object_debris,500,1>
@@ -259,6 +294,7 @@ inline uint32_t obj_zone_vftable = 0x00F15524;  // Steam 0x00F16554; ??_7obj_zon
 inline uint32_t Bullet_movable_scalar = 0x01293534;  // Steam 0x01294534; float
 inline uint32_t Havok_memory = 0x027812A0;  // Steam 0x027822A0; hkMemorySystem*
 inline uint32_t Havok_mem_largest_runtime_block = 0x0278129C;  // Steam 0x0278229C; uint
+inline uint32_t hkpSimpleConstraintContactMgr_vftable = 0x00F61BFC;  // Steam 0x00F62C2C; ??_7hkpSimpleConstraintContactMgr@@6B@
 inline uint32_t Stream_thread_id = 0x016C2B4C;  // Steam 0x016C3B4C; uint
 inline uint32_t hkThreadNumber = 0x037AB6B8;  // Steam 0x037AC6B8; hkThreadLocalData<int>
 inline uint32_t hkSingleton_hkReferencedObjectLock___s_instance = 0x03625158;  // Steam 0x03626158; hkReferencedObjectLock*
@@ -333,6 +369,13 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::hkpContinuousSimulation__collideEntitiesBroadPhaseContinuous, {0x009FB720, 0x009FBAB0}},
     {&rva::hkpContinuousSimulation__advanceTime, {0x009FE7D0, 0x009FEB60}},
     {&rva::main_menu_handle_selection, {0x004F7C30, 0x004F7C30}},
+    {&rva::main_menu_autosave_cb, {0x004F18D0, 0x004F18D0}},
+    {&rva::main_menu_difficulty_cb, {0x004F1940, 0x004F1940}},
+    {&rva::main_menu_golden_hammer_cb, {0x004F19C0, 0x004F19C0}},
+    {&rva::video_cutscene_play_process, {0x00309FD0, 0x0030A070}},
+    {&rva::video_cutscene_play, {0x0030A4A0, 0x0030A540}},
+    {&rva::main_menu_process_delayed_selection, {0x004F75F0, 0x004F75F0}},
+    {&rva::ui_hide_msgbox, {0x004DCE30, 0x004DCE30}},
     {&rva::hud_ui_save_load_selection_made, {0x00507630, 0x005076E0}},
     {&rva::keen__SaveData__SaveDataProviderWin32Steam__writeFileToSteamStorage, {0x008CD280, 0x008CD5E0}},
     {&rva::game_save_clear_load_directory_cache, {0x003C3720, 0x003C3740}},
@@ -365,6 +408,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::general_mover__apply_damage, {0x0068A920, 0x0068ACF0}},
     {&rva::object_mover_process_explosion_hit, {0x006A2390, 0x006A2770}},
     {&rva::object_mover__handle_fading, {0x006A26C0, 0x006A2AA0}},
+    {&rva::general_mover__update_render_opacity, {0x006B34D0, 0x006B38C0}},
     {&rva::rfgl_maybe_delete_objects, {0x00324C10, 0x00324C90}},
     {&rva::rfgl_desired_values, {0x0031D000, 0x0031D080}},
     {&rva::rfg_dyn_maybe_delete, {0x00315210, 0x00315290}},
@@ -421,6 +465,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::hkReferencedObject__removeReference, {0x0031A620, 0x0031A6A0}},
     {&rva::obj_zone__process_melee_hit, {0x00671240, 0x00671600}},
     {&rva::object__process_bullet_hit, {0x00310C00, 0x00310C90}},
+    {&rva::human_combat_process_hits, {0x006D1510, 0x006D1930}},
     {&rva::havok_raycast, {0x00435AA0, 0x00435A30}},
     {&rva::raycast_input__raycast_input, {0x001E22B0, 0x001E2370}},
     {&rva::general_mover_level_shutdown, {0x0065EBD0, 0x0065EF90}},
@@ -431,9 +476,25 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::raycast_output___raycast_output, {0x002757E0, 0x002758A0}},
     {&rva::havok_memory_watch_dog_free_memory, {0x0041C5B0, 0x0041C510}},
     {&rva::watch_dog_remove_objects_from_island, {0x0041C490, 0x0041C3F0}},
+    {&rva::world__restore_object, {0x00534B70, 0x00534CE0}},
+    {&rva::restore_destroy_object, {0x0053D890, 0x0053D9F0}},
     {&rva::havok_sim_islands_process_post, {0x00431C10, 0x00431BA0}},
     {&rva::hkSolverAllocator__setBuffer, {0x0090FF00, 0x00910270}},
     {&rva::hkFreeListMemorySystem__mainQuit, {0x008F3C60, 0x008F3FB0}},
+    {&rva::havok_memory_watch_dog_free_island, {0x0041C5B0, 0x0041C510}},
+    {&rva::hkpConstraintSolverSetup__calcBufferSize, {0x00A0B8D0, 0x00A0BCA0}},
+    {&rva::hkSolverBuildJacobianFromAtomsNotContact, {0x00A92280, 0x00A92680}},
+    {&rva::hkpWorldOperationUtil__addConstraintToCriticalLockedIsland, {0x00A05F10, 0x00A062E0}},
+    {&rva::hkpWorldOperationUtil__removeConstraintFromCriticalLockedIsland, {0x00A05F50, 0x00A06320}},
+    {&rva::havok_update_status, {0x00416820, 0x00416770}},
+    {&rva::hkpConstraintSolverSetup__solve, {0x00A0C480, 0x00A0C850}},
+    {&rva::hkSolveConstraints, {0x00AA4000, 0x00AA43E0}},
+    {&rva::hkpConstraintSolverSetup___buildJacobianElements, {0x00A0D690, 0x00A0DA60}},
+    {&rva::hkpWorldConstraintUtil__removeConstraint, {0x00A0EB30, 0x00A0EF10}},
+    {&rva::hkCpuPostCollideJob, {0x00A28500, 0x00A288F0}},
+    {&rva::hkCpuSplitSimulationIslandJobImpl, {0x00A2A360, 0x00A2A760}},
+    {&rva::hkCpuAgentSectorJob, {0x00A287A0, 0x00A28BA0}},
+    {&rva::hkpWorldOperationUtil__mergeIslands, {0x00A07BE0, 0x00A07FB0}},
     {&rva::world__destream_zone, {0x0051D610, 0x0051D790}},
     {&rva::world__get_zone_by_pos, {0x0052CD00, 0x0052CE70}},
     {&rva::world__get_world_zone_by_pos, {0x00523A20, 0x00523BA0}},
@@ -453,6 +514,9 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::hkpJobQueueUtils__finishIntegrateJob, {0x00A2DCE0, 0x00A2E0E0}},
     {&rva::hkpJobQueueUtils__popCollideJob, {0x00A2D9E0, 0x00A2DDE0}},
     {&rva::hkpJobQueueUtils__finishCollideJob, {0x00A2DB00, 0x00A2DF00}},
+    {&rva::hkpSingleThreadedJobsOnIsland__cpuBroadPhaseJob, {0x00A297F0, 0x00A29BF0}},
+    {&rva::hkpAgentSectorHeader__allocate, {0x00A2DB80, 0x00A2DF80}},
+    {&rva::hkJobQueue__addJobEntry, {0x00BBBFE0, 0x00BBC3D0}},
     {&rva::hkJobQueue__hkJobQueue, {0x00BBC820, 0x00BBCC10}},
     {&rva::hkJobQueueHwSetup__hkJobQueueHwSetup, {0x00BBC7F0, 0x00BBCBE0}},
     {&rva::hkJobQueue__processAllJobs, {0x00BBC650, 0x00BBCA40}},
@@ -491,6 +555,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::vector4__rand_around_z, {0x001861D0, 0x001862D0}},
     {&rva::timestamp__set_rand, {0x0018E5A0, 0x0018E6B0}},
     {&rva::timestamp_realtime__set_rand, {0x0018E720, 0x0018E830}},
+    {&rva::ingame_options_exit_to_main_menu, {0x00490FA0, 0x00490FB0}},
     {&rva::verify_gamesave_start, {0x003E76A0, 0x003E7650}},
     {&rva::wrecking_crew_match_begin, {0x003A6940, 0x003A69B0}},
     {&rva::wrecking_crew_get_map_file_name, {0x00360440, 0x003604D0}},
@@ -499,6 +564,11 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::weapons_get_weapon_info, {0x007D9A10, 0x007D9DE0}},
     {&rva::player_get_local_player, {0x00610540, 0x006108D0}},
     {&rva::keen__graphics__endFrame, {0x0086FFF0, 0x00870320}},
+    {&rva::Main_menu_delayed_selection, {0x012621C8, 0x012631C8}},
+    {&rva::Main_menu_delayed_selection_state, {0x012621CC, 0x012631CC}},
+    {&rva::Message_box_handle_main, {0x012621C0, 0x012631C0}},
+    {&rva::Video_cutscene_bink_handle, {0x01A2A470, 0x01A2B470}},
+    {&rva::Button_info, {0x027F0E30, 0x027F1E30}},
     {&rva::Keen_input_system, {0x018E76C0, 0x018E86C0}},
     {&rva::Main_menu_auto_catch_done, {0x02802571, 0x02803571}},
     {&rva::Num_saved_games, {0x0280711C, 0x0280811C}},
@@ -512,6 +582,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::RL_gpu_vis_enabled, {0x010F9137, 0x010FA137}},
     {&rva::s_appInstance, {0x01636A58, 0x01637A58}},
     {&rva::Rfg_camera, {0x019E3B50, 0x019E4B50}},
+    {&rva::Lparam_super_overbrighten, {0x0123E178, 0x0123F178}},
     {&rva::general_moverpool, {0x02DA2A30, 0x02DA3A30}},
     {&rva::rfg_moverpool, {0x01B58580, 0x01B59580}},
     {&rva::object_debrispool, {0x02CC3F50, 0x02CC4F50}},
@@ -545,6 +616,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::Bullet_movable_scalar, {0x01293534, 0x01294534}},
     {&rva::Havok_memory, {0x027812A0, 0x027822A0}},
     {&rva::Havok_mem_largest_runtime_block, {0x0278129C, 0x0278229C}},
+    {&rva::hkpSimpleConstraintContactMgr_vftable, {0x00F61BFC, 0x00F62C2C}},
     {&rva::Stream_thread_id, {0x016C2B4C, 0x016C3B4C}},
     {&rva::hkThreadNumber, {0x037AB6B8, 0x037AC6B8}},
     {&rva::hkSingleton_hkReferencedObjectLock___s_instance, {0x03625158, 0x03626158}},
@@ -616,6 +688,13 @@ inline constexpr uint32_t hkpContinuousSimulation__collideInternal = 904;
 inline constexpr uint32_t hkpContinuousSimulation__collideEntitiesBroadPhaseContinuous = 1751;
 inline constexpr uint32_t hkpContinuousSimulation__advanceTime = 191;
 inline constexpr uint32_t main_menu_handle_selection = 528;
+inline constexpr uint32_t main_menu_autosave_cb = 103;
+inline constexpr uint32_t main_menu_difficulty_cb = 118;
+inline constexpr uint32_t main_menu_golden_hammer_cb = 118;
+inline constexpr uint32_t video_cutscene_play_process = 800;
+inline constexpr uint32_t video_cutscene_play = 357;
+inline constexpr uint32_t main_menu_process_delayed_selection = 1592;
+inline constexpr uint32_t ui_hide_msgbox = 299;
 inline constexpr uint32_t hud_ui_save_load_selection_made = 711;
 inline constexpr uint32_t keen__SaveData__SaveDataProviderWin32Steam__writeFileToSteamStorage = 232;
 inline constexpr uint32_t game_save_clear_load_directory_cache = 8;
@@ -648,6 +727,7 @@ inline constexpr uint32_t rfg_dyn_shardify_work = 1822;
 inline constexpr uint32_t general_mover__apply_damage = 1008;
 inline constexpr uint32_t object_mover_process_explosion_hit = 805;
 inline constexpr uint32_t object_mover__handle_fading = 256;
+inline constexpr uint32_t general_mover__update_render_opacity = 259;
 inline constexpr uint32_t rfgl_maybe_delete_objects = 157;
 inline constexpr uint32_t rfgl_desired_values = 257;
 inline constexpr uint32_t rfg_dyn_maybe_delete = 132;
@@ -704,6 +784,7 @@ inline constexpr uint32_t hkReferencedObject__addReference = 46;
 inline constexpr uint32_t hkReferencedObject__removeReference = 65;
 inline constexpr uint32_t obj_zone__process_melee_hit = 5;
 inline constexpr uint32_t object__process_bullet_hit = 3;
+inline constexpr uint32_t human_combat_process_hits = 2532;
 inline constexpr uint32_t havok_raycast = 1709;
 inline constexpr uint32_t raycast_input__raycast_input = 34;
 inline constexpr uint32_t general_mover_level_shutdown = 46;
@@ -714,9 +795,25 @@ inline constexpr uint32_t raycast_output__raycast_output = 23;
 inline constexpr uint32_t raycast_output___raycast_output = 71;
 inline constexpr uint32_t havok_memory_watch_dog_free_memory = 250;
 inline constexpr uint32_t watch_dog_remove_objects_from_island = 142;
+inline constexpr uint32_t world__restore_object = 42;
+inline constexpr uint32_t restore_destroy_object = 91;
 inline constexpr uint32_t havok_sim_islands_process_post = 538;
 inline constexpr uint32_t hkSolverAllocator__setBuffer = 77;
 inline constexpr uint32_t hkFreeListMemorySystem__mainQuit = 117;
+inline constexpr uint32_t havok_memory_watch_dog_free_island = 250;
+inline constexpr uint32_t hkpConstraintSolverSetup__calcBufferSize = 174;
+inline constexpr uint32_t hkSolverBuildJacobianFromAtomsNotContact = 24500;
+inline constexpr uint32_t hkpWorldOperationUtil__addConstraintToCriticalLockedIsland = 58;
+inline constexpr uint32_t hkpWorldOperationUtil__removeConstraintFromCriticalLockedIsland = 55;
+inline constexpr uint32_t havok_update_status = 372;
+inline constexpr uint32_t hkpConstraintSolverSetup__solve = 2390;
+inline constexpr uint32_t hkSolveConstraints = 9304;
+inline constexpr uint32_t hkpConstraintSolverSetup___buildJacobianElements = 1058;
+inline constexpr uint32_t hkpWorldConstraintUtil__removeConstraint = 350;
+inline constexpr uint32_t hkCpuPostCollideJob = 412;
+inline constexpr uint32_t hkCpuSplitSimulationIslandJobImpl = 65;
+inline constexpr uint32_t hkCpuAgentSectorJob = 1912;
+inline constexpr uint32_t hkpWorldOperationUtil__mergeIslands = 84;
 inline constexpr uint32_t world__destream_zone = 80;
 inline constexpr uint32_t world__get_zone_by_pos = 112;
 inline constexpr uint32_t world__get_world_zone_by_pos = 96;
@@ -736,6 +833,9 @@ inline constexpr uint32_t hkpJobQueueUtils__popIntegrateJob = 368;
 inline constexpr uint32_t hkpJobQueueUtils__finishIntegrateJob = 1676;
 inline constexpr uint32_t hkpJobQueueUtils__popCollideJob = 177;
 inline constexpr uint32_t hkpJobQueueUtils__finishCollideJob = 127;
+inline constexpr uint32_t hkpSingleThreadedJobsOnIsland__cpuBroadPhaseJob = 2902;
+inline constexpr uint32_t hkpAgentSectorHeader__allocate = 133;
+inline constexpr uint32_t hkJobQueue__addJobEntry = 60;
 inline constexpr uint32_t hkJobQueue__hkJobQueue = 307;
 inline constexpr uint32_t hkJobQueueHwSetup__hkJobQueueHwSetup = 43;
 inline constexpr uint32_t hkJobQueue__processAllJobs = 416;
@@ -774,6 +874,7 @@ inline constexpr uint32_t vector__rand_around_z = 218;
 inline constexpr uint32_t vector4__rand_around_z = 226;
 inline constexpr uint32_t timestamp__set_rand = 103;
 inline constexpr uint32_t timestamp_realtime__set_rand = 103;
+inline constexpr uint32_t ingame_options_exit_to_main_menu = 287;
 inline constexpr uint32_t verify_gamesave_start = 34;
 inline constexpr uint32_t wrecking_crew_match_begin = 461;
 inline constexpr uint32_t wrecking_crew_get_map_file_name = 29;

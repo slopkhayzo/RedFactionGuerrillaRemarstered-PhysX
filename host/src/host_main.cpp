@@ -1060,6 +1060,53 @@ struct Host {
         ++stat_impulses;
     }
 
+    // A melee blow through a swept sphere (ipc::MeleeSweep): the game's sphere cast does not see the pieces here, so
+    // each piece within the sphere's reach of the swept segment gets the push the game gives every object the blow
+    // hits, once per blow (blow_of). At the side of it facing the segment, so it tumbles as well.
+    std::vector<uint32_t> blow_of;  // per slot: the last blow that pushed it
+    uint32_t stat_sweeps = 0, stat_swept = 0, sweeps_logged = 0;
+    void melee_sweep(const ipc::MeleeSweep& c) {
+        const PxVec3 a(c.start.x, c.start.y, c.start.z), b(c.end.x, c.end.y, c.end.z);
+        const PxVec3 j(c.impulse.x, c.impulse.y, c.impulse.z);
+        if (!a.isFinite() || !b.isFinite() || !j.isFinite() || !(c.radius > 0.0f) || !(c.max_speed > 0.0f)) return;
+        flush_pending();
+        const PxVec3 ab = b - a;
+        const float len2 = ab.magnitudeSquared();
+        uint32_t pushed = 0, woken = 0;
+        for (uint32_t s = 0; s < slots_used; ++s) {
+            PxRigidDynamic* d = bodies[s].actor;
+            if (!d || user_kinematic[s] || blow_of[s] == c.blow) continue;
+            const ipc::Vec3& q = poses[s].pos;
+            const PxVec3 p(q.x, q.y, q.z);
+            const float t = len2 > 0.0f ? PxClamp((p - a).dot(ab) / len2, 0.0f, 1.0f) : 0.0f;
+            const PxVec3 axis = a + ab * t;
+            const float reach = c.radius + body_radius[s];
+            if ((p - axis).magnitudeSquared() >= reach * reach) continue;
+            if (frozen[s]) {
+                wake(s);
+                ++woken;
+            }
+            if (d->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) continue;
+            PxVec3 push = j;
+            const float speed = push.magnitude() / std::max(d->getMass(), 0.1f);
+            if (speed > c.max_speed) push *= c.max_speed / speed;
+            PxVec3 side = axis - p;
+            const PxVec3 at = side.normalizeSafe() > 0.0f ? p + side * std::min(0.5f * body_radius[s], 0.5f) : p;
+            PxRigidBodyExt::addForceAtPos(*d, push, at, PxForceMode::eIMPULSE);
+            born_excused[s] = 1;
+            blow_of[s] = c.blow;
+            ++pushed;
+        }
+        ++stat_sweeps;
+        stat_swept += pushed;
+        if (sweeps_logged < 8) {
+            ++sweeps_logged;
+            logf("melee sweep from (%.1f, %.1f, %.1f) to (%.1f, %.1f, %.1f), radius %.1f m, impulse %.0f N*s (at most "
+                 "%.0f m/s): %u bodies pushed, %u of them woken",
+                 a.x, a.y, a.z, b.x, b.y, b.z, c.radius, j.magnitude(), c.max_speed, pushed, woken);
+        }
+    }
+
     // Statics went (a building lost pieces, or a whole structure went): frozen pieces in and above their bounds move
     // again. Found in the grid of frozen pieces, or in the list of them when that is shorter; a body larger than
     // 400 m across is not looked at.
@@ -1326,6 +1373,9 @@ struct Host {
             case ipc::Cmd::Impulse:
                 impulse(reinterpret_cast<const ipc::Impulse&>(h));
                 break;
+            case ipc::Cmd::MeleeSweep:
+                melee_sweep(reinterpret_cast<const ipc::MeleeSweep&>(h));
+                break;
         }
     }
 
@@ -1484,6 +1534,8 @@ struct Host {
              stat_cmd_latency_n ? stat_cmd_latency_ms / stat_cmd_latency_n : 0.0);
         stat_frozen = stat_frozen_still = stat_thawed = stat_unsupported = stat_cascade = stat_pushed_awake = 0;
         stat_impulses = stat_unsupported_bodies = 0;
+        if (stat_sweeps) logf("  melee sweeps %u: %u bodies pushed", stat_sweeps, stat_swept);
+        stat_sweeps = stat_swept = 0;
         if (stat_overlap[0] + stat_overlap[1] + stat_overlap[2] + stat_overlap[3] + stat_overlap[4])
             logf("  pieces coming over, 1 in %u measured, by their deepest overlap: none %u, under 1 cm %u, 1-3 cm %u, "
                  "3-10 cm %u, deeper %u", kOverlapEvery, stat_overlap[0], stat_overlap[1], stat_overlap[2],
@@ -1580,6 +1632,7 @@ int wmain(int argc, wchar_t** argv) {
     host.heavy.assign(host.max_bodies, 0);
     host.pusher.assign(host.max_bodies, 0);
     host.pusher_woke_at.assign(host.max_bodies, ipc::BodyPose{});
+    host.blow_of.assign(host.max_bodies, 0);
     host.pusher_mid.assign(host.max_bodies, PxVec3(0.0f));
     host.pusher_half.assign(host.max_bodies, 0.0f);
     host.pusher_wakes.assign(host.max_bodies, 0);

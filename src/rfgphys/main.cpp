@@ -12,6 +12,7 @@
 #include "core/session.h"
 #include "dev/fly_camera.h"
 #include "experiments/debris_collision.h"
+#include "experiments/havok_audit.h"
 #include "experiments/havok_mt.h"
 #include "experiments/keep_debris.h"
 #include "experiments/render_tweaks.h"
@@ -27,7 +28,10 @@
 #include "telemetry/profiler.h"
 #include "telemetry/telemetry.h"
 #include "test/automation.h"
+#include "test/restore_building.h"
 #include "test/vehicle_push.h"
+#include "test/view_shots.h"
+#include "test/visit.h"
 #include "test/zone_cycle.h"
 
 namespace {
@@ -101,6 +105,7 @@ void init() {
     experiments::install_debris_collision(cfg);
     experiments::install_render_tweaks(cfg);
     experiments::install_havok_mt(cfg);
+    experiments::install_havok_audit(cfg);
     experiments::install_keep_debris(cfg);
     if (cfg.telemetry) telemetry::install(cfg);  // frame callbacks: telemetry first, so it measures whole frames
     gameloop::add_end(&session::on_frame);
@@ -112,6 +117,9 @@ void init() {
     debris_offload::install(cfg);  // after the bridge: it moves pieces from the snapshot the bridge takes
     zone_cycle::install(cfg);
     vehicle_push::install(cfg);
+    restore_building::install(cfg);
+    visit::install(cfg);
+    view_shots::install(cfg);
     harness::install(cfg);
     fly_camera::install(cfg);  // never with the harness: both take over the game's input
     hang_watch::start(cfg);

@@ -26,13 +26,18 @@ powershell -File tools\deploy.ps1            # loader as dinput8.dll + scripts\r
 powershell -File tools\undeploy.ps1          # removes all of it again
 ```
 
+With another mod's `dinput8.dll` in the game folder (Sledge, a mod manager, loads through one too, but only Sledge),
+`deploy.ps1` and `install_package.ps1` put the loader in as `winmm.dll`, which the game loads as well, and leave the
+other `dinput8.dll` alone.
+
 Development builds are `RelWithDebInfo` (`tools\build.ps1` without `-Config`). Every setting is in
 `src/rfgphys/core/config.h`; `scripts\rfgphys.ini` in the game folder sets them, and an environment variable
 `RFGPHYS_<SECTION>_<KEY>` overrides any of them, which is how the test scripts configure a run.
 
 An unattended run (queue job) boots the game, optionally loads the most recent save, plays idle, exits, and fails
 with exit code 5 if any save file changed. Save writes are always blocked in these runs, and the real save folder is
-backed up to `runs\save_backups` first.
+backed up to `runs\save_backups` first. Such a run ends by itself with a hang report when a gameplay frame runs for
+30 s or a menu or loading frame for 60 s, and a timed one (`-ExitAfterGameplaySeconds`) 5 s into the death menu.
 
 ```powershell
 & $q submit -Name 'RFG gameplay smoke test' -Owner 'RedFactionGuerrillaRemarstered-PhysX' -TimeoutMinutes 12 `
@@ -41,15 +46,75 @@ python tools\profile_report.py runs\<run-folder>
 ```
 
 `Test.ZoneCycle=1` adds a zone-streaming test to such a run: buildings near the start are blown up, then the player is
-teleported away until the start's zone streams out, and back.
+teleported away until the start's zone streams out, and back (held in the air after each hop until the ground there
+has streamed in, then landed). With `Experiment.PhysXWorldCheck=1` the world mirror is checked again after the first
+landing, among the zones that just streamed in, and 10 s after the player is back (`world mirror check` lines,
+`world_mirror_check_2.csv` and `_3.csv`): the ground that streamed in must match Havok's. `Test.ZoneTour=N` hops N times
+across the open world instead, every 15 s, to a loaded zone picked at random (the same sequence each run), and blows
+up the buildings near every landing; with `Experiment.PhysXWorldCheck=1` the mirror is checked after each landing. The world mirror's 5 s lines count the bodies that
+came at the address of one that had just left (`... added (N at the address of one that left)`); before the mirror
+told bodies apart by `hkpEntity::m_uid`, each of those left the old geometry in the host and never sent the new.
 
 `Test.VehiclePush=1` (campaign, with `-AutoLoadSave`, 75 s of gameplay): 15 s in, a building next to the nearest
 vehicle is blown up; 20 s later the vehicle is moved through the rubble, and the log compares how many pieces near its
 path moved with how many farther off did.
 
+`Test.RestoreBuilding=1` (campaign, with `-AutoLoadSave`, 60 s of gameplay): 15 s in, the biggest standing building
+10-60 m away is blown up; 12 s later the game restores it, as an activity does when it starts over
+(`world::restore_object`), and 5 s after that the log says how many of the pieces that broke off it are left in Havok
+and in PhysX and whether it stands again (`restore building: ... passed`). `Test.RestoreBuilding=N` does it N times
+(about 21 s each), as a demolition replayed over and over, and compares the general movers and the free render
+instances after the first and the last cycle.
+
+`Test.ViewShots=1` (campaign, with `-AutoLoadSave`, 60 s of gameplay) is for comparing settings on screen: from 10 s in,
+a screenshot a second for 40 s (`view_NN.png`), the camera turned about 36 degrees every 4 s, and the frame times of
+those 40 s in a histogram (`view shots: ... frames`). `Test.ViewShots=N` (N > 1) runs N seconds, in bursts of four shots
+half a second apart every 10 s (`view_BBB_K.png`), for long stays such as a `Test.ZoneTour`.
+
 `-ReleaseSettings` on `run_game.ps1`, `run_replay.ps1` and `queue_play.ps1` runs the deployed build with the release
 package's behaviour settings (the `[Experiment]` section of `tools\release\rfgphys.ini`); unlike `-Release` it keeps
 `-Record` and `-Set`, which override it.
+
+`Test.SolverGuard=1` checks, at start-up, the guard on Havok's solver setup (`hkSolverBuildJacobianFromAtomsNotContact`
+loops for good on a constraint atom it cannot get past; a tower shattered into thousands of pieces hung the game
+there): four such atom lists go through it on a thread of their own, and the log says whether they came back
+(`Test.SolverGuard: passed`). In play, `rfgphys.log` reports such atoms (`Havok solver: ...`; ten times, then every
+thousandth).
+
+`Test.HavokAudit=1` checks the island totals Havok's solver lays its buffer out by (`hkpSimulationIsland`'s
+constraint count and schema and temporary sizes) against the sums over each island's constraints, before every
+island's solve, after the multithreaded jobs and after every step, along with each constraint's owner and whether its
+bodies are in another island. Every collide task's hand-off (what it gathered for its island) is checked against how
+much its agents' contact constraints really moved, a task that starts after its island's post-collide job is
+reported, and island merges asked for inside the jobs are logged. Concurrent solves are checked for shared solver
+memory, and a crash inside the solver logs where in its island's buffer it was and writes `havok_crash_island.txt`
+and `havok_crash_solver.bin`. Lines start with `Havok audit`; a summary comes every 30 s. `Test.HavokAudit=2` also
+repairs islands whose totals fall short of their constraints before they are solved. `Test.HavokAuditJobs=1` adds
+checks after each island split, around each broadphase job and after each post-collide job (with what the replay was
+about to add and remove), and keeps the last steps of the islands of 1,000+ bodies in memory, job by job; the first
+time such an island is wrong after the jobs, they go to `havok_island_history.txt`. `Test.HavokJobsOnSimThread=1` runs
+every job of the multithreaded step on the sim thread: Havok's multithreaded pipeline in one order, without races.
+The multithreaded corruption these found (an island past 65,535 sectors of agents, which Havok's collide jobs cannot
+count, lost a step's contact changes; `experiments/havok_mt.cpp` splits such jobs) reproduces with the tower
+recording `20261023-183208-newgame`, `Experiment.PhysX=0;Experiment.PhysXWorld=0;Experiment.PhysXDebris=0` (all
+debris stays in Havok), `Harness.ReplayRealTime=1` and multithreaded Havok; `rfgphys.log` then says
+`experiment HavokThreads: an island of ... bodies has ... narrowphase agent sectors ...: its job split in 2`.
+
+`Test.AutoNewGame=1` starts a new game without input: New Game in the main menu, the autosave warning accepted,
+normal difficulty, no golden hammer, and the intro skipped as a key press does (save writes stay blocked, as in every
+unattended run). With `Harness.Mode=record` a new game is recorded from its intro (start type `new_game`, whether the
+menus were driven or chosen by hand in `queue_play.ps1 -Record`), and its replays drive the same menus.
+`Test.Visit=x,z,tx,tz` takes the player to (x, z) facing (tx, tz), hopping through loaded zones and landing once the
+ground has streamed in; `|x,z,tx,tz@s` adds stops nearby at s seconds of gameplay, and the log lists the buildings
+around the first. `Test.ResetDestruction=1` makes `-AutoLoadSave` load with the world's destruction reset. The first
+mission's tower: `Test.AutoNewGame=1;Test.Visit=-2242.2,-2279,-2246.3,-2284.4` with an input script swinging there.
+`Harness.ReplayPasses=2` plays a replay that ends at the main menu again in the same process (a second game after the
+first level ended, as in a play session that goes back to the menu); the earlier passes keep their outputs as
+`replay_pass1.json`, `checkpoints_pass1.csv` and so on, and `replay.json` is the last pass's. `Harness.ReplayRealTime=1`
+keeps live play's pace: each replayed frame takes at least as long as it did when recorded (replays otherwise run as
+fast as the machine allows, since the frame cap cannot work on the virtual clock). Recordings reach the disk
+about every quarter second (input, track and checkpoints), so `tools\rec_tool.py salvage` keeps almost all of a
+session that crashed, track included.
 
 `Test.StandInProbe=1` checks the pieces' Havok stand-ins every 2 s: a ray with the game's default filter (the one
 melee and bullets use) through a piece that has one, and a hammer-like blow through the zone object's
@@ -59,8 +124,9 @@ melee and bullets use) through a piece that has one, and a hammer-like blow thro
 the restless pieces (awake for over 5 s without a break: a pile that jitters), how many pieces were put back on the
 ground after something pressed them through it, how deep the pieces coming over overlap what is already there (1 in 32
 measured with PhysX's exact penetration, split by what they overlap) and how many were pushed upward in their first
-second (bubbling; landings and tumbles count too). `rfgphys.log` ends with how many pieces fell through the world anyway
-(given up below -400 m).
+second (bubbling; landings and tumbles count too), and the melee sweeps (blows wider than the game's own, from mods)
+with the pieces they pushed. `rfgphys.log` ends with how many pieces fell through the world anyway (given up below
+-400 m).
 
 `Test.InspectFrames=4400,5000` (replays; pair it with `Harness.ScreenshotFrames`) describes the view at those replay
 frames in the log: what the game's default ray, its destroyable-geometry ray and a fan of rays around the view hit

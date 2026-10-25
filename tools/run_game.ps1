@@ -62,8 +62,9 @@ Write-Output "rfg.exe exit code: $code"
 Stop-StrayGame
 
 Copy-NewCrashDumps $GameDir $knownDumps $run | Out-Null
-$loaderLog = Join-Path $GameDir 'dinput8.log'
-if (Test-Path $loaderLog) { Copy-Item $loaderLog $run }
+foreach ($loaderLog in (Join-Path $GameDir 'dinput8.log'), (Join-Path $GameDir 'winmm.log')) {
+    if (Test-Path $loaderLog) { Copy-Item $loaderLog $run }
+}
 
 $savesAfter = @(Get-SaveHashes)
 if (($savesBefore -join ';') -ne ($savesAfter -join ';')) {

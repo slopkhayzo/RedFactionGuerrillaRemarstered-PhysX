@@ -50,10 +50,13 @@ struct Shot {
 enum : uint32_t { kPoseCamera = 1, kPosePlayer = 2 };
 enum : int { kTagPose = 'P', kTagShot = 'S' };
 
-// Writing (record and replay). Records collect in memory and reach the file when the session ends: file writes on
-// the sim thread during a session would perturb its timing (and heavy-destruction physics is timing-sensitive).
+// Writing (record and replay). Records collect in memory and reach the file every kWriteEveryFrames frames (a few
+// KB at a time, so the sim thread's timing barely notices) and when the session ends; a crash skips the end, and the
+// part already written stays readable (load stops at the first incomplete record).
+constexpr int32_t kWriteEveryFrames = 64;
 std::wstring g_out_path;
 std::vector<uint8_t> g_out;
+HANDLE g_out_file = INVALID_HANDLE_VALUE;
 bool g_writing = false;
 int32_t g_frame = -1;
 int32_t g_last_pose_frame = -1;
@@ -82,6 +85,19 @@ void write_record(int tag, const void* data, size_t size) {
     g_out.push_back(uint8_t(tag));
     const auto* p = static_cast<const uint8_t*>(data);
     g_out.insert(g_out.end(), p, p + size);
+}
+
+// Whole records only: g_out never holds part of one.
+void write_out() {
+    const uint8_t* p = g_out.data();
+    size_t size = g_out.size();
+    while (size) {
+        DWORD written = 0;
+        if (!WriteFile(g_out_file, p, DWORD(size), &written, nullptr) || !written) break;
+        p += written;
+        size -= written;
+    }
+    g_out.clear();
 }
 
 const Pose* recorded_pose(int32_t frame) {
@@ -219,8 +235,14 @@ bool install() {
 bool begin_writing(const std::wstring& path) {
     end_writing();
     g_out_path = path;
+    g_out_file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (g_out_file == INVALID_HANDLE_VALUE) {
+        LOG("track: cannot write %ls", path.c_str());
+        return false;
+    }
     g_out.clear();
-    g_out.reserve(size_t(32000) * (sizeof(Pose) + 1));  // ~2 minutes of frames without reallocating
+    g_out.reserve(size_t(kWriteEveryFrames) * (sizeof(Pose) + sizeof(Shot) + 2));
     FileHeader h{};
     memcpy(h.magic, kMagic, sizeof(kMagic));
     h.version = 1;
@@ -237,12 +259,9 @@ bool begin_writing(const std::wstring& path) {
 void end_writing() {
     if (!g_writing) return;
     g_writing = false;
-    if (FILE* f = _wfsopen(g_out_path.c_str(), L"wb", _SH_DENYWR)) {
-        fwrite(g_out.data(), 1, g_out.size(), f);
-        fclose(f);
-    } else {
-        LOG("track: cannot write %ls", g_out_path.c_str());
-    }
+    write_out();
+    CloseHandle(g_out_file);
+    g_out_file = INVALID_HANDLE_VALUE;
     g_out.clear();
     g_out.shrink_to_fit();
 }
@@ -284,7 +303,10 @@ bool load(const std::wstring& path, float tolerance_m) {
     return true;
 }
 
-void set_frame(int32_t frame) { g_frame = frame; }
+void set_frame(int32_t frame) {
+    g_frame = frame;
+    if (g_writing && frame > 0 && frame % kWriteEveryFrames == 0) write_out();
+}
 
 std::string stats_json() {
     char b[512];

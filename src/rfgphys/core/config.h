@@ -30,14 +30,31 @@ struct Config {
                                       // gameplay (tests the hang watch, core/hang_watch.h)
     bool test_zone_cycle = false;     // blow up buildings near the player, teleport away until their zone streams
                                       // out, and back (test/zone_cycle.h)
+    int test_zone_tour = 0;           // > 0: that many hops across the open world instead, one every 15 s, blowing
+                                      // up buildings after each landing (test/zone_cycle.h)
     bool test_fly_camera = false;     // a scripted fly camera flight with screenshots (dev/fly_camera.h)
     bool test_stand_in_probe = false; // every 2 s: a ray through a piece's stand-in and a blow on it, checked
                                       // (physx/debris_offload.cpp)
     bool test_vehicle_push = false;   // a vehicle moved through rubble in PhysX, checked (test/vehicle_push.h)
+    int test_restore_building = 0;    // > 0: that many times, a building blown up and restored by the game takes
+                                      // its debris along, checked (test/restore_building.h)
+    int test_view_shots = 0;          // 1: a screenshot a second for 40 s while the camera turns, and the frame
+                                      // times; > 1: that many seconds, in bursts (test/view_shots.h)
+    bool test_solver_guard = false;   // at start-up, atom lists Havok's solver setup would loop on go through it,
+                                      // checked (experiments/debris_collision.cpp)
+    int test_havok_audit = 0;         // 1: Havok's island totals checked against their constraints around every
+                                      // step and before every solve, 2: also repaired (experiments/havok_audit.h)
+    bool test_havok_audit_jobs = false;  // with HavokAudit: also after each post-collide job and island split (slower:
+                                         // it changes the jobs' timing)
+    bool test_havok_jobs_on_sim_thread = false;  // with HavokThreads: every job of the multithreaded step on the sim
+                                                 // thread (the multithreaded pipeline in one fixed order, no races)
+    std::wstring test_visit;          // x,z,tx,tz: the player goes to (x, z) facing (tx, tz) (test/visit.h)
     std::wstring test_inspect_frames; // replay frames (comma-separated) at which what the camera looks at is logged
                                       // (physx/debris_offload.cpp)
     bool auto_load_save = false;      // main menu -> Load Game -> most recent save, without input
     bool block_save_writes = false;   // never write or erase save data (always on for unattended runs)
+    bool test_reset_destruction = false;  // AutoLoadSave loads with the world's destruction reset (buildings back up)
+    bool test_auto_new_game = false;  // main menu -> New Game (normal, no golden hammer), intro skipped, without input
 
     // Experiments (change game behaviour; off by default, never applied in multiplayer).
     // Debris collides with debris (experiments/debris_collision.h): 0 off, 1 collisions only (the game's impact
@@ -45,7 +62,8 @@ struct Config {
     // impact logic (debris damages debris and breaks it up).
     int exp_debris_collide = 0;
     // With DebrisCollide: size of Havok's island solver buffer in MB (the game uses 1 MB and deletes the debris of
-    // islands that need more; colliding debris merges into such islands). 1 or less keeps the game's buffer.
+    // islands that need more; colliding debris merges into such islands). 1 or less keeps the game's buffer. Either
+    // way it grows, up to 96 MB, for an island that needs more.
     int exp_solver_buffer_mb = 16;
     // GPU occlusion queries (RL_gpu_vis_enabled): 1 the game's default, 0 off (every object counts as visible to
     // the occlusion pass; frustum and distance culling stay).
@@ -135,6 +153,9 @@ struct Config {
     std::wstring harness_screenshot_frames;  // comma-separated frame numbers to capture (shot_<frame>.png)
     int harness_screenshot_every = 0;     // also capture every N frames (0: off)
     int harness_leave_level_at_end = 0;   // replay: leave the level after the last frame, then end (tests level end)
+    int harness_replay_passes = 1;        // replay: a replay that ends at the main menu plays again, this many times in
+                                          // all, in the same process (a second session after a level end)
+    bool harness_replay_real_time = false;  // replay: frames take as long as they did when recorded (live pacing)
     std::wstring harness_dump_objects_frames;  // comma-separated frame numbers: objects_<frame>.csv (diagnostic)
     bool harness_track = true;            // record and replay the player track (harness/track.h); 0: no track hooks
     bool harness_lock_track = true;       // replay: lock camera, player and shots to the recording's track.bin

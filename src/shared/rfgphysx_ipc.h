@@ -23,7 +23,7 @@
 namespace rfgphysx {
 
 constexpr uint32_t kMagic = 0x58505246;  // "FRPX"
-constexpr uint32_t kVersion = 6;
+constexpr uint32_t kVersion = 7;
 constexpr uint32_t kMaxRays = 4096;  // per RaycastBatch
 
 enum class HostState : uint32_t {
@@ -110,6 +110,7 @@ enum class Cmd : uint16_t {
     ShapePart,         // ShapePart + vertex_count Vec3: one convex part of a body shape, in the body's frame
     KinematicTarget,   // KinematicTarget: where a kinematic body is by the next step
     Impulse,           // Impulse: a push on one body at a point (a hammer blow, a bullet)
+    MeleeSweep,        // MeleeSweep: a melee blow on every body in a swept sphere
 };
 
 struct CmdHeader {
@@ -229,6 +230,19 @@ struct Impulse {
     float pad2;
 };
 
+// A stretch of a melee blow whose sphere sweeps from `start` to `end`: every body within `radius` of that segment gets
+// `impulse` (N*s, the one the game gives each object the blow hits), its speed change capped at `max_speed`, once per
+// blow however many stretches reach it. Frozen bodies move again.
+struct MeleeSweep {
+    CmdHeader h;
+    Vec3 start;
+    float radius;
+    Vec3 end;
+    float max_speed;  // m/s
+    Vec3 impulse;
+    uint32_t blow;    // the blow it belongs to (nonzero)
+};
+
 struct Frame {
     CmdHeader h;
     uint32_t frame;
@@ -345,7 +359,7 @@ static_assert(sizeof(CmdHeader) == 8 && sizeof(StaticPlane) % 8 == 0 && sizeof(S
               sizeof(StaticMesh) == 24 && sizeof(StaticConvex) == 24 && sizeof(RemoveStatics) == 16 &&
               sizeof(Ray) == 32 && sizeof(RaycastBatch) == 16 && sizeof(RemoveStaticKeys) == 16 &&
               sizeof(StaticHeightField) == 64 && sizeof(ShapePart) == 32 && sizeof(Explosion) == 40 &&
-              sizeof(KinematicTarget) == 48 && sizeof(Impulse) == 48);
+              sizeof(KinematicTarget) == 48 && sizeof(Impulse) == 48 && sizeof(MeleeSweep) == 56);
 static_assert(sizeof(CreateBody) == 80 && sizeof(Frame) == 24 && offsetof(Frame, qpc) == 16);
 static_assert(sizeof(SnapshotHeader) == 64 && offsetof(SnapshotHeader, sim_time) == 8 && sizeof(BodyPose) == 64);
 

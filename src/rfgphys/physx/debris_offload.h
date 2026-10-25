@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 struct Config;
@@ -36,5 +37,10 @@ FrameStats take_frame();  // telemetry, simulation thread
 // is now (from the newest snapshot; false if the slot holds no piece).
 std::vector<uint32_t> pieces_near(const float center[3], float radius);
 bool piece_position(uint32_t slot, float out[3]);
+
+// Simulation thread: these objects were restored (destroyed and streamed in again): the pieces that broke off them go
+// at the next sim/render handshake. And how many live pieces broke off one (tests).
+void forget_pieces_of(const std::unordered_set<uint32_t>& object_handles);
+uint32_t count_pieces_of(uint32_t object_handle);
 
 }  // namespace debris_offload

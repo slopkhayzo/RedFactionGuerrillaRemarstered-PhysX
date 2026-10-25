@@ -1,10 +1,12 @@
 # Installs Ultimate ASI Loader (as dinput8.dll) and the rfgphys plugin into the game folder.
 # Never overwrites a game file or a foreign dinput8.dll. tools\undeploy.ps1 removes everything again.
+# With another mod's dinput8.dll in the game folder (Sledge's loads only Sledge), the loader is winmm.dll instead, a
+# name the game loads too.
 param(
     [string]$GameDir = 'D:\Program Files\Games\GOG\Red Faction Guerrilla Re-Mars-tered',
     [string]$Config = 'RelWithDebInfo',
     [switch]$ResetIni,     # rewrite scripts\rfgphys.ini with defaults
-    [switch]$LoaderLog     # make Ultimate ASI Loader write dinput8.log next to the game
+    [switch]$LoaderLog     # make Ultimate ASI Loader write its log (dinput8.log or winmm.log) next to the game
 )
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -18,14 +20,25 @@ if (-not (Test-Path (Join-Path $GameDir 'rfg.exe'))) { Write-Output "rfg.exe not
 if (-not (Test-Path $asi)) { Write-Output "$asi not found: build first (tools\build.ps1)"; exit 2 }
 
 $loader = Join-Path $GameDir 'dinput8.dll'
-if (Test-Path $loader) {
+$altLoader = Join-Path $GameDir 'winmm.dll'
+if ((Test-Path $altLoader) -and (Get-FileHash $altLoader -Algorithm SHA256).Hash -eq $ualHash) {
+    $loader = $altLoader
+} elseif (Test-Path $loader) {
     $hash = (Get-FileHash $loader -Algorithm SHA256).Hash
-    if ($hash -ne $ualHash) { Write-Output "a different dinput8.dll is in the game folder ($hash); not touching it"; exit 4 }
+    if ($hash -ne $ualHash) {
+        if (Test-Path $altLoader) {
+            Write-Output "other mods' dinput8.dll and winmm.dll are in the game folder; not touching them"
+            exit 4
+        }
+        Copy-Item $ualSrc $altLoader
+        Write-Output "another mod's dinput8.dll is in the game folder ($hash): the loader goes in as winmm.dll"
+        $loader = $altLoader
+    }
 } else {
     Copy-Item $ualSrc $loader
 }
 
-$loaderIni = Join-Path $GameDir 'dinput8.ini'
+$loaderIni = [IO.Path]::ChangeExtension($loader, '.ini')
 if ($LoaderLog) {
     "[GlobalSets]`r`nDebugLog=1`r`n" | Set-Content -Path $loaderIni -Encoding ASCII
 } elseif ((Test-Path $loaderIni) -and ((Get-Content $loaderIni -Raw) -match 'DebugLog=1')) {
@@ -182,5 +195,5 @@ HideHud=1
 }
 
 New-Item -ItemType Directory -Force (Join-Path $GameDir 'CrashDumps') | Out-Null
-Write-Output "deployed rfgphys ($((Get-Item $asi).LastWriteTime)) and Ultimate ASI Loader to $GameDir"
+Write-Output "deployed rfgphys ($((Get-Item $asi).LastWriteTime)) and Ultimate ASI Loader ($(Split-Path -Leaf $loader)) to $GameDir"
 exit 0

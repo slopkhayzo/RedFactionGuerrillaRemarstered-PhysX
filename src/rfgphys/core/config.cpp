@@ -75,12 +75,22 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_batched_cap = get_int(ini_path, L"Experiment", L"BatchedCap", 0);
     c.test_hang_after_s = get_int(ini_path, L"Test", L"HangAfterSeconds", 0);
     c.test_zone_cycle = get_int(ini_path, L"Test", L"ZoneCycle", 0) != 0;
+    c.test_zone_tour = get_int(ini_path, L"Test", L"ZoneTour", 0);
     c.test_fly_camera = get_int(ini_path, L"Test", L"FlyCamera", 0) != 0;
     c.test_stand_in_probe = get_int(ini_path, L"Test", L"StandInProbe", 0) != 0;
     c.test_vehicle_push = get_int(ini_path, L"Test", L"VehiclePush", 0) != 0;
+    c.test_restore_building = get_int(ini_path, L"Test", L"RestoreBuilding", 0);
+    c.test_view_shots = get_int(ini_path, L"Test", L"ViewShots", 0);
+    c.test_solver_guard = get_int(ini_path, L"Test", L"SolverGuard", 0) != 0;
+    c.test_havok_audit = get_int(ini_path, L"Test", L"HavokAudit", 0);
+    c.test_havok_audit_jobs = get_int(ini_path, L"Test", L"HavokAuditJobs", 0) != 0;
+    c.test_havok_jobs_on_sim_thread = get_int(ini_path, L"Test", L"HavokJobsOnSimThread", 0) != 0;
+    c.test_visit = get_string(ini_path, L"Test", L"Visit", L"");
     c.test_inspect_frames = get_string(ini_path, L"Test", L"InspectFrames", L"");
     c.auto_load_save = get_int(ini_path, L"Test", L"AutoLoadSave", 0) != 0;
     c.block_save_writes = get_int(ini_path, L"Test", L"BlockSaveWrites", 0) != 0;
+    c.test_reset_destruction = get_int(ini_path, L"Test", L"ResetDestruction", 0) != 0;
+    c.test_auto_new_game = get_int(ini_path, L"Test", L"AutoNewGame", 0) != 0;
     // DebrisCollide replaced WorldOnlyDebrisCollide (which only changed layers and so had no visible effect).
     c.exp_debris_collide = get_int(ini_path, L"Experiment", L"DebrisCollide",
                                    get_int(ini_path, L"Experiment", L"WorldOnlyDebrisCollide", 0));
@@ -154,6 +164,8 @@ Config load_config(const std::wstring& ini_path) {
     c.harness_screenshot_frames = get_string(ini_path, L"Harness", L"ScreenshotFrames", L"");
     c.harness_screenshot_every = get_int(ini_path, L"Harness", L"ScreenshotEvery", 0);
     c.harness_leave_level_at_end = get_int(ini_path, L"Harness", L"LeaveLevelAtEnd", 0);
+    c.harness_replay_passes = get_int(ini_path, L"Harness", L"ReplayPasses", 1);
+    c.harness_replay_real_time = get_int(ini_path, L"Harness", L"ReplayRealTime", 0) != 0;
     c.harness_dump_objects_frames = get_string(ini_path, L"Harness", L"DumpObjectsFrames", L"");
     c.harness_track = get_int(ini_path, L"Harness", L"Track", 1) != 0;
     c.harness_lock_track = c.harness_track && get_int(ini_path, L"Harness", L"LockTrack", 1) != 0;

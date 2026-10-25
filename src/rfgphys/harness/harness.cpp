@@ -33,7 +33,7 @@
 namespace harness {
 namespace {
 
-constexpr int GS_MAINMENU = 0, GS_GAMEPLAY = 1, GS_LOAD = 2, GS_WRECKING_CREW_MAIN_MENU = 19,
+constexpr int GS_MAINMENU = 0, GS_GAMEPLAY = 1, GS_LOAD = 2, GS_WRECKING_CREW_MAIN_MENU = 19, GS_MAINMENU_IDLE = 48,
               GS_SAVE_LOAD_SCREEN = 50;
 // A recording ends when the game reaches one of these states (left gameplay or started another load).
 constexpr int kEndStates[] = {0 /* MAINMENU */,  2 /* LOAD */,      3 /* BOOT */,       4 /* MULTI_INIT */,
@@ -606,6 +606,12 @@ bool start_recording_save(const uint8_t* info, bool reset_destruction) {
     return true;
 }
 
+bool start_recording_new_game() {
+    fill_header_common(rec::kStartNewGame);
+    LOG("harness: a new game begins (its intro video)");
+    return open_bundle("newgame");
+}
+
 void write_manifest(const char* end_reason) {
     rec::TextFile m;
     if (!m.open(g_bundle_dir + L"\\manifest.json")) return;
@@ -626,6 +632,8 @@ void write_manifest(const char* end_reason) {
                  json_escape(g_header.wc_map_file).c_str(), json_escape(describe_wc(g_header.wc_options)).c_str(),
                  hex.c_str(), g_header.wc_character_index[0], g_header.wc_character_index[1],
                  g_header.wc_character_index[2], g_header.wc_character_index[3]);
+    } else if (g_header.start_type == rec::kStartNewGame) {
+        m.printf("  \"start\": {\"type\": \"new_game\"},\n");
     } else {
         m.printf("  \"start\": {\"type\": \"save\", \"slot\": %u, \"file\": \"%s\", \"reset_destruction\": %s},\n",
                  g_header.save_slot, json_escape(g_header.save_file).c_str(),
@@ -717,9 +725,11 @@ void write_replay_result(const char* reason, bool completed) {
     session::exit_now(completed ? "replay finished" : "replay failed");
 }
 
-// Harness.LeaveLevelAtEnd=1: after the last frame the replay leaves the level the way the recording did
+// Harness.LeaveLevelAtEnd=1: after the last frame a Wrecking Crew replay leaves the level the way the recording did
 // (GS_WC_SHUTDOWN) instead of ending the process at once, so the game's level end runs (and whatever the plugin does
-// there); the process ends 3 s after the level is gone, or after 40 s whatever happens.
+// there); the process ends 3 s after the level is gone, or after 40 s whatever happens. A campaign replay ends at
+// once: in the campaign GS_WC_SHUTDOWN's state entry has no render function (handshake_deferred_render jumped to
+// 0x101).
 constexpr int kStateWcShutdown = 60;
 bool g_leaving = false;
 double g_leave_t0 = 0, g_left_at = -1;
@@ -803,9 +813,58 @@ bool load_recording() {
     if (g_header.start_type == rec::kStartWreckingCrew)
         LOG("harness: replaying %ls: Wrecking Crew %s, %u frames, %zu checkpoints, seed %u", dir.c_str(),
             g_header.wc_map_file, g_header.frame_count, g_expected.size(), g_header.seed);
+    else if (g_header.start_type == rec::kStartNewGame)
+        LOG("harness: replaying %ls: a new game, %u frames, %zu checkpoints, seed %u", dir.c_str(),
+            g_header.frame_count, g_expected.size(), g_header.seed);
     else
         LOG("harness: replaying %ls: save slot %u (%s), %u frames, %zu checkpoints, seed %u", dir.c_str(),
             g_header.save_slot, g_header.save_file, g_header.frame_count, g_expected.size(), g_header.seed);
+    return true;
+}
+
+// Harness.ReplayPasses=N: the recording plays again in the same process once a pass has ended, up to N passes, the
+// way a play session goes on to another game after the first one ends (the level ends, the world and every thread
+// stay). Each pass but the last keeps its outputs under the _pass<k> names; replay.json is the last pass's.
+uint32_t g_pass = 1;
+
+bool next_pass(int state) {
+    if (int(g_pass) >= g_cfg.harness_replay_passes) return false;
+    g_phase = Phase::kIdle;
+    g_inject = false;
+    g_clock_on = false;
+    track::set_frame(-1);
+    track::end_writing();
+    g_checkpoints.close();
+    g_fingerprints.close();
+    rng_guard::set_isolation(false);
+    g_rng_other_summary = rng_guard::other_threads_summary();
+    write_replay_result("end of recording", true);
+    LOG("harness: replay pass %u of %d complete: %u/%u frames, first gameplay divergence %lld (%s); the next pass "
+        "starts from the main menu (game state %d now)", g_pass, g_cfg.harness_replay_passes, g_frame,
+        g_header.frame_count, g_first_divergence,
+        g_first_divergence_fields.empty() ? "-" : g_first_divergence_fields.c_str(), state);
+    const std::wstring dir = session::run_dir() + L"\\";
+    const wchar_t* const outputs[][2] = {
+        {L"replay", L".json"}, {L"checkpoints", L".csv"}, {L"fingerprints", L".csv"}, {L"track", L".bin"}};
+    for (const auto& o : outputs)
+        MoveFileExW((dir + o[0] + o[1]).c_str(), (dir + o[0] + L"_pass" + std::to_wstring(g_pass) + o[1]).c_str(),
+                    MOVEFILE_REPLACE_EXISTING);
+    ++g_pass;
+    g_checkpoints_compared = g_checkpoints_mismatched = g_state_mismatches = g_checkpoints_rng_differs = 0;
+    g_first_divergence = g_first_rng_divergence = -1;
+    g_first_divergence_fields.clear();
+    g_expected.clear();
+    g_active_qpc = 0;
+    g_replay_frame.store(-1, std::memory_order_relaxed);
+    if (!load_recording()) finish_replay(g_load_error.c_str(), false);
+    g_menu_pressed = g_start_called = false;
+    g_ready_since = 0;
+    g_last_state = -1000;
+    automation::reset_new_game();
+    if (state != GS_MAINMENU && state != GS_MAINMENU_IDLE) {
+        LOG("harness: not at the main menu after the pass: leaving the game for it");
+        rfg::fn<void(__cdecl*)()>(rfg::rva::ingame_options_exit_to_main_menu)();
+    }
     return true;
 }
 
@@ -876,6 +935,24 @@ void __cdecl d_verify_save(uint8_t* info, bool reset_destruction) {
     o_verify_save(info, reset_destruction);
 }
 
+// video_cutscene_play from main_menu_process_delayed_selection: New Game was chosen and its intro begins. A new game's
+// recording starts there (the menus before it are not recorded); a replay of one, which drove the menus, waits there.
+void(__cdecl* o_video_play)(const char*, uint32_t, const char*, bool, bool, void*, void*, void*) = nullptr;
+void __cdecl d_video_play(const char* name, uint32_t flags, const char* subtitles, bool a, bool b, void* gpu, void* cpu,
+                          void* dlc) {
+    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
+    const bool new_game = caller - rfg::rva::main_menu_process_delayed_selection <
+                          rfg::size::main_menu_process_delayed_selection;
+    if (new_game && g_mode == Mode::kRecord && !multiplayer()) {
+        if (g_phase != Phase::kIdle) finish_recording("a new game began");
+        if (start_recording_new_game()) enter_pending(g_header.clock_anchor_ms);
+    } else if (new_game && g_mode == Mode::kReplay && g_header.start_type == rec::kStartNewGame &&
+               g_phase == Phase::kIdle) {
+        enter_pending(g_header.clock_anchor_ms);
+    }
+    o_video_play(name, flags, subtitles, a, b, gpu, cpu, dlc);
+}
+
 // Main menu -> Wrecking Crew (restore the recorded setup) or Load Game (select the recorded slot). Also used by
 // record mode's AutoStart=wc self-test, which keeps the Wrecking Crew menu's current setup.
 void drive_start(int state) {
@@ -885,6 +962,7 @@ void drive_start(int state) {
     }
     const double in_state_ms = session::ticks_to_ms(session::qpc() - g_state_since);
     const bool wc = g_mode == Mode::kRecord || g_header.start_type == rec::kStartWreckingCrew;
+    const bool new_game = g_mode == Mode::kReplay && g_header.start_type == rec::kStartNewGame;
 
     if (state == GS_MAINMENU && !g_menu_pressed) {
         if (!g_caught_input && in_state_ms > 2000 && !rfg::global<uint8_t>(rfg::rva::Main_menu_auto_catch_done)) {
@@ -898,13 +976,18 @@ void drive_start(int state) {
         }
         if (g_ready_since && session::ticks_to_ms(session::qpc() - g_ready_since) > 1500) {
             g_menu_pressed = true;
-            LOG("harness: main menu ready -> %s", wc ? "Wrecking Crew" : "Load Game");
+            LOG("harness: main menu ready -> %s", wc ? "Wrecking Crew" : new_game ? "New Game" : "Load Game");
             rfg::fn<void(__cdecl*)(int)>(rfg::rva::main_menu_handle_selection)(
-                wc ? automation::kMainMenuWreckingCrew : automation::kMainMenuLoadGame);
+                wc ? automation::kMainMenuWreckingCrew
+                   : new_game ? automation::kMainMenuNewGame : automation::kMainMenuLoadGame);
         } else if (in_state_ms > 60000) {
             if (g_mode == Mode::kReplay) finish_replay("the main menu never became ready", false);
             session::exit_now("harness: the main menu never became ready");
         }
+        return;
+    }
+    if (new_game) {  // the message boxes; the intro starts the replay (d_video_play)
+        automation::drive_new_game(state, in_state_ms);
         return;
     }
     if (g_start_called) return;
@@ -979,6 +1062,21 @@ void poll_hotkeys() {
     g_f11_down = f11;
 }
 
+// Harness.ReplayRealTime=1: a replayed frame begins no sooner than the recorded one did after the frame before it
+// (Frametime_real), so the game's threads keep live play's pace (the frame cap) instead of running flat out.
+int64_t g_pace_last = 0;
+
+void pace_frame(float recorded_real_s) {
+    const int64_t now = session::qpc();
+    const double wait_ms = double(recorded_real_s) * 1000.0 - (g_pace_last ? session::ticks_to_ms(now - g_pace_last) : 1e9);
+    if (wait_ms > 0 && wait_ms < 250) {
+        const int64_t until = now + int64_t(wait_ms / session::ticks_to_ms(1));
+        while (session::ticks_to_ms(until - session::qpc()) > 2.0) Sleep(1);
+        while (session::qpc() < until) YieldProcessor();
+    }
+    g_pace_last = session::qpc();
+}
+
 void frame_begin() {
     if (g_phase == Phase::kIdle) {
         g_inject = false;
@@ -993,6 +1091,7 @@ void frame_begin() {
         } else if (!g_reader.next(g_cur)) {
             finish_replay("the recording ended early (truncated input.rfgrec)", false);
         }
+        if (g_cfg.harness_replay_real_time && g_phase == Phase::kActive) pace_frame(g_cur.dt_real);
         g_inject = true;
     } else {
         g_cur.flags = (g_synthetic || rfg::global<uint8_t>(rfg::rva::Os_app_active)) ? rec::kFrameAppActive : 0;
@@ -1083,6 +1182,7 @@ void record_frame_end(int state) {
     if (g_cur.flags & rec::kFrameMarker) g_markers.push_back(g_frame);
     if (g_frame % g_header.checkpoint_interval == 0)
         g_checkpoints.write(checkpoint::to_csv(checkpoint::capture(g_frame, state)));
+    if (g_frame % 64 == 0) g_checkpoints.flush();  // input.rfgrec and track.bin keep the same pace (a crash skips the end)
     ++g_frame;
     if (is_end_state(state)) {
         char reason[64];
@@ -1139,8 +1239,8 @@ void replay_frame_end(int state) {
         LOG("harness: replay frame %u/%u, %.1f s game time, first divergence %lld", g_frame, g_header.frame_count,
             g_game_seconds, g_first_divergence);
     if (g_frame >= g_header.frame_count) {
-        if (g_cfg.harness_leave_level_at_end) begin_leaving();
-        else finish_replay("end of recording", true);
+        if (g_cfg.harness_leave_level_at_end && g_header.start_type == rec::kStartWreckingCrew) begin_leaving();
+        else if (!next_pass(state)) finish_replay("end of recording", true);
     }
 }
 
@@ -1168,6 +1268,13 @@ void frame_end(int state) {
     }
     if (g_phase == Phase::kPending) {
         ++g_pending_frames;
+        if (g_mode == Mode::kReplay && g_header.start_type == rec::kStartNewGame) {  // its intro, skipped
+            if (state != g_last_state) {
+                g_last_state = state;
+                g_state_since = session::qpc();
+            }
+            automation::drive_new_game(state, session::ticks_to_ms(session::qpc() - g_state_since));
+        }
         if (state == GS_LOAD) g_seen_load = true;
         if (g_seen_load && state == GS_GAMEPLAY) {
             // This frame's gameseq_process switched to gameplay and already simulated: it is the transition frame.
@@ -1289,6 +1396,7 @@ bool install(const Config& cfg) {
         LOG("harness: screenshots unavailable");
     ok &= hooks::create(r::wrecking_crew_match_begin, &d_match_begin, &o_match_begin, "wrecking_crew_match_begin");
     ok &= hooks::create(r::verify_gamesave_start, &d_verify_save, &o_verify_save, "verify_gamesave_start");
+    ok &= hooks::create(r::video_cutscene_play, &d_video_play, &o_video_play, "video_cutscene_play");
     o_srand = reinterpret_cast<void(__cdecl*)(unsigned)>(
         hooks::patch_import("MSVCR100.dll", "srand", reinterpret_cast<void*>(&d_srand)));
     o_rand = reinterpret_cast<int(__cdecl*)()>(hooks::patch_import("MSVCR100.dll", "rand", reinterpret_cast<void*>(&d_rand)));

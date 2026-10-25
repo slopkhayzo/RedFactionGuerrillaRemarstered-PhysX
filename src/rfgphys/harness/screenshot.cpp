@@ -232,7 +232,11 @@ bool __cdecl d_end_frame(uint8_t* graphics) {
 }  // namespace
 
 bool install() {
-    return hooks::create(rfg::rva::keen__graphics__endFrame, &d_end_frame, &o_end_frame, "keen::graphics::endFrame");
+    static bool installed = false;  // the harness and the tests that take screenshots may each ask
+    if (!installed)
+        installed = hooks::create(rfg::rva::keen__graphics__endFrame, &d_end_frame, &o_end_frame,
+                                  "keen::graphics::endFrame");
+    return installed;
 }
 
 void request(const std::wstring& png_path) {

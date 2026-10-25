@@ -21,6 +21,7 @@
 #include "core/log.h"
 #include "core/session.h"
 #include "core/thread_dump.h"
+#include "experiments/havok_audit.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
@@ -88,6 +89,7 @@ using InitThread = int*(__cdecl*)(int* result, void* router);  // hkResult retur
 int g_workers = 0;                 // worker threads running
 int g_requested = 0;               // Experiment.HavokThreads
 int g_min_island_size = 0;         // Experiment.HavokMinIslandSize (-1: Havok's default)
+bool g_jobs_on_sim_thread = false;  // Test.HavokJobsOnSimThread
 uint8_t* g_world = nullptr;        // the game's multithreaded world
 void* g_queue = nullptr;           // hkJobQueue, built on the sim thread at the first multithreaded step
 bool g_queue_failed = false;
@@ -103,6 +105,7 @@ uint8_t* g_step_sim = nullptr;
 unsigned g_mxcsr = 0;              // the sim thread's SSE control word, copied into the workers at every step
 double g_frame_jobs_ms = 0;        // sim thread
 uint64_t g_steps = 0, g_steps_alone = 0;
+std::atomic<uint32_t> g_removes_skipped{0}, g_adds_skipped{0};  // queued island constraint changes (below)
 
 ProcessAllJobs process_all_jobs() { return rfg::fn<ProcessAllJobs>(r::hkJobQueue__processAllJobs); }
 
@@ -270,10 +273,188 @@ bool init_queue() {
     return true;
 }
 
+// hkpWorld::m_activeSimulationIslands and m_inactiveSimulationIslands (hkArray: data, size), hkpSimulationIsland's
+// body count (m_entities).
+constexpr uint32_t kWorldActiveIslands = 0x28, kWorldInactiveIslands = 0x34, kIslandNumEntities = 0x50;
+
 // hkReferencedObject::lockAll's lock (taken by hkpWorld::lock): held count.
 int ref_lock_count() {
     auto* lock = rfg::global<uint8_t*>(r::hkSingleton_hkReferencedObjectLock___s_instance);
     return lock ? *reinterpret_cast<volatile int*>(lock + kRefLockCount) : 0;
+}
+
+// ---- collide jobs for big agent tracks ------------------------------------------------------------------------
+
+// hkpSingleThreadedJobsOnIsland::cpuBroadPhaseJob ends an island's broadphase by queuing its collide work: one
+// hkpAgentSectorJob per agent track (narrowphase, then midphase), which the job queue cuts into tasks of
+// m_maxSectorsPer...CollideTask sectors, and one hkpAgentSectorHeader counting all their tasks; the last task to finish
+// queues the island's post-collide job, which replays what the tasks gathered (the constraints their contacts gained
+// and lost, and the totals' changes) into the island. The header counts the tasks from the tracks' full sector counts,
+// but the job keeps its sector count in 16 bits (hkpAgentBaseJob::m_numElements): from a track of 65,536 sectors on,
+// the sectors past that are never processed, the header never sees its last task, and the island's post-collide job
+// never comes. That step's contact changes of the whole island are lost: its constraint totals drift from its
+// constraints, constraints that gained their first contact point stay out of any island (and are removed twice later),
+// and the solver soon lays the island's buffer out too small (the int3 at hkSolveConstraints+0x2332). A pile of
+// colliding debris from a tower shattered by a shockwave hammer reached 83,000 narrowphase sectors (about 330,000
+// agents among 4,100 bodies); the single-threaded step walks the tracks directly and has no such limit.
+// Right after the header is allocated, before the jobs are queued, a stub passes them to split_big_sector_jobs: a job
+// past the limit keeps the first sectors that fit (whole tasks, all sectors full) and the rest go into more jobs for
+// the same header, numbered as the header expects. The task numbers themselves are signed 16-bit (the header's size in
+// hkpAgentSectorHeader::allocate, the task's slot in hkCpuAgentSectorJob), so a step whose islands would need more than
+// that raises the sectors per task first (plan_step) or, past that too, runs single-threaded.
+constexpr uint32_t kIslandMidphaseTrack = 0x5C, kIslandNarrowphaseTrack = 0x70;  // hkpAgentNnTrack
+constexpr uint32_t kTrackLastSectorBytes = 0x00, kTrackNumSectors = 0x08;      // u16; hkInplaceArray size
+constexpr uint32_t kWorldMidphaseSectorsPerTask = 0xDC, kWorldNarrowphaseSectorsPerTask = 0xE0;
+// hkpAgentSectorJob (a job queue entry): its island, header, task number (s16), sector count and sectors per task
+// (u16), track type (2 narrowphase), sectors (hkpAgentNnSector**), bytes used in its last sector (u16).
+constexpr uint32_t kJobIsland = 0x14, kJobHeader = 0x20, kJobTaskIndex = 0x24, kJobNumSectors = 0x26,
+                   kJobSectorsPerTask = 0x28, kJobTrackType = 0x2A, kJobSectors = 0x2C, kJobLastSectorBytes = 0x44;
+constexpr size_t kJobEntrySize = 0x80;
+constexpr uint16_t kSectorBytes = 0x200;
+constexpr int kMaxJobSectors = 0xFFFF;
+constexpr uint8_t kNarrowphaseTrack = 2;
+// In cpuBroadPhaseJob, right after `call hkpAgentSectorHeader::allocate(tasks, 32)`: xor edi, edi; mov ebx, eax;
+// add esp, 8. The jobs are at [esp+0x98] (pointers, [esp+0x14] of them), the job queue is the second argument.
+const rfg::CodeSite kAfterHeaderAllocate{r::hkpSingleThreadedJobsOnIsland__cpuBroadPhaseJob, 0x931};
+const uint8_t kAfterHeaderAllocateBytes[] = {0x33, 0xFF, 0x8B, 0xD8, 0x83, 0xC4, 0x08};
+
+using AddJobFn = void(__fastcall*)(void* queue, void* edx, void* entry, int priority);  // hkJobQueue::addJob
+bool g_split_installed = false;
+std::atomic<uint32_t> g_jobs_split{0};
+
+// On whichever Havok thread runs the island's broadphase job.
+void __cdecl split_big_sector_jobs(void* queue, uint8_t* header, uint8_t* const* jobs, int num_jobs) {
+    for (int j = 0; j < num_jobs; ++j) {
+        uint8_t* job = jobs[j];
+        const uint8_t* island = *reinterpret_cast<const uint8_t* const*>(job + kJobIsland);
+        const uint8_t* track =
+            island + (job[kJobTrackType] == kNarrowphaseTrack ? kIslandNarrowphaseTrack : kIslandMidphaseTrack);
+        const int sectors = *reinterpret_cast<const int*>(track + kTrackNumSectors);
+        const int per = *reinterpret_cast<const uint16_t*>(job + kJobSectorsPerTask);
+        if (sectors <= kMaxJobSectors || per <= 0) continue;
+        const int keep = kMaxJobSectors - kMaxJobSectors % per;
+        auto* const* all = *reinterpret_cast<uint8_t* const* const*>(job + kJobSectors);
+        const int first_task = *reinterpret_cast<const int16_t*>(job + kJobTaskIndex);
+        *reinterpret_cast<uint16_t*>(job + kJobNumSectors) = uint16_t(keep);
+        *reinterpret_cast<uint16_t*>(job + kJobLastSectorBytes) = kSectorBytes;
+        int added = 0;
+        for (int start = keep; start < sectors; start += keep, ++added) {
+            alignas(16) uint8_t more[kJobEntrySize];
+            memcpy(more, job, sizeof(more));
+            const int count = std::min(keep, sectors - start);
+            *reinterpret_cast<uint8_t**>(more + kJobHeader) = header;
+            *reinterpret_cast<int16_t*>(more + kJobTaskIndex) = int16_t(first_task + start / per);
+            *reinterpret_cast<uint16_t*>(more + kJobNumSectors) = uint16_t(count);
+            *reinterpret_cast<uint8_t* const**>(more + kJobSectors) = all + start;
+            *reinterpret_cast<uint16_t*>(more + kJobLastSectorBytes) =
+                start + count == sectors ? *reinterpret_cast<const uint16_t*>(track + kTrackLastSectorBytes)
+                                         : kSectorBytes;
+            rfg::fn<AddJobFn>(r::hkJobQueue__addJobEntry)(queue, nullptr, more, 1);
+        }
+        const uint32_t n = g_jobs_split.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 10 || n % 1000 == 0)
+            LOG("experiment HavokThreads: an island of %d bodies has %d %s agent sectors, more than a Havok collide "
+                "job counts (%d): its job split in %d (%u so far)",
+                *reinterpret_cast<const int*>(island + kIslandNumEntities), sectors,
+                job[kJobTrackType] == kNarrowphaseTrack ? "narrowphase" : "midphase", kMaxJobSectors, added + 1, n);
+    }
+}
+
+bool install_split_big_sector_jobs() {
+    auto* site = static_cast<uint8_t*>(rfg::addr(kAfterHeaderAllocate.rva()));
+    // The site follows the call to hkpAgentSectorHeader::allocate; the job loop after it reads [esp+0x14] and
+    // [esp+edi*4+0x98], and the queue from [ebp+0xC].
+    static const uint8_t kJobCount[] = {0x89, 0x7B, 0x0C, 0x89, 0x7B, 0x10, 0x39, 0x7C, 0x24, 0x14};
+    static const uint8_t kJobPointer[] = {0x8B, 0x84, 0xBC, 0x98, 0x00, 0x00, 0x00};
+    static const uint8_t kQueue[] = {0x8B, 0x4D, 0x0C, 0x6A, 0x01, 0x50, 0xE8};
+    int32_t call_rel = 0;
+    memcpy(&call_rel, site - 4, 4);
+    if (site[-5] != 0xE8 || site + call_rel != rfg::addr(r::hkpAgentSectorHeader__allocate) ||
+        memcmp(site, kAfterHeaderAllocateBytes, sizeof(kAfterHeaderAllocateBytes)) != 0 ||
+        memcmp(site + 7, kJobCount, sizeof(kJobCount)) != 0 ||
+        memcmp(site + 0x13, kJobPointer, sizeof(kJobPointer)) != 0 || memcmp(site + 0x21, kQueue, sizeof(kQueue)) != 0)
+        return false;
+    auto* stub = static_cast<uint8_t*>(VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!stub) return false;
+    uint8_t* p = stub;
+    auto put = [&](std::initializer_list<uint8_t> bytes) {
+        for (uint8_t b : bytes) *p++ = b;
+    };
+    auto put_u32 = [&](uint32_t v) {
+        memcpy(p, &v, 4);
+        p += 4;
+    };
+    put({0x33, 0xFF, 0x8B, 0xD8, 0x83, 0xC4, 0x08});  // the replaced code: xor edi, edi; mov ebx, eax; add esp, 8
+    put({0x60});                                      // pushad
+    put({0x8D, 0x54, 0x24, 0x20});                    // lea edx, [esp+0x20]: the function's esp
+    put({0xFF, 0x72, 0x14});                          // push [edx+0x14]: the job count
+    put({0x8D, 0x8A, 0x98, 0x00, 0x00, 0x00, 0x51});  // lea ecx, [edx+0x98]; push ecx: the jobs
+    put({0x53});                                      // push ebx: the header
+    put({0xFF, 0x75, 0x0C});                          // push [ebp+0xC]: the job queue
+    put({0xB8});                                      // mov eax, split_big_sector_jobs
+    put_u32(reinterpret_cast<uint32_t>(&split_big_sector_jobs));
+    put({0xFF, 0xD0, 0x83, 0xC4, 0x10});              // call eax; add esp, 16
+    put({0x61});                                      // popad
+    put({0xE9});                                      // jmp back after the replaced code
+    put_u32(uint32_t(reinterpret_cast<uintptr_t>(site + sizeof(kAfterHeaderAllocateBytes)) -
+                     reinterpret_cast<uintptr_t>(p + 4)));
+    FlushInstructionCache(GetCurrentProcess(), stub, size_t(p - stub));
+    uint8_t jump[sizeof(kAfterHeaderAllocateBytes)] = {0xE9, 0, 0, 0, 0, 0x90, 0x90};
+    const int32_t rel = int32_t(reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(site + 5));
+    memcpy(jump + 1, &rel, 4);
+    DWORD old;
+    VirtualProtect(site, sizeof(jump), PAGE_EXECUTE_READWRITE, &old);
+    memcpy(site, jump, sizeof(jump));
+    VirtualProtect(site, sizeof(jump), old, &old);
+    FlushInstructionCache(GetCurrentProcess(), site, sizeof(jump));
+    return true;
+}
+
+// Before each step: the islands' agent tracks against the jobs' 16-bit task numbers. Havok's 4 narrowphase / 2
+// midphase sectors per task (16 agents) give up to 32,767 tasks per island; 8 and 4 (32 agents, as many contact
+// constraint changes as a task's command queue holds: hkpAgentSectorHeader::allocate(tasks, 32)) give twice that.
+// Islands merge at the step's start (cleanupDirtyIslands) and gain agents in their broadphase job, hence the margins.
+constexpr int kMaxTasksPlanned = 24000;
+constexpr int kMaxIslandsOrBodies = 60000;  // u16 island indices (the jobs) and body counts (the solver's task header)
+constexpr int kTrackMargin = 16384;  // without the split, a track this close to a job's count steps single-threaded
+bool g_big_tasks = false;
+int g_narrow_per_task = 4, g_mid_per_task = 2;  // the world's own (read when it is created)
+uint32_t g_plan_logs = 0;
+uint64_t g_steps_single = 0;
+
+struct StepPlan {
+    bool single_threaded;
+    bool big_tasks;
+    int sectors, tasks, bodies, islands;  // the most sectors in a track, tasks and bodies in an island; islands
+};
+
+int track_sectors(const uint8_t* island, uint32_t track) {
+    return *reinterpret_cast<const int*>(island + track + kTrackNumSectors);
+}
+
+int tasks_for(int sectors, int per) { return (sectors + per - 1) / per; }
+
+StepPlan plan_step(const uint8_t* world) {
+    StepPlan plan{};
+    int tasks_big = 0;  // with 8 and 4 sectors per task
+    for (uint32_t list : {kWorldActiveIslands, kWorldInactiveIslands}) {
+        const auto* islands = *reinterpret_cast<const uint8_t* const* const*>(world + list);
+        const int n = *reinterpret_cast<const int*>(world + list + 4);
+        plan.islands += n;
+        for (int i = 0; i < n; ++i) {
+            const int narrow = track_sectors(islands[i], kIslandNarrowphaseTrack);
+            const int mid = track_sectors(islands[i], kIslandMidphaseTrack);
+            plan.sectors = std::max({plan.sectors, narrow, mid});
+            plan.tasks = std::max(plan.tasks, tasks_for(narrow, 4) + tasks_for(mid, 2));
+            tasks_big = std::max(tasks_big, tasks_for(narrow, 8) + tasks_for(mid, 4));
+            plan.bodies = std::max(plan.bodies, *reinterpret_cast<const int*>(islands[i] + kIslandNumEntities));
+        }
+    }
+    plan.big_tasks = plan.tasks > kMaxTasksPlanned;
+    plan.single_threaded = tasks_big > kMaxTasksPlanned || plan.islands > kMaxIslandsOrBodies ||
+                           plan.bodies > kMaxIslandsOrBodies ||
+                           (!g_split_installed && plan.sectors > kMaxJobSectors - kTrackMargin);
+    return plan;
 }
 
 // ---- hooks ----------------------------------------------------------------------------------------------------
@@ -291,13 +472,31 @@ int __fastcall d_sim_step(uint8_t* sim, void* edx, float dt) {
     }
     if (!g_queue) return o_sim_step(sim, edx, dt);
 
+    // The islands against the collide jobs' 16-bit counts (split_big_sector_jobs above).
+    const StepPlan plan = plan_step(world);
+    if (plan.big_tasks != g_big_tasks) {
+        g_big_tasks = plan.big_tasks;
+        *reinterpret_cast<int*>(world + kWorldNarrowphaseSectorsPerTask) = plan.big_tasks ? 8 : g_narrow_per_task;
+        *reinterpret_cast<int*>(world + kWorldMidphaseSectorsPerTask) = plan.big_tasks ? 4 : g_mid_per_task;
+        if (g_plan_logs++ < 50)
+            LOG("experiment HavokThreads: the biggest island needs %d collide tasks: %s sectors per task", plan.tasks,
+                plan.big_tasks ? "8 narrowphase and 4 midphase" : "Havok's");
+    }
+    if (plan.single_threaded) {
+        if (g_steps_single++ % 600 == 0)
+            LOG("experiment HavokThreads: %d islands, up to %d bodies and %d agent sectors in one (%d collide tasks): "
+                "beyond Havok's collide jobs, the step runs single-threaded (%llu so far)", plan.islands, plan.bodies,
+                plan.sectors, plan.tasks, static_cast<unsigned long long>(g_steps_single));
+        return o_sim_step(sim, edx, dt);
+    }
+
     g_step_sim = sim;
     g_step_start.store(session::qpc(), std::memory_order_release);
     // Havok's multithreaded step runs without the world lock (hkReferencedObject::lockAll): jobs that queue world
     // operations take it, so a worker would wait for the sim thread while the sim thread waits for the worker.
     rfg::fn<WorldLockFn>(r::hkpWorld__unlock)(world, nullptr);
     // Multiplayer keeps the step on the sim thread, like the other experiments.
-    int workers = rfg::global<uint8_t>(r::Multiplayer) ? 0 : g_workers;
+    int workers = rfg::global<uint8_t>(r::Multiplayer) || g_jobs_on_sim_thread ? 0 : g_workers;
     if (workers > 0 && ref_lock_count() != 0) {
         if (g_steps_alone++ < 5) LOG("experiment HavokThreads: world lock still held, this step runs on the sim thread");
         workers = 0;
@@ -314,6 +513,7 @@ int __fastcall d_sim_step(uint8_t* sim, void* edx, float dt) {
         process_all_jobs()(g_queue, nullptr, false);
         if (workers > 0) WaitForSingleObject(g_done, INFINITE);
         g_in_jobs.store(false, std::memory_order_relaxed);
+        havok_audit_after_jobs();  // Test.HavokAudit: the islands between the jobs and the step's end
         g_frame_jobs_ms += session::ticks_to_ms(session::qpc() - start);
         ++g_steps;
         // No thread pool: the TOIs and the rest of the step's end run on this thread.
@@ -349,6 +549,9 @@ void* __fastcall d_world_ctor(void* world, void* edx, uint8_t* cinfo, uint32_t v
         if (type == kSimulationMultithreaded) {
             g_world = w;
             game_lock::set(lock);
+            g_narrow_per_task = *reinterpret_cast<const int*>(w + kWorldNarrowphaseSectorsPerTask);
+            g_mid_per_task = *reinterpret_cast<const int*>(w + kWorldMidphaseSectorsPerTask);
+            g_big_tasks = false;
             // Every island is solved inside its own integrate job, as the single-threaded step does. Above this
             // many constraints Havok splits an island's solver into batch and export jobs, and the island's
             // broadphase job then spins (cpuBroadPhaseJob) until the last export job is done; when every thread
@@ -370,8 +573,11 @@ void __fastcall d_world_dtor(void* world, void* edx) {
     if (world == g_world) {
         game_lock::set(nullptr);
         g_world = nullptr;
-        LOG("experiment HavokThreads: world %p destroyed after %llu multithreaded steps", world,
-            static_cast<unsigned long long>(g_steps));
+        LOG("experiment HavokThreads: world %p destroyed after %llu multithreaded steps and %llu single-threaded ones "
+            "for islands beyond Havok's collide jobs; collide jobs split for big agent tracks %u; queued constraint "
+            "changes skipped: %u removals, %u additions", world, static_cast<unsigned long long>(g_steps),
+            static_cast<unsigned long long>(g_steps_single), g_jobs_split.load(), g_removes_skipped.load(),
+            g_adds_skipped.load());
     }
     o_world_dtor(world, edx);
 }
@@ -387,12 +593,72 @@ struct Guarded {
     static bool install(uint32_t rva, const char* name) { return hooks::create(rva, &detour, &original, name); }
 };
 
+// While the jobs run, the constraints a contact gains or loses go into Havok's command queue (hkpDeferredConstraintOwner)
+// and the island's post-collide job replays them (hkPhysicsCommandMachineProcess) through these two. A shockwave mod's
+// hammer blow that shattered a tower into thousands of pieces crashed there: a removal for a constraint no longer in
+// any island (m_owner null, read by hkpWorldConstraintUtil::removeConstraint), left by a post-collide job that never
+// came (the collide jobs' 16-bit counts, split_big_sector_jobs above). Such a removal, or an addition for a
+// constraint already in an island, is still skipped and logged with the constraint's class (its data's vtable) and
+// caller.
+constexpr uint32_t kConstraintOwner = 0x08, kConstraintData = 0x0C, kConstraintEntities = 0x14, kConstraintUid = 0x34;
+using IslandConstraintOp = void(__cdecl*)(void*, uint8_t*);
+IslandConstraintOp o_add_locked = nullptr, o_remove_locked = nullptr;
+
+struct ConstraintInfo {
+    uint32_t data_vtable;  // RVA
+    const void* entities[2];
+    uint32_t uid;
+    bool readable;
+};
+
+ConstraintInfo read_constraint(const uint8_t* c) {  // no C++ objects here: SEH
+    ConstraintInfo out{};
+    __try {
+        const uint8_t* data = *reinterpret_cast<const uint8_t* const*>(c + kConstraintData);
+        out.data_vtable = data ? uint32_t(*reinterpret_cast<const uintptr_t*>(data) - rfg::base()) : 0;
+        memcpy(out.entities, c + kConstraintEntities, sizeof(out.entities));
+        out.uid = *reinterpret_cast<const uint32_t*>(c + kConstraintUid);
+        out.readable = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return out;
+}
+
+void note_skipped(std::atomic<uint32_t>& count, const char* what, const uint8_t* c, const void* caller) {
+    const uint32_t n = count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n > 10 && n % 1000 != 0) return;
+    const ConstraintInfo info = read_constraint(c);
+    LOG("experiment HavokThreads: %s (%u so far): constraint %p, data vtable +%X, entities %p %p, uid %u%s; caller +%X "
+        "on thread %lu%s", what, n, static_cast<const void*>(c), info.data_vtable, info.entities[0], info.entities[1],
+        info.uid, info.readable ? "" : " (unreadable)", uint32_t(reinterpret_cast<uintptr_t>(caller) - rfg::base()),
+        GetCurrentThreadId(), g_in_jobs.load(std::memory_order_relaxed) ? " (in the jobs)" : " (outside the jobs)");
+    if (n <= 10) thread_dump::log_own_stack("experiment HavokThreads:   stack", 32);
+}
+
+void __cdecl d_remove_locked(void* world, uint8_t* c) {
+    if (c && !*reinterpret_cast<void* const*>(c + kConstraintOwner)) {
+        note_skipped(g_removes_skipped, "a constraint removal from an island skipped: it is in none", c,
+                     _ReturnAddress());
+        return;
+    }
+    o_remove_locked(world, c);
+}
+
+void __cdecl d_add_locked(void* world, uint8_t* c) {
+    if (c && *reinterpret_cast<void* const*>(c + kConstraintOwner)) {
+        note_skipped(g_adds_skipped, "a constraint addition to an island skipped: it is in one", c, _ReturnAddress());
+        return;
+    }
+    o_add_locked(world, c);
+}
+
 }  // namespace
 
 bool install_havok_mt(const Config& cfg) {
     if (cfg.exp_havok_threads <= 0) return true;
     g_requested = std::min(cfg.exp_havok_threads, kMaxThreads - 1);
     g_min_island_size = cfg.exp_havok_min_island_size;
+    g_jobs_on_sim_thread = cfg.test_havok_jobs_on_sim_thread;
     bool ok = contacts::install();
     ok &= Guarded<0, void*>::install(r::GeneralCollisionListener__contactPointRemovedCallback,
                                      "GeneralCollisionListener::contactPointRemovedCallback");
@@ -404,8 +670,16 @@ bool install_havok_mt(const Config& cfg) {
                                                    "havok_region_callback_shape::phantomEnterEvent");
     ok &= Guarded<4, void*, void*>::install(r::havok_region_callback_shape__phantomLeaveEvent,
                                             "havok_region_callback_shape::phantomLeaveEvent");
+    ok &= hooks::create(r::hkpWorldOperationUtil__addConstraintToCriticalLockedIsland, &d_add_locked, &o_add_locked,
+                        "hkpWorldOperationUtil::addConstraintToCriticalLockedIsland");
+    ok &= hooks::create(r::hkpWorldOperationUtil__removeConstraintFromCriticalLockedIsland, &d_remove_locked,
+                        &o_remove_locked, "hkpWorldOperationUtil::removeConstraintFromCriticalLockedIsland");
     ok &= hooks::create(r::hkpSimulation__stepDeltaTime, &d_sim_step, &o_sim_step, "hkpSimulation::stepDeltaTime");
     ok &= hooks::create(r::hkpWorld___hkpWorld, &d_world_dtor, &o_world_dtor, "hkpWorld::~hkpWorld");
+    g_split_installed = install_split_big_sector_jobs();
+    if (!g_split_installed)
+        LOG("experiment HavokThreads: unexpected code in hkpSingleThreadedJobsOnIsland::cpuBroadPhaseJob; islands with "
+            "agent tracks near Havok's collide job limit step single-threaded");
     // Last: without every guard in place the world stays single-threaded.
     if (!ok || !hooks::create(r::hkpWorld__hkpWorld, &d_world_ctor, &o_world_ctor, "hkpWorld::hkpWorld")) {
         LOG("experiment HavokThreads: hooks failed, the world stays single-threaded");

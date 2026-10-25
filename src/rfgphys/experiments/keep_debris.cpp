@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <unordered_set>
 #include <vector>
 
 #include "core/config.h"
@@ -14,6 +15,7 @@
 #include "core/session.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
+#include "physx/debris_offload.h"
 #include "telemetry/object_census.h"
 
 namespace experiments {
@@ -169,8 +171,11 @@ constexpr int kGameplayState = 1;  // GS_GAMEPLAY
 
 // Sim thread, end of frame; registered with or without KeepDebris (telemetry reports the zones either way). Zones are
 // only read in gameplay: loading and leaving a level rebuild them.
+void log_shatter_burst(int free_at_start);  // with the shatter hook below
+
 void update_budget(int game_state) {
     if (game_state != kGameplayState) return;
+    log_shatter_burst(kZoneHandles - g_zone_used);
     int used = 0;
     const uint8_t* zone = fullest_zone(used);
     g_zone_used = used;
@@ -214,24 +219,57 @@ bool allow_fade(uint8_t*, uint32_t caller) {
 }
 
 // rfgl_desired_values(rfgl_balance_values* out, int pieces, int flags), called by rfg_dyn_shardify_setup when a
-// chunk shatters: out = {quality_count, delete_count}. The game deletes delete_count pieces on the spot (at least
-// all but 20) and keeps at most Max_quality_objects_per_frame (10) per frame as lasting pieces; the rest become
-// shards that fade after 2-5 s.
+// chunk shatters: out = {quality_count, delete_count}, delete_count = Recent_history_objects * 0.015 * load^2 *
+// pieces and at least all but 20. The setup deletes that many of the small pieces on the spot and keeps at most
+// Max_quality_objects_per_frame (10) per frame as lasting pieces; the rest become shards that fade after 2-5 s.
+// Flags 0x20 (farther than 75 m from the camera, NEAR_PLAYER_DIST_SQRD) and 0x40 (out of view) count at load 1.5 and
+// make the small pieces world-only.
+// delete_count is not capped at the pieces: after a big shatter it is several times their number (12 times when a
+// shockwave mod shattered a building), so only up to `pieces` of it is real. Counting the rest against the zone
+// budget used the budget up within the frame, and the building's other chunks were deleted at once.
+// A frame's shatters are logged when they come to kBurstPieces or more (update_budget).
+constexpr uint32_t kBurstPieces = 500;
+constexpr int kShatterFar = 0x20, kShatterHidden = 0x40;
+std::atomic<uint32_t> g_burst_chunks{0}, g_burst_pieces{0}, g_burst_far{0}, g_burst_hidden{0}, g_burst_kept{0},
+    g_burst_gated{0};
+
 void(__cdecl* o_desired)(int32_t*, int, int);
 void __cdecl d_desired(int32_t* out, int pieces, int flags) {
     o_desired(out, pieces, flags);
     if (!out || !g_on || rfg::global<uint8_t>(r::Multiplayer) != 0) return;
-    const int deletes = out[1] > 0 ? out[1] : 0;
+    const int n = pieces > 0 ? pieces : 0;
+    g_burst_chunks.fetch_add(1, std::memory_order_relaxed);
+    g_burst_pieces.fetch_add(uint32_t(n), std::memory_order_relaxed);
+    if (flags & kShatterFar) g_burst_far.fetch_add(uint32_t(n), std::memory_order_relaxed);
+    if (flags & kShatterHidden) g_burst_hidden.fetch_add(uint32_t(n), std::memory_order_relaxed);
+    const int deletes = std::clamp(out[1], 0, n);
     // The pieces the game creates anyway, then the extra ones that fit while half the zone reserve stays free.
-    const int created = pieces > deletes ? pieces - deletes : 0;
+    const int created = n - deletes;
     const int room = g_zone_free.load(std::memory_order_relaxed) - g_zone_reserve / 2 - created;
     const int kept = room <= 0 ? 0 : room < deletes ? room : deletes;
     g_zone_free.fetch_sub(created + kept, std::memory_order_relaxed);
+    out[1] = deletes - kept;
     if (kept > 0) {
         g_deletes_blocked.fetch_add(uint32_t(kept), std::memory_order_relaxed);
-        out[1] = deletes - kept;
+        g_burst_kept.fetch_add(uint32_t(kept), std::memory_order_relaxed);
     }
-    if (deletes > kept) g_gate_deletes.fetch_add(uint32_t(deletes - kept), std::memory_order_relaxed);
+    if (deletes > kept) {
+        g_gate_deletes.fetch_add(uint32_t(deletes - kept), std::memory_order_relaxed);
+        g_burst_gated.fetch_add(uint32_t(deletes - kept), std::memory_order_relaxed);
+    }
+}
+
+void log_shatter_burst(int free_at_start) {
+    const uint32_t pieces = g_burst_pieces.exchange(0, std::memory_order_relaxed);
+    const uint32_t chunks = g_burst_chunks.exchange(0, std::memory_order_relaxed);
+    const uint32_t distant = g_burst_far.exchange(0, std::memory_order_relaxed);
+    const uint32_t hidden = g_burst_hidden.exchange(0, std::memory_order_relaxed);
+    const uint32_t kept = g_burst_kept.exchange(0, std::memory_order_relaxed);
+    const uint32_t gated = g_burst_gated.exchange(0, std::memory_order_relaxed);
+    if (pieces >= kBurstPieces)
+        LOG("experiment KeepDebris: shatter burst: %u chunks, %u pieces (in shatters over 75 m from the camera %u, out "
+            "of view %u), %u kept from the game's deletion, %u deleted at once (the zone budget, %d handles free)",
+            chunks, pieces, distant, hidden, kept, gated, free_at_start);
 }
 
 // rfg_dyn_maybe_delete(mover, ...): object_mover_process_explosion_hit asks whether an explosion's impulse is strong
@@ -494,6 +532,61 @@ void __fastcall d_mempool_init(uint8_t* pool, void* edx, void* buffer, uint32_t 
     o_mempool_init(pool, edx, buffer, size, name, align, flags);
 }
 
+// ---- restored objects ----------------------------------------------------------------------------------------------
+
+// restore_destroy_object(restored table, handle): an object world::restore_object restores (an activity's building
+// when the activity starts over, a structure the EDF rebuilds) is destroyed, with its descendants, before its zone
+// streams it in again. The debris that broke off it would have faded out long before in the game; kept debris stays,
+// and piled up at a demolition site with every replay of the activity, in the way of the next. It goes along now: the
+// general_movers whose original_object is the restored object, and its pieces in PhysX (debris_offload). The hook
+// only notes the handle: loading a save restores thousands of objects (a pass over the debris for each one froze the
+// load), and the game is still walking the restored object's hierarchy. At the end of the next gameplay frame one
+// pass over the general movers takes the debris of every object restored since.
+constexpr uint32_t kGmOriginalObject = 0x128;  // general_mover::original_object: the object it broke off
+SRWLOCK g_restored_lock = SRWLOCK_INIT;
+std::unordered_set<uint32_t> g_restored_handles;  // under g_restored_lock
+std::atomic<uint32_t> g_restored_debris{0};
+uint32_t g_restore_logs = 0;
+std::vector<uint8_t*> g_restore_matches;  // sim thread
+
+void(__cdecl* o_restore_destroy)(void*, uint32_t) = nullptr;
+void __cdecl d_restore_destroy(void* restored, uint32_t handle) {
+    if (handle != 0xFFFFFFFFu) {
+        AcquireSRWLockExclusive(&g_restored_lock);
+        g_restored_handles.insert(handle);
+        ReleaseSRWLockExclusive(&g_restored_lock);
+    }
+    o_restore_destroy(restored, handle);
+}
+
+// Sim thread, end of a frame: the debris of the objects restored since the last gameplay frame.
+void take_restored_debris(int game_state) {
+    if (game_state != kGameplayState) return;
+    std::unordered_set<uint32_t> handles;
+    AcquireSRWLockExclusive(&g_restored_lock);
+    handles.swap(g_restored_handles);
+    ReleaseSRWLockExclusive(&g_restored_lock);
+    if (handles.empty() || !single_player()) return;
+    uint8_t* w = world();
+    uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
+    const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldGeneralMovers);
+    const int n = *reinterpret_cast<int*>(w + kWorldGeneralMoverCount);
+    g_restore_matches.clear();
+    for (int i = 0; all && movers && i < n; ++i) {
+        uint8_t* obj = all[movers[i]];
+        if (obj && !(obj[kObjFlags] & kObjDestroyed) &&
+            handles.count(*reinterpret_cast<const uint32_t*>(obj + kGmOriginalObject)))
+            g_restore_matches.push_back(obj);
+    }
+    const auto destroy = rfg::fn<bool(__thiscall*)(void*, uint8_t*, bool)>(r::world__destroy_object);
+    for (uint8_t* obj : g_restore_matches) destroy(w, obj, false);
+    g_restored_debris.fetch_add(uint32_t(g_restore_matches.size()), std::memory_order_relaxed);
+    debris_offload::forget_pieces_of(handles);
+    if (!g_restore_matches.empty() && g_restore_logs++ < 20)
+        LOG("experiment KeepDebris: %zu objects restored; the %u pieces of debris that broke off them go with them",
+            handles.size(), uint32_t(g_restore_matches.size()));
+}
+
 // havok_memory_listener::allocationFailure(size): the game prints Havok's memory statistics and then loops forever.
 // With kept debris that can happen; end the game with a log line instead of a frozen window.
 void(__fastcall* o_allocation_failure)(void*, void*, uint32_t);
@@ -531,6 +624,12 @@ bool install_keep_debris(const Config& cfg) {
         } else {
             LOG("experiment DebrisPool: the world is already initialized; general_mover's object lists stay at 3,072");
         }
+    }
+    // Kept debris and pieces in PhysX outlive what they broke off; a restored object takes them along.
+    if (cfg.exp_keep_debris || cfg.exp_physx_debris) {
+        if (!hooks::create(r::restore_destroy_object, &d_restore_destroy, &o_restore_destroy, "restore_destroy_object"))
+            return false;
+        session::add_frame_callback(&take_restored_debris);
     }
     if (!cfg.exp_keep_debris) return true;
     if (!census::install()) return false;

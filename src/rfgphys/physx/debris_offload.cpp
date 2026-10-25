@@ -49,6 +49,8 @@ constexpr uint32_t kMoverFlags = 0xE0, kMoverLoadBalanced = 4, kMoverFading = 0x
 constexpr uint32_t kMoverChunkUid = 0xA4;  // object_mover::chunk_uid: (c_chunk_base::internal_uid << 16) | pool index
 constexpr uint32_t kNoChunk = 0xFFFFFFFFu;
 constexpr uint32_t kGmRenderInstance = 0x118;  // general_mover::rdd.model_instance_p
+constexpr uint32_t kGmOriginalObject = 0x128;  // general_mover::original_object: the object it broke off
+constexpr uint32_t kNoObject = 0xFFFFFFFFu;
 // world_zone: state (2: loaded), its obj_zone, its name.
 constexpr uint32_t kZoneState = 0x58, kZoneObj = 0xD4, kZoneName = 0x18;
 constexpr int32_t kZoneLoaded = 2;
@@ -98,6 +100,7 @@ struct Piece {
     float radius = 0;         // of those bounds around its origin
     uint32_t srid = 0;        // the chunk reference its general_mover held (0: none), given back with the piece
     uint32_t chunk_uid = kNoChunk;  // its building's chunk
+    uint32_t original = kNoObject;  // the object it broke off (its general_mover's original_object)
 };
 std::vector<Piece> g_pieces;
 std::vector<uint32_t> g_free;
@@ -106,6 +109,7 @@ uint32_t g_next_shape = 1;
 bool g_player_ready = false;
 FrameStats g_stats{};
 uint64_t g_total_adopted = 0;
+uint64_t g_adopted_faded = 0;  // went over faded by distance (their instances keep the opacity)
 // Masses of the pieces taken over, by powers of two (bucket b: [2^(b-1), 2^b) kg; 0: under 1 kg), and how the game
 // decides between pushing a body out of the player's way and standing on it (character_controller_should_push_away:
 // lighter than Character_collision_push_away_mass is pushed).
@@ -375,6 +379,27 @@ uint8_t* waiting_object(uint32_t handle, const uint8_t* inst) {
     return obj;
 }
 
+void push_new_piece_by_blow(const uint8_t* body, uint32_t handle, uint32_t now_ms);  // with the melee blows below
+
+// general_mover::update_render_opacity fades a debris piece out once its body rests beyond 35 or 50 m from the camera
+// (Shard_fade_dist0_sqr, _dist1_sqr) and back in when the camera comes near. A piece handed over faded out kept its
+// render instance's opacity, and nothing fades a piece in PhysX back in: rubble a shockwave mod's blow threw that far
+// vanished. Pieces in PhysX stay visible at any distance, so the pieces still waiting in Havok do too: they fade with
+// the threshold the game gives moving debris (back in when faded, never out). Fades for deletion are unchanged.
+constexpr uint32_t kMoverPermanent = 2;  // never distance-faded by the game either
+constexpr uint32_t kObjRenderAlpha = 0xA0;  // uint16, Lparam_super_overbrighten when fully visible
+constexpr float kNoDistanceFade = 1e8f;  // the game's threshold for moving debris (squared metres)
+void(__fastcall* o_update_render_opacity)(uint8_t*, void*) = nullptr;
+void __fastcall d_update_render_opacity(uint8_t* mover, void* edx) {
+    const uint32_t mflags = *reinterpret_cast<const uint32_t*>(mover + kMoverFlags);
+    if (g_on && (mflags & kMoverLoadBalanced) && !(mflags & kMoverPermanent) &&
+        *reinterpret_cast<const int32_t*>(mover + kObjHavokHandle) != -1 && rfg::global<uint8_t>(r::Multiplayer) == 0) {
+        rfg::fn<int(__thiscall*)(uint8_t*, float, float)>(r::object_mover__handle_fading)(mover, 0.0f, kNoDistanceFade);
+        return;
+    }
+    o_update_render_opacity(mover, edx);
+}
+
 void adopt() {
     uint8_t* w = world();
     uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
@@ -412,7 +437,9 @@ void adopt() {
         const uint32_t obj_handle = *reinterpret_cast<const uint32_t*>(obj + kObjHandle);
         bool at_rest = false, waited = false;
         if (g_adopt_delay_ms) {
-            Waiting& wt = g_first_seen.try_emplace(obj_handle, Waiting{now_ms, 0, false}).first->second;
+            const auto [seen, first_sight] = g_first_seen.try_emplace(obj_handle, Waiting{now_ms, 0, false});
+            Waiting& wt = seen->second;
+            if (first_sight) push_new_piece_by_blow(body, handle, now_ms);
             const float* lv = reinterpret_cast<const float*>(body + kBodyLinVel);
             const float* av = reinterpret_cast<const float*>(body + kBodyAngVel);
             const bool calm = lv[0] * lv[0] + lv[1] * lv[1] + lv[2] * lv[2] < kCalmSpeed * kCalmSpeed &&
@@ -459,10 +486,14 @@ void adopt() {
         // reference on its chunk becomes the piece's too (with srid cleared world::free_object keeps it): without it
         // the chunk unloaded once the building's zone streamed out, the pieces drawing from freed memory (the first
         // campaign session: stretched triangles at a distance, then a crash in rl_scene_renderer::render).
+        if (*reinterpret_cast<const uint16_t*>(obj + kObjRenderAlpha) <
+            uint16_t(rfg::global<uint32_t>(r::Lparam_super_overbrighten)))
+            ++g_adopted_faded;
         const uint32_t srid = *reinterpret_cast<const uint32_t*>(obj + kObjSrid);
         const bool holds = srid && (obj[kObjStreamFlags] & kObjStreamHeld);
         if (holds) *reinterpret_cast<uint32_t*>(obj + kObjSrid) = 0;
         const uint32_t chunk_uid = *reinterpret_cast<const uint32_t*>(obj + kMoverChunkUid);
+        const uint32_t original = *reinterpret_cast<const uint32_t*>(obj + kGmOriginalObject);
         *reinterpret_cast<uint8_t**>(obj + kGmRenderInstance) = nullptr;
         // Its collision shape outlives its body: the piece's stand-ins use it (a convex vertices shape owns its
         // data; any other kind is left alone, and its stand-ins are boxes).
@@ -482,6 +513,7 @@ void adopt() {
         p.fresh = 1;
         p.srid = holds ? srid : 0;
         p.chunk_uid = chunk_uid;
+        p.original = original;
         if (chunk_uid != kNoChunk) ++g_chunk_pieces[chunk_uid];
         ++(holds ? g_refs_taken : g_refs_missing);
         if (g_drop_meshes) {
@@ -1349,13 +1381,20 @@ uint32_t stand_in_piece_at(const float* point, float slack = kHitSlack) {
     return best;
 }
 
+// The most a blow speeds a piece up, as Havok caps a body's speed: a mod's melee moves push with 40,000 N*s, which
+// sent a 2 kg piece off at 20 km/s.
+constexpr float kBlowMaxSpeed = 40.0f;  // m/s
+
 void push_piece(uint32_t slot, const float j[3], const float at[3], const char* what) {
     if (!(std::isfinite(j[0]) && std::isfinite(j[1]) && std::isfinite(j[2]))) return;
+    const float mass = std::max(g_pieces[slot].mass, 1.0f);
+    const float speed = std::sqrt(j[0] * j[0] + j[1] * j[1] + j[2] * j[2]) / mass;
+    const float scale = speed > kBlowMaxSpeed ? kBlowMaxSpeed / speed : 1.0f;
     ipc::Impulse c{};
     c.h = {uint16_t(ipc::Cmd::Impulse), 0, sizeof(c)};
     c.slot = slot;
     c.mode = ipc::kExplosionImpulse;
-    c.impulse = {j[0], j[1], j[2]};
+    c.impulse = {j[0] * scale, j[1] * scale, j[2] * scale};
     c.point = {at[0], at[1], at[2]};
     if (!pxbridge::send_record(&c, sizeof(c))) return;
     if (g_hits_logged < 12) {
@@ -1366,10 +1405,12 @@ void push_piece(uint32_t slot, const float j[3], const float at[3], const char* 
     }
 }
 
+thread_local bool g_in_wide_blow = false;  // within a blow passed on whole (below): its stand-in hits are part of it
+
 bool __fastcall d_zone_melee(void* self, void* edx, void* attacker, float damage, const float* impulse,
                              const float* pos, const float* c, uint32_t u, void* weapon) {
     const bool result = o_zone_melee(self, edx, attacker, damage, impulse, pos, c, u, weapon);
-    if (g_on && impulse && pos) {
+    if (g_on && impulse && pos && !g_in_wide_blow) {
         const uint32_t slot = stand_in_piece_at(pos);
         if (slot != kNoSlot) {
             push_piece(slot, impulse, pos, "melee blow");
@@ -1390,6 +1431,137 @@ void __fastcall d_zone_bullet(void* self, void* edx, void* shooter, float damage
     const float j[3] = {-hit_normal[0] * k, -hit_normal[1] * k, -hit_normal[2] * k};
     push_piece(slot, j, hit_pos, "bullet");
     ++g_bullet_hits;
+}
+
+// A melee blow sweeps a sphere, the move's cast_radius, along the path of its attack points, one stretch a frame
+// (process_continuous_attack_point -> human_combat_process_hits), and pushes each object it hits once:
+// impact_impulse * (the blow's direction + the attacker's forward vector * away_impulse_scale)
+// (human_combat_unified_melee_hit). The game's moves sweep 0.4 m and reach the pieces through their stand-ins. A mod
+// that enlarges them (Sledge's Sledgehammer Shockwave: up to 35 m, and 6 x 6,000 N*s) reaches far past the stand-ins,
+// so a wide blow goes to the host whole (ipc::MeleeSweep): every piece the sphere sweeps gets the push once (the host
+// knows the blow by its id), at most kBlowMaxSpeed, and the stand-ins' own hits are left out. A blow is its attacker's
+// calls with one move, under kBlowGapMs apart; of its stretches only the first and those reaching kBlowNewReach of the
+// sphere past the last one sent go, so a swing is one or two sweeps, not one a frame. Queued, as the explosions are,
+// for the sim thread to send.
+constexpr float kWideBlowRadius = 1.0f;  // m: a sphere wider than any of the game's own moves
+constexpr uint32_t kBlowGapMs = 250;
+constexpr float kBlowNewReach = 0.25f;
+constexpr uint32_t kHumanMeleeMove = 0x97C;  // human::combat.cur_melee_combat_move (human_combat at +0x928, +0x54)
+constexpr uint32_t kObjForward = 0x28;       // object::orient.fvec
+// human_melee_combat_move_data
+constexpr uint32_t kMoveCastRadius = 0x14, kMoveImpactImpulse = 0x28, kMoveAwayScale = 0x30;
+struct Blow {
+    const void* attacker;
+    const void* move;
+    uint32_t id;
+    uint32_t last_ms;
+    float sent_end[3];  // where the last sweep sent ended
+    float a[3], b[3];   // its first stretch
+    float radius;
+    float impulse[3];
+};
+CRITICAL_SECTION g_blow_lock;
+std::vector<Blow> g_blows;  // the attackers' current blows (a few)
+std::vector<ipc::MeleeSweep> g_sweeps_pending;
+uint32_t g_next_blow_id = 1, g_wide_blows = 0, g_sweeps_sent = 0;
+
+// A wide blow lingers kBlowLingerMs past its last stretch. The pieces of what it shattered come out of the
+// destruction a step or more later (rfg_dyn_do_collide_post, inside the next Havok steps), after the game's sphere
+// cast is done, so they fell where they broke off and only the next blow threw them; a piece that appears inside the
+// blow's sphere meanwhile gets the blow's push in Havok, as the objects it hit did.
+constexpr uint32_t kBlowLingerMs = 1000;
+uint32_t g_late_pushes = 0;
+
+void push_new_piece_by_blow(const uint8_t* body, uint32_t handle, uint32_t now_ms) {
+    const hs::Transform t = hs::body_transform(body);
+    float j[3];
+    bool inside = false;
+    EnterCriticalSection(&g_blow_lock);
+    for (const Blow& w : g_blows) {
+        if (now_ms - w.last_ms > kBlowLingerMs) continue;
+        const float ab[3] = {w.b[0] - w.a[0], w.b[1] - w.a[1], w.b[2] - w.a[2]};
+        const float ap[3] = {t.pos[0] - w.a[0], t.pos[1] - w.a[1], t.pos[2] - w.a[2]};
+        const float len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+        float s = len2 > 0.0f ? (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / len2 : 0.0f;
+        s = s < 0.0f ? 0.0f : s > 1.0f ? 1.0f : s;
+        const float d[3] = {ap[0] - ab[0] * s, ap[1] - ab[1] * s, ap[2] - ab[2] * s};
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > w.radius * w.radius) continue;
+        memcpy(j, w.impulse, sizeof(j));
+        inside = true;
+        break;
+    }
+    LeaveCriticalSection(&g_blow_lock);
+    if (!inside) return;
+    const float speed = std::sqrt(j[0] * j[0] + j[1] * j[1] + j[2] * j[2]) * *reinterpret_cast<const float*>(body + kBodyInvMass);
+    if (speed > kBlowMaxSpeed)
+        for (float& v : j) v *= kBlowMaxSpeed / speed;
+    rfg::fn<void(__cdecl*)(uint32_t, const float*)>(r::havok_body_apply_linear_impulse_by_handle)(handle, j);
+    ++g_late_pushes;
+}
+
+void(__cdecl* o_combat_hits)(void*, void*, bool) = nullptr;
+void __cdecl d_combat_hits(void* human, void* input, bool secondary) {
+    const auto* h = static_cast<const uint8_t*>(human);
+    const uint8_t* move = h ? *reinterpret_cast<const uint8_t* const*>(h + kHumanMeleeMove) : nullptr;
+    const float radius = move ? *reinterpret_cast<const float*>(move + kMoveCastRadius) : 0.0f;
+    if (!g_on || !input || !(radius >= kWideBlowRadius) || radius > 500.0f) {
+        o_combat_hits(human, input, secondary);
+        return;
+    }
+    // raycast_input: start at +0, end at +0xC (the attack point a frame ago and now).
+    float a[3], b[3];
+    memcpy(a, input, sizeof(a));
+    memcpy(b, static_cast<const uint8_t*>(input) + 0xC, sizeof(b));
+    g_in_wide_blow = true;
+    o_combat_hits(human, input, secondary);
+    g_in_wide_blow = false;
+
+    float d[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    for (float& v : d) v = len > 1e-4f ? v / len : 0.0f;
+    const float* fwd = reinterpret_cast<const float*>(h + kObjForward);
+    const float away = *reinterpret_cast<const float*>(move + kMoveAwayScale);
+    const float impact = *reinterpret_cast<const float*>(move + kMoveImpactImpulse);
+    ipc::MeleeSweep s{};
+    s.h = {uint16_t(ipc::Cmd::MeleeSweep), 0, sizeof(s)};
+    s.start = {a[0], a[1], a[2]};
+    s.end = {b[0], b[1], b[2]};
+    s.radius = radius;
+    s.max_speed = kBlowMaxSpeed;
+    s.impulse = {(d[0] + fwd[0] * away) * impact, (d[1] + fwd[1] * away) * impact, (d[2] + fwd[2] * away) * impact};
+    if (!(std::isfinite(s.impulse.x) && std::isfinite(s.impulse.y) && std::isfinite(s.impulse.z))) return;
+
+    const uint32_t now_ms = rfg::global<uint32_t>(r::Frametime_total_milliseconds);
+    EnterCriticalSection(&g_blow_lock);
+    auto it = std::find_if(g_blows.begin(), g_blows.end(), [&](const Blow& w) { return w.attacker == human; });
+    bool send = true;
+    if (it == g_blows.end() || it->move != move || now_ms - it->last_ms > kBlowGapMs) {
+        if (it == g_blows.end()) {
+            if (g_blows.size() >= 64) g_blows.erase(g_blows.begin());
+            it = g_blows.insert(g_blows.end(), Blow{});
+        }
+        *it = Blow{human, move, g_next_blow_id++, now_ms, {b[0], b[1], b[2]}, {a[0], a[1], a[2]}, {b[0], b[1], b[2]},
+                   radius, {s.impulse.x, s.impulse.y, s.impulse.z}};
+        ++g_wide_blows;
+    } else {
+        const float dx = b[0] - it->sent_end[0], dy = b[1] - it->sent_end[1], dz = b[2] - it->sent_end[2];
+        send = dx * dx + dy * dy + dz * dz > (kBlowNewReach * radius) * (kBlowNewReach * radius);
+        it->last_ms = now_ms;
+        if (send) memcpy(it->sent_end, b, sizeof(b));
+    }
+    s.blow = it->id;
+    if (send && g_sweeps_pending.size() < 256) g_sweeps_pending.push_back(s);
+    LeaveCriticalSection(&g_blow_lock);
+}
+
+void send_melee_sweeps() {
+    static std::vector<ipc::MeleeSweep> batch;
+    EnterCriticalSection(&g_blow_lock);
+    batch.swap(g_sweeps_pending);
+    LeaveCriticalSection(&g_blow_lock);
+    for (const ipc::MeleeSweep& s : batch)
+        if (pxbridge::send_record(&s, sizeof(s))) ++g_sweeps_sent;
+    batch.clear();
 }
 
 bool patch_zone_hits() {
@@ -2078,6 +2250,29 @@ void recycle_far_pieces() {
     g_recycled_total += n;
 }
 
+// A restored object (world::restore_object: destroyed and streamed in again, as an activity's building when the
+// activity starts over) takes the pieces that broke off it along: in the game they would have faded out long before.
+// They go at the next handshake, where render instances may be released.
+// One pass over the pieces for all of them (a save's load restores thousands of objects).
+std::unordered_set<uint32_t> g_restored;  // sim thread: handles of restored objects
+uint64_t g_restored_pieces = 0;
+uint32_t g_restore_logs = 0;
+
+void forget_restored() {
+    if (g_restored.empty()) return;
+    uint32_t n = 0;
+    for (uint32_t s = 0; s < g_slots; ++s)
+        if (g_pieces[s].inst && g_restored.count(g_pieces[s].original)) {
+            give_up(s, true);
+            ++n;
+        }
+    g_restored_pieces += n;
+    if (n && g_restore_logs++ < 20)
+        LOG("debris offload: %zu objects were restored; the %u pieces that broke off them went with them",
+            g_restored.size(), n);
+    g_restored.clear();
+}
+
 // Telemetry.RenderRouting: the render threads tell the pieces apart with a sorted copy of their instances.
 void publish_for_routing() {
     static uint32_t frame = 0;
@@ -2095,6 +2290,7 @@ void __cdecl render_task(void*, int) {
     release_chunk_refs();
     if (!pxbridge::ready() || rfg::gameseq_get_state() != kGameplay) return;
     const int64_t t0 = session::qpc();
+    forget_restored();
     move_pieces();
     batch_waiting();
     recycle_far_pieces();
@@ -2139,6 +2335,7 @@ void on_frame(int game_state) {
     }
     const int64_t t0 = session::qpc();
     send_explosions();
+    send_melee_sweeps();
     if (world_mirror::ready()) adopt();  // not before the pieces have a world to land on
     player_proxy();
     move_vehicles();
@@ -2344,6 +2541,12 @@ void on_exit(bool) {
     LOG("debris offload: %llu pieces taken over (%llu fell through the world); %u explosions sent to the host (%u went "
         "off at a stand-in); the game's explosion kicks: %u, %.2f m/s mean, %.2f max", g_total_adopted, g_fell,
         g_expl_forwarded, g_expl_at_stand_ins, g_kick_n, g_kick_n ? g_kick_sum / g_kick_n : 0.0, g_kick_max);
+    if (g_adopted_faded)
+        LOG("debris offload: %llu pieces went over faded by distance (not fully visible)", g_adopted_faded);
+    if (g_wide_blows)
+        LOG("debris offload: %u melee blows wider than the game's (a mod's moves) passed on to the pieces, in %u "
+            "sweeps; %u pieces that came out of what they shattered got their push", g_wide_blows, g_sweeps_sent,
+            g_late_pushes);
     if (g_batch)
         LOG("debris offload: batchable bit set again %u times (the game's compiled meshes clear it)", g_batch_restored);
     if (g_drop_meshes)
@@ -2351,6 +2554,8 @@ void on_exit(bool) {
             g_recompiles_skipped);
     if (g_recycled_total)
         LOG("debris offload: %llu pieces far from the player given up for render instances", g_recycled_total);
+    if (g_restored_pieces)
+        LOG("debris offload: %llu pieces went with the restored objects they broke off", g_restored_pieces);
     LOG("debris offload: chunk references taken over from the movers: %llu (%llu pieces came without one), %llu given "
         "back; %u zones streamed out, %llu pieces went with them; %u chunks unloaded under pieces (%llu pieces)",
         g_refs_taken, g_refs_missing, g_refs_released, g_zones_out, g_zone_pieces_released, g_chunks_out_under_pieces,
@@ -2388,6 +2593,7 @@ void __cdecl d_level_shutdown() {
         const size_t refs = g_refs_to_release.size();
         release_chunk_refs();
         g_chunk_pieces.clear();
+        g_restored.clear();
         if (n) LOG("debris offload: level end, %u render instances released, %zu chunk references given back", n, refs);
         log_masses("level end");
         memset(g_mass_hist, 0, sizeof(g_mass_hist));
@@ -2401,6 +2607,10 @@ void __cdecl d_level_shutdown() {
         g_first_seen.clear();
         g_waiting_list.clear();
         g_waiting = g_waiting_peak = g_went_at_rest = g_went_moving = 0;
+        EnterCriticalSection(&g_blow_lock);
+        g_blows.clear();
+        g_sweeps_pending.clear();  // sent before pxbridge::reset() would land in the next level
+        LeaveCriticalSection(&g_blow_lock);
         if (g_vehicle_proxies_made || g_chunk_proxies_made)
             LOG("debris offload: level end; bodies pushing the pieces in the host: %u of vehicles, %u of loose building "
                 "chunks (%u at most at once; %u shapes unreadable, %u too large)", g_vehicle_proxies_made,
@@ -2425,9 +2635,13 @@ bool install(const Config& cfg) {
     for (uint32_t s = g_vehicle_first; s-- > 0;) g_free.push_back(s);  // pop_back hands out 0, 1, 2, ...
     reset_vehicles();
     InitializeCriticalSection(&g_expl_lock);
+    InitializeCriticalSection(&g_blow_lock);
     bool ok = hooks::create(r::explosion_create, &d_explosion, &o_explosion, "explosion_create");
+    ok &= hooks::create(r::human_combat_process_hits, &d_combat_hits, &o_combat_hits, "human_combat_process_hits");
     ok &= hooks::create(r::havok_body_apply_linear_impulse_by_handle, &d_impulse, &o_impulse,
                         "havok_body_apply_linear_impulse(handle)");
+    ok &= hooks::create(r::general_mover__update_render_opacity, &d_update_render_opacity, &o_update_render_opacity,
+                        "general_mover::update_render_opacity");
     ok &= hooks::create(r::object_level_shutdown, &d_level_shutdown, &o_level_shutdown, "object_level_shutdown");
     ok &= hooks::create(r::world__destream_zone, &d_destream_zone, &o_destream_zone, "world::destream_zone");
     ok &= hooks::create(r::chunk_base_unload_internal, &d_chunk_unload, &o_chunk_unload, "chunk_base_unload_internal");
@@ -2486,6 +2700,18 @@ std::vector<uint32_t> pieces_near(const float center[3], float radius) {
         if (dx * dx + dy * dy + dz * dz < radius * radius) out.push_back(i);
     }
     return out;
+}
+
+void forget_pieces_of(const std::unordered_set<uint32_t>& object_handles) {
+    if (!g_on) return;
+    for (const uint32_t handle : object_handles)
+        if (handle != kNoObject) g_restored.insert(handle);
+}
+
+uint32_t count_pieces_of(uint32_t object_handle) {
+    uint32_t n = 0;
+    for (uint32_t s = 0; g_on && s < g_slots; ++s) n += g_pieces[s].inst && g_pieces[s].original == object_handle;
+    return n;
 }
 
 bool piece_position(uint32_t slot, float out[3]) {

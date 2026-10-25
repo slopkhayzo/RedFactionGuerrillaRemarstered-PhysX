@@ -16,6 +16,15 @@ foreach ($f in 'dinput8.ini', 'dinput8.log') {
     $p = Join-Path $GameDir $f
     if (Test-Path $p) { Remove-Item $p }
 }
+# The loader as winmm.dll, next to another mod's dinput8.dll (tools\deploy.ps1).
+$altLoader = Join-Path $GameDir 'winmm.dll'
+if ((Test-Path $altLoader) -and (Get-FileHash $altLoader -Algorithm SHA256).Hash -eq $ualHash) {
+    Remove-Item $altLoader
+    foreach ($f in 'winmm.ini', 'winmm.log') {
+        $p = Join-Path $GameDir $f
+        if (Test-Path $p) { Remove-Item $p }
+    }
+}
 
 $scripts = Join-Path $GameDir 'scripts'
 foreach ($f in 'rfgphys.asi', 'rfgphys.pdb', 'rfgphys_installed_package.txt', 'rfgphysx\rfgphysx_host.exe',

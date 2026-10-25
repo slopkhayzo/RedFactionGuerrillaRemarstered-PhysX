@@ -9,7 +9,7 @@ What it does
 - Debris pieces collide with each other and pile up, explosions throw piles around, and you can stand on heavy
   rubble while lighter pieces get pushed aside.
 - Vehicles and walkers push rubble out of their way, rockets strike piles, and the sledgehammer and bullets knock
-  pieces around.
+  pieces around. Mods that widen the sledgehammer's blow (Sledge's Sledgehammer Shockwave) throw the rubble too.
 - Flying and falling debris still smashes what it hits, as in the game: new pieces stay with the game's own physics
   for two seconds before PhysX takes them over.
 - The game's own physics (Havok) runs on several CPU cores.
@@ -43,6 +43,10 @@ It adds:
     scripts\rfgphysx\                the PhysX process (rfgphysx_host.exe, PhysXGpu_64.dll); keep it next to
                                      rfgphys.asi
     CrashDumps\                      crash reports (see below)
+
+With Sledge (the mod manager), which brings a dinput8.dll of its own that loads only Sledge, this mod's loader goes
+in as winmm.dll instead: rename this mod's dinput8.dll to winmm.dll, then extract Sledge (again, if it was there
+first). To update this mod later, extract the archive without the loader.
 
 Settings
 --------

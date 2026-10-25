@@ -7,6 +7,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <iterator>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "core/log.h"
 #include "core/session.h"
 #include "game/rfg.h"
+#include "physx/world_mirror.h"
 
 namespace zone_cycle {
 namespace {
@@ -43,6 +45,7 @@ constexpr size_t kExplosionsPerFrame = 4;
 // start; blow up what is near once more. At most kMaxHops each way.
 enum Phase { kWait, kAway, kGone, kHome, kBack, kDone };
 constexpr double kFirstAt = 20, kHopEvery = 15, kGoneFor = 15, kBackFor = 20;
+constexpr double kCheckBackAt = 10;  // s back home: the mirror is checked again (with Experiment.PhysXWorldCheck)
 constexpr int kMaxHops = 4;
 
 struct Point {
@@ -53,14 +56,20 @@ Phase g_phase = kWait;
 double g_phase_at = 0;
 int g_phase_hops = 0;
 bool g_logged_after = false;
+bool g_checked_back = false, g_checked_away = false;
 // A teleport to ground not loaded yet leaves the player hanging there (find_place_to_stand finds no terrain); once the
-// zones around have streamed in, a second teleport to the same spot puts the player on the ground.
-constexpr double kLandAfter = 8;
+// zones around have streamed in, strict teleports find the ground (land). Until then the player is held where the hop
+// left them, every frame, above the zone's highest point: a fall through ground not loaded yet killed the player (and
+// the test) in a save that starts elsewhere, and so did a hop aimed below the ground there. The landing is tried every
+// frame for kLandFor seconds.
+constexpr double kLandAfter = 8, kLandFor = 10;
 double g_land_at = -1;
-Point g_land_pos{};
+Point g_land_pos{}, g_hold{};
 std::vector<Point> g_targets, g_queue;
 Point g_start{};
 int g_hops = 0;
+int g_tour = 0;              // Test.ZoneTour: hops in all (0: the cycle)
+std::mt19937 g_tour_rng(2026);
 const uint8_t* g_info = nullptr;
 
 uint8_t* world() { return static_cast<uint8_t*>(rfg::addr(r::World)); }
@@ -163,6 +172,23 @@ bool teleport(uint8_t* player, const Point& to) {
     return moved > 50.0f;
 }
 
+// Strict teleports from low to high, each finding ground within 40 m of its point (the ground's height is not known;
+// visit.cpp does the same): whether the player moved, onto the ground near (x, z).
+bool land(uint8_t* player, const Point& at) {
+    const float* now = reinterpret_cast<const float*>(player + kObjPos);
+    const float from[3] = {now[0], now[1], now[2]};
+    float orient[9];
+    memcpy(orient, player + kObjOrient, sizeof(orient));
+    for (float y = -40.0f; y <= 400.0f; y += 60.0f) {
+        float dest[3] = {at.p[0], y, at.p[2]};
+        rfg::fn<void(__cdecl*)(void*, float*, float*, float, bool)>(r::human_teleport)(player, dest, orient, 40.0f,
+                                                                                    true);
+        const float dx = now[0] - from[0], dy = now[1] - from[1], dz = now[2] - from[2];
+        if (dx * dx + dy * dy + dz * dz > 0.25f) return true;
+    }
+    return false;
+}
+
 // A hop: to the centre of a loaded zone 450-800 m from the player (only a loaded zone has ground to stand on), away
 // from the start as far as possible, or home: straight to the start once its zone is loaded, else the loaded zone
 // centre nearest to it.
@@ -186,16 +212,19 @@ void hop(uint8_t* player, bool home, double t) {
         if (!z || *reinterpret_cast<const int32_t*>(z + kZoneState) != kZoneLoaded) continue;
         const float* lo = reinterpret_cast<const float*>(z + kZoneBmin);
         const float* hi = reinterpret_cast<const float*>(z + kZoneBmax);
-        const Point c{{0.5f * (lo[0] + hi[0]), pos[1] + 30.0f, 0.5f * (lo[2] + hi[2])}};
+        const Point c{{0.5f * (lo[0] + hi[0]), hi[1] + 20.0f, 0.5f * (lo[2] + hi[2])}};
         const float d = dist_xz(c.p, pos), from_start = dist_xz(c.p, g_start.p);
         if (d >= kHopMin && d <= kHopMax) candidates.push_back({home ? from_start : -from_start, c});
     }
     std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (g_tour > 0 && candidates.size() > 1)  // a tour wanders: the first candidate tried is a random one
+        std::swap(candidates[0], candidates[g_tour_rng() % candidates.size()]);
     LOG("zone cycle: hop %d (%s): %d zones loaded, %zu loaded zone centres %.0f-%.0f m away", ++g_hops,
         home ? "towards the start" : "away", loaded_zones(), candidates.size(), double(kHopMin), double(kHopMax));
     for (size_t i = 0; i < candidates.size() && i < 4; ++i)
         if (teleport(player, candidates[i].second)) {
             g_land_pos = candidates[i].second;
+            memcpy(g_hold.p, pos, sizeof(g_hold.p));
             g_land_at = t + kLandAfter;
             return;
         }
@@ -239,16 +268,29 @@ void on_frame(int game_state) {
     if (!player) return;
     const float* pos = reinterpret_cast<const float*>(player + kObjPos);
     const double in_phase = t - g_phase_at;
-    if (g_land_at >= 0 && t >= g_land_at) {
-        g_land_at = -1;
+    if (g_land_at >= 0) {
         const float y = pos[1];
-        Point dest = g_land_pos;
-        float orient[9];
-        memcpy(orient, player + kObjOrient, sizeof(orient));
-        rfg::fn<void(__cdecl*)(void*, float*, float*, float, bool)>(r::human_teleport)(player, dest.p, orient, 40.0f,
-                                                                                    true);
-        LOG("zone cycle: landing: height %.0f -> %.0f m", double(y), double(pos[1]));
-        log_streaming("after landing", pos);
+        const bool landed = t >= g_land_at && land(player, g_land_pos);
+        if (landed || t >= g_land_at + kLandFor) {
+            g_land_at = -1;
+            LOG("zone cycle: landing: height %.0f -> %.0f m%s", double(y), double(pos[1]),
+                landed ? "" : " (no ground found: left hanging)");
+            log_streaming("after landing", pos);
+            if (landed && (!g_checked_away || g_tour > 0)) {
+                g_checked_away = true;
+                world_mirror::check_again();  // where the zones that streamed in brought new ground
+            }
+            if (landed && g_tour > 0) {
+                pick_near(pos);
+                blast();
+            }
+        } else {
+            float orient[9];
+            memcpy(orient, player + kObjOrient, sizeof(orient));
+            Point hold = g_hold;
+            rfg::fn<void(__cdecl*)(void*, float*, float*, float, bool)>(r::human_teleport)(player, hold.p, orient, 0.0f,
+                                                                                        false);  // right there, hanging
+        }
     }
     switch (g_phase) {
     case kWait:
@@ -263,6 +305,18 @@ void on_frame(int game_state) {
         if (g_phase_hops > 0 && !g_logged_after && in_phase >= kHopEvery * g_phase_hops + 5) {
             g_logged_after = true;
             log_streaming("5 s after the hop", pos);
+        }
+        if (g_tour > 0) {
+            if (in_phase < kHopEvery * (g_phase_hops + 1) || g_land_at >= 0) break;
+            if (g_phase_hops++ >= g_tour) {
+                LOG("zone cycle: tour done after %d hops, %.0f m from the start", g_tour, double(dist_xz(pos, g_start.p)));
+                rfg::global<uint8_t>(r::Stream_follows_player) = 0;
+                enter(kDone, t);
+            } else {
+                hop(player, false, t);
+                g_logged_after = false;
+            }
+            break;
         }
         if (!start_zone_loaded()) {
             LOG("zone cycle: the start's zone has streamed out (%.0f m away, %d hops)", double(dist_xz(pos, g_start.p)),
@@ -295,6 +349,10 @@ void on_frame(int game_state) {
         }
         break;
     case kBack:
+        if (!g_checked_back && in_phase >= kCheckBackAt) {
+            g_checked_back = true;
+            world_mirror::check_again();  // the zones streamed out and in again: does the mirror still hold the ground?
+        }
         if (in_phase >= kBackFor) {
             pick_near(pos);
             blast();
@@ -311,10 +369,15 @@ void on_frame(int game_state) {
 }  // namespace
 
 bool install(const Config& cfg) {
-    if (!cfg.test_zone_cycle) return true;
+    if (!cfg.test_zone_cycle && cfg.test_zone_tour <= 0) return true;
+    g_tour = cfg.test_zone_tour;
     session::add_frame_callback(&on_frame);
-    LOG("zone cycle test armed: from 20 s into gameplay the player hops away until the start's zone streams out, then "
-        "back; buildings near the start are blown up before and after");
+    if (g_tour > 0)
+        LOG("zone tour test armed: from 20 s into gameplay the player hops %d times across the open world, every %.0f s; "
+            "buildings near the start and near each landing are blown up", g_tour, kHopEvery);
+    else
+        LOG("zone cycle test armed: from 20 s into gameplay the player hops away until the start's zone streams out, "
+            "then back; buildings near the start are blown up before and after");
     return true;
 }
 

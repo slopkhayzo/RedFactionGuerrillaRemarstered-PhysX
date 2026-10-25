@@ -6,7 +6,9 @@
 // is busy (spinning; an unattended run ends whatever the threads do), writes a hang report to the log (the stacks of
 // the sim thread, the render thread and the busy threads; tools/hang_report.py) and ends the process the way
 // session::exit_now does, so recordings and telemetry are written. A game that is only blocked (its window
-// minimised, a debugger) uses no CPU and is left alone.
+// minimised, a debugger) uses no CPU and is left alone. On the way the log notes a gameplay frame held for 5, 10 and
+// 20 s, so a freeze ended by hand still shows whether the frames stopped. Unattended runs also watch menu and loading
+// frames, which may legitimately take long, with a limit of 60 s.
 namespace hang_watch {
 
 // Before the hooks are enabled (it may register a frame callback: Test.HangAfterSeconds).

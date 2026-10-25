@@ -1,6 +1,7 @@
 #include "test/automation.h"
 
 #include <cstdint>
+#include <cstring>
 
 #include "core/config.h"
 #include "core/log.h"
@@ -11,7 +12,8 @@
 namespace automation {
 namespace {
 
-constexpr int GS_MAINMENU = 0, GS_GAMEPLAY = 1, GS_INGAME_HANDBOOK_HUD = 43, GS_SAVE_LOAD_SCREEN = 50;
+constexpr int GS_MAINMENU = 0, GS_GAMEPLAY = 1, GS_PLAYER_DEATH_OPTIONS = 16, GS_INGAME_HANDBOOK_HUD = 43,
+              GS_SAVE_LOAD_SCREEN = 50;
 
 Config g_cfg;
 int g_last_state = -1000;
@@ -53,6 +55,78 @@ bool main_menu_ready() {
 
 namespace {
 
+// main_menu_process_delayed_selection's states while New Game shows its message boxes, and the answers.
+constexpr int GS_VIDEO_CUTSCENE_PLAY = 49;
+constexpr int kBoxAutosaveWarning = 4, kBoxDifficulty = 10, kBoxGoldenHammer = 11;
+constexpr int kDifficultyNormal = 1;  // the box lists casual, normal, hard, insane
+constexpr int kGoldenHammerNo = 1;    // yes, no
+int g_answered_box = -1;
+
+// The intro video: video_cutscene_play_process stops it (video_player_stop, the loading screen, streaming unpaused, a
+// fade) when button 9 or 11 reads pressed: ui_get_button_info gives Button_info's binfo[b] value unless that entry is
+// consumed. The skip presses button 9 for those calls, as a key press would. (Calling video_cutscene_stop_callback
+// directly instead left the player running on freed video memory: the render thread crashed in the particle renderer.)
+constexpr uint32_t kButtonInfoStride = 0x18, kButtonInfoValue = 0xC, kButtonInfoConsumed = 0x19;
+constexpr int kSkipButton = 9;
+bool g_skip_video = false, g_skip_asked = false;
+void(__cdecl* o_video_process)() = nullptr;
+
+void __cdecl d_video_process() {
+    if (!g_skip_video) {
+        o_video_process();
+        return;
+    }
+    uint8_t* b = static_cast<uint8_t*>(rfg::addr(rfg::rva::Button_info)) + kSkipButton * kButtonInfoStride;
+    float value;
+    memcpy(&value, b + kButtonInfoValue, 4);
+    const uint8_t consumed = b[kButtonInfoConsumed];
+    const float pressed = 1.0f;
+    memcpy(b + kButtonInfoValue, &pressed, 4);
+    b[kButtonInfoConsumed] = 0;
+    o_video_process();
+    memcpy(b + kButtonInfoValue, &value, 4);
+    b[kButtonInfoConsumed] = consumed;
+    if (!rfg::global<uint32_t>(rfg::rva::Video_cutscene_bink_handle)) {
+        g_skip_video = false;
+        LOG("automation: new game: the intro video skipped");
+    }
+}
+
+}  // namespace
+
+void drive_new_game(int state, double in_state_ms) {
+    namespace r = rfg::rva;
+    if (state == GS_MAINMENU) {
+        const int handle = rfg::global<int32_t>(r::Message_box_handle_main);
+        const int box = rfg::global<int32_t>(r::Main_menu_delayed_selection_state);
+        if (rfg::global<int32_t>(r::Main_menu_delayed_selection) != kMainMenuNewGame || handle == -1 ||
+            box == g_answered_box)
+            return;
+        uint32_t answer = 0;  // bool cb(box handle, selected item, msgbox_choice: 0 accepts)
+        int item = 0;
+        const char* what = nullptr;
+        if (box == kBoxAutosaveWarning) answer = r::main_menu_autosave_cb, what = "the autosave warning: go on";
+        else if (box == kBoxDifficulty) answer = r::main_menu_difficulty_cb, item = kDifficultyNormal, what = "normal";
+        else if (box == kBoxGoldenHammer) answer = r::main_menu_golden_hammer_cb, item = kGoldenHammerNo,
+                                          what = "no golden hammer";
+        else return;
+        g_answered_box = box;
+        LOG("automation: new game: %s", what);
+        rfg::fn<bool(__cdecl*)(int, int, int)>(answer)(handle, item, 0);
+        rfg::fn<void(__cdecl*)(int, bool)>(r::ui_hide_msgbox)(handle, false);
+    } else if (state == GS_VIDEO_CUTSCENE_PLAY && !g_skip_asked && in_state_ms > 2500 &&
+               rfg::global<uint32_t>(r::Video_cutscene_bink_handle)) {
+        g_skip_asked = g_skip_video = true;  // pressed in the video's own processing (d_video_process)
+    }
+}
+
+void reset_new_game() {
+    g_answered_box = -1;
+    g_skip_asked = g_skip_video = false;
+}
+
+namespace {
+
 // __thiscall SaveDataProviderWin32Steam::writeFileToSteamStorage(const char* name, void* data, uint size).
 // Every save write and erase goes through it; returning OperationResult_Ok (0) without writing keeps the game happy.
 int(__fastcall* o_write_file)(void*, void*, const char*, void*, uint32_t);
@@ -68,7 +142,8 @@ void on_frame(int state) {
     }
     const double in_state_ms = session::ticks_to_ms(session::qpc() - g_state_since);
 
-    if (g_cfg.auto_load_save) {
+    const bool new_game = g_cfg.test_auto_new_game && !g_cfg.auto_load_save;
+    if (g_cfg.auto_load_save || new_game) {
         if (state == GS_MAINMENU && !g_caught_input && in_state_ms > 2000 &&
             !rfg::global<uint8_t>(rfg::rva::Main_menu_auto_catch_done)) {
             g_caught_input = true;
@@ -84,18 +159,21 @@ void on_frame(int state) {
             const bool settled = ready_since && session::ticks_to_ms(session::qpc() - ready_since) > 1500;
             if (settled || in_state_ms > 45000) {
                 g_pressed_load = true;
-                LOG("automation: main menu %s after %.1f s (cache loaded %d) -> Load Game",
-                    settled ? "ready" : "NOT ready (timeout)", in_state_ms / 1000.0,
-                    rfg::global<uint8_t>(rfg::rva::Directory_cache_loaded));
-                rfg::fn<void(__cdecl*)(int)>(rfg::rva::main_menu_handle_selection)(kMainMenuLoadGame);
+                LOG("automation: main menu %s after %.1f s (cache loaded %d) -> %s", settled ? "ready" : "NOT ready (timeout)",
+                    in_state_ms / 1000.0, rfg::global<uint8_t>(rfg::rva::Directory_cache_loaded),
+                    new_game ? "New Game" : "Load Game");
+                rfg::fn<void(__cdecl*)(int)>(rfg::rva::main_menu_handle_selection)(new_game ? kMainMenuNewGame
+                                                                                            : kMainMenuLoadGame);
             }
         }
-        if (state == GS_SAVE_LOAD_SCREEN && !g_selected_save && in_state_ms > 1500) {
+        if (new_game && g_pressed_load) drive_new_game(state, in_state_ms);
+        if (!new_game && state == GS_SAVE_LOAD_SCREEN && !g_selected_save && in_state_ms > 1500) {
             const int saves = rfg::global<int32_t>(rfg::rva::Num_saved_games);
             if (saves > 0) {
                 g_selected_save = true;
-                LOG("automation: load screen lists %d saves -> loading the selected (most recent) one", saves);
-                rfg::fn<void(__cdecl*)(bool)>(rfg::rva::hud_ui_save_load_selection_made)(false);
+                LOG("automation: load screen lists %d saves -> loading the selected (most recent) one%s", saves,
+                    g_cfg.test_reset_destruction ? ", destruction reset" : "");
+                rfg::fn<void(__cdecl*)(bool)>(rfg::rva::hud_ui_save_load_selection_made)(g_cfg.test_reset_destruction);
             } else if (!g_refreshed_list && in_state_ms > 5000) {
                 g_refreshed_list = true;
                 LOG("automation: load screen still empty -> refreshing the save directory cache");
@@ -105,8 +183,9 @@ void on_frame(int state) {
                 session::exit_now("automation: no saves listed on the load screen");
             }
         }
-        // A save can open a handbook (tutorial) pane a little after loading, which waits for a key. Closed as its
-        // back button does: hud_ui_handbook_process sees ExitHandbook, stops the video and pops the state.
+        // A save can open a handbook (tutorial) pane a little after loading, which waits for a key (the first mission
+        // opens several). Closed as its back button does: hud_ui_handbook_process sees ExitHandbook, stops the video
+        // and pops the state.
         static bool closing = false;
         if (state != GS_INGAME_HANDBOOK_HUD) {
             closing = false;
@@ -116,6 +195,10 @@ void on_frame(int state) {
             LOG("automation: a handbook pane waits for a key -> closed");
         }
     }
+    // The death menu waits for a choice and the gameplay clock stops: a timed run would sit there until its watchdog
+    // (a test's teleport put the player under the ground; the user ended the game from the menu).
+    if (g_cfg.exit_after_gameplay_s > 0 && state == GS_PLAYER_DEATH_OPTIONS && in_state_ms > 5000)
+        session::exit_now("automation: the player died (unattended run)");
     if (g_cfg.exit_after_gameplay_s > 0 && state == GS_GAMEPLAY) {
         if (!g_gameplay_since) {
             g_gameplay_since = session::qpc();
@@ -136,7 +219,12 @@ bool install(const Config& cfg) {
                             &d_write_file, &o_write_file, "SaveDataProviderWin32Steam::writeFileToSteamStorage");
         LOG("automation: save writes and erases are blocked for this session");
     }
-    if (cfg.auto_load_save || cfg.exit_after_gameplay_s > 0) session::add_frame_callback(&on_frame);
+    if (cfg.auto_load_save || cfg.test_auto_new_game || cfg.exit_after_gameplay_s > 0)
+        session::add_frame_callback(&on_frame);
+    // The intro skip, for an automated new game and for replays (a new game's replay drives the same menus).
+    if (cfg.test_auto_new_game || cfg.harness_mode == 2)
+        ok &= hooks::create(rfg::rva::video_cutscene_play_process, &d_video_process, &o_video_process,
+                            "video_cutscene_play_process");
     return ok;
 }
 

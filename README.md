@@ -53,7 +53,9 @@ limitations.
   that pushes the pieces out of its way (a piece pressed through the ground is put back on top).
 - Where the game needs to see the pieces, they get Havok stand-ins with their own collision shapes: near the player
   (heavy pieces are solid, so the player stands on rubble; melee blows and bullets that hit a piece push it), ahead of
-  rockets and other projectiles, which then strike the pile, and along the player's line of fire.
+  rockets and other projectiles, which then strike the pile, and along the player's line of fire. A melee blow wider
+  than the game's own (a mod's, such as Sledge's Sledgehammer Shockwave) goes to PhysX whole: every piece its swept
+  sphere reaches gets the push the game gives the objects it hits, once per blow.
 - The game's debris removal is switched off and its limits raised: pools for debris objects and render instances,
   Havok's heap, and the renderer's instancing capacity.
 

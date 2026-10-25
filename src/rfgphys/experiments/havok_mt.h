@@ -19,6 +19,10 @@ struct Config;
 // - serializes the game callbacks that run inside the jobs (contact points added and removed, phantom overlaps,
 //   trigger shapes) under Havok's own constraint-update lock (core/game_lock.h). Collision filters and the game's
 //   custom shapes only read data and run unlocked;
+// - works around the collide jobs' 16-bit counts, which a pile of thousands of colliding pieces outgrows (one island
+//   with 65,536+ sectors of agents lost a whole step's contact changes, and the solver crashed soon after): such a
+//   track's job is split in several, an island needing more tasks than the jobs can number gets bigger tasks, and a
+//   step beyond even that runs single-threaded;
 // - ends the process with a report of every Havok lock's owner and each Havok thread's stack when a step runs longer
 //   than 5 s (tools/hang_report.py resolves it).
 // Callbacks reach the game in a different order than in the single-threaded step, so replays diverge from

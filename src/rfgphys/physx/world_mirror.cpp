@@ -56,11 +56,18 @@ bool collides_with_debris(const uint8_t* entity) {
     return false;
 }
 
+// Bodies are found by address, and an address comes back: Havok's heap hands a freed entity's memory to the next one,
+// and when a zone streams out and another in between two scans, new ground took the place of the old in the map,
+// never reached the host, and the old stayed there. A long session in the open world gathered such holes until
+// pieces fell through the ground everywhere (players: "fixed by loading the game"). hkpEntity::m_uid is new for every
+// entity the world adds.
+constexpr uint32_t kEntityUid = 0xD0;  // hkpEntity::m_uid
 struct Mirrored {
     uint32_t group;
     uint32_t signature;            // destroyables: 1 + existing pieces; 0: never changes
     bool seen;
     std::vector<uint32_t> keys;    // destroyables: the piece keys mirrored, sorted
+    uint32_t uid;                  // hkpEntity::m_uid of the body mirrored
 };
 std::unordered_map<const uint8_t*, Mirrored> g_bodies;  // Havok entity -> its mirror
 uint32_t g_next_group = 1;
@@ -68,7 +75,8 @@ std::deque<std::vector<uint8_t>> g_outbox;
 size_t g_outbox_bytes = 0;
 double g_next_scan = 0;
 double g_next_change_log = 0;
-uint32_t g_log_added = 0, g_log_changed = 0, g_log_removed = 0;
+uint32_t g_log_added = 0, g_log_changed = 0, g_log_removed = 0, g_log_reused = 0;
+uint64_t g_reused_total = 0;
 bool g_initial_done = false;                      // the first full export has been queued
 bool g_host_has_world = false;                    // and the host has applied it
 double g_export_done_ms = 0;
@@ -309,11 +317,24 @@ void scan() {
     for (auto& [e, m] : g_bodies) m.seen = false;
     bool budget_left = true;
     uint32_t added = 0, changed = 0, removed = 0;
+    uint32_t reused = 0;
     for (int i = 0; i < n; ++i) {
         const uint8_t* e = entities[i];
         if (!e || !hs::body_shape(e) || !collides_with_debris(e)) continue;
         const uint32_t sig = signature(hs::body_shape(e));
+        const uint32_t uid = *reinterpret_cast<const uint32_t*>(e + kEntityUid);
         auto it = g_bodies.find(e);
+        if (it != g_bodies.end() && it->second.uid != uid) {
+            // Another body at the address of one that left: the old one goes, this one is new.
+            if (!budget_left) {
+                it->second.seen = true;  // keeps the old one's group until the next scan replaces it
+                continue;
+            }
+            remove_group(it->second.group);
+            g_bodies.erase(it);
+            it = g_bodies.end();
+            ++reused;
+        }
         if (it != g_bodies.end()) {
             it->second.seen = true;
             if (it->second.signature != sig && budget_left) {
@@ -326,7 +347,7 @@ void scan() {
                 ++changed;
             }
         } else if (budget_left) {
-            auto& m = g_bodies.emplace(e, Mirrored{g_next_group++, sig, true, {}}).first->second;
+            auto& m = g_bodies.emplace(e, Mirrored{g_next_group++, sig, true, {}, uid}).first->second;
             export_body(e, m);
             ++added;
         } else {
@@ -359,11 +380,13 @@ void scan() {
         g_log_added += added;
         g_log_changed += changed;
         g_log_removed += removed;
+        g_log_reused += reused;
+        g_reused_total += reused;
         const double now = session::since_start_ms();
         if (now >= g_next_change_log && (g_log_added || g_log_changed || g_log_removed)) {
-            LOG("world mirror: in the last 5 s %u bodies added, %u changed (buildings losing pieces), %u removed",
-                g_log_added, g_log_changed, g_log_removed);
-            g_log_added = g_log_changed = g_log_removed = 0;
+            LOG("world mirror: in the last 5 s %u bodies added (%u at the address of one that left), %u changed "
+                "(buildings losing pieces), %u removed", g_log_added, g_log_reused, g_log_changed, g_log_removed);
+            g_log_added = g_log_changed = g_log_removed = g_log_reused = 0;
             g_next_change_log = now + 5000;
         }
     }
@@ -386,7 +409,7 @@ constexpr uint32_t kCheckRays = 1024;
 constexpr float kCheckHeight = 60.0f, kCheckLength = 200.0f, kCheckRadius = 60.0f, kMatchM = 0.05f;
 enum class Check { Idle, Waiting, Sent, Done } g_check_state = Check::Idle;
 double g_check_at = 0;
-uint32_t g_check_request = 0;
+uint32_t g_check_request = 0, g_checks = 0;
 std::vector<ipc::Ray> g_rays;
 std::vector<float> g_havok;
 struct HavokHit {
@@ -479,7 +502,9 @@ void check_start() {
 void check_finish() {
     const float* px = pxbridge::query_results();
     const uint32_t* kinds = pxbridge::query_hit_kinds();
-    if (FILE* f = _wfsopen((session::run_dir() + L"\\world_mirror_check.csv").c_str(), L"w", _SH_DENYNO)) {
+    const std::wstring name = ++g_checks == 1 ? L"\\world_mirror_check.csv"
+                                              : L"\\world_mirror_check_" + std::to_wstring(g_checks) + L".csv";
+    if (FILE* f = _wfsopen((session::run_dir() + name).c_str(), L"w", _SH_DENYNO)) {
         fprintf(f, "ray,x,z,havok_m,mirror_m,mirror_hit,havok_layer,havok_group,havok_shape,havok_motion,"
                    "havok_debris_collides,havok_handle,object_type\n");
         static const char* const kKinds[] = {"none", "sphere", "plane", "capsule", "box", "convex_core", "convex", "particles",
@@ -520,8 +545,9 @@ void check_finish() {
     }
     LOG("world mirror check: %zu rays: %u match within 5 cm (largest difference %.3f m), %u differ (up to %.2f m), %u stop "
         "in Havok at moving bodies or ones debris does not collide with, %u hit only in Havok, %u only in the mirror, %u "
-        "hit nothing; %u static shapes in the host",
-        g_rays.size(), match, max_match, differ, max_differ, excluded, missing, extra, none, pxbridge::host_statics());
+        "hit nothing; %u static shapes in the host; %llu bodies so far came at the address of one that left",
+        g_rays.size(), match, max_match, differ, max_differ, excluded, missing, extra, none, pxbridge::host_statics(),
+        static_cast<unsigned long long>(g_reused_total));
     g_check_state = Check::Done;
 }
 
@@ -581,6 +607,10 @@ bool ready() {
             (session::since_start_ms() - g_export_done_ms) / 1000.0);
     }
     return g_host_has_world;
+}
+
+void check_again() {
+    if (g_check && g_check_state == Check::Done) g_check_state = Check::Idle;
 }
 
 FrameStats take_frame() {

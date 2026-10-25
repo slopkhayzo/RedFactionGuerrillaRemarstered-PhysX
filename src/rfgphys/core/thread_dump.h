@@ -8,4 +8,8 @@ namespace thread_dump {
 // module+offset. The thread is suspended for the copy of its stack.
 void log_thread(unsigned long tid, const char* label);
 
+// The calling thread's return addresses (a scan of its stack above the caller), as module+offset in one log line
+// after `label`.
+void log_own_stack(const char* label, int max_frames);
+
 }  // namespace thread_dump

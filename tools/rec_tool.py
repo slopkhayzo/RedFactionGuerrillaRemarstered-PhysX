@@ -21,6 +21,7 @@ RECORDING is a folder name under recordings/ or a path. Format: src/rfgphys/harn
 """
 import json
 import os
+import shutil
 import struct
 import sys
 
@@ -322,6 +323,11 @@ def cmd_salvage(name, out=None):
         keep = lines[:1] + [ln for ln in lines[1:] if ln.split(',', 1)[0].isdigit() and int(ln.split(',', 1)[0]) <= frames]
         kept = len(keep) - 1
         open(os.path.join(out, 'checkpoints.csv'), 'w', encoding='utf-8', newline='\n').write('\n'.join(keep) + '\n')
+    # Newer builds write the track at the same pace as the input; replays read it up to its first incomplete record.
+    track = os.path.join(folder, 'track.bin')
+    has_track = os.path.exists(track) and os.path.getsize(track) > 16
+    if has_track:
+        shutil.copyfile(track, os.path.join(out, 'track.bin'))
     h = HEADER.unpack_from(fixed, 0)
     start = {'type': header['start_type'], 'map_file': header['wc_map_file'], 'setup': 'salvaged; see %s' % name,
              'options_hex': h[10].hex().upper(), 'character_index': header['wc_character_index']}
@@ -329,15 +335,16 @@ def cmd_salvage(name, out=None):
         start = {'type': 'save', 'slot': header['save_slot'], 'file': header['save_file']}
     manifest = {
         'format': 'rfgrec1', 'created': '', 'title': '', 'notes': 'salvaged from an unfinished recording: the game '
-        'hung or crashed; the frames that reached the disk replay, without the player track',
+        'hung or crashed; the frames that reached the disk replay, ' + (
+            'with the part of the player track that reached it' if has_track else 'without the player track'),
         'game_exe_timestamp': header['exe_timestamp'], 'plugin_version': '', 'start': start, 'seed': header['seed'],
         'virtual_clock': bool(header['flags'] & 1), 'checkpoint_interval': header['checkpoint_interval'],
         'frames': frames, 'game_seconds': round(game_s, 3), 'wall_seconds': round(wall_s, 3),
         'synthetic_input': False, 'markers': [], 'salvaged_from': os.path.basename(folder.rstrip('\\/')),
         'end_reason': 'salvaged: cut off after %d frames' % frames}
     json.dump(manifest, open(os.path.join(out, 'manifest.json'), 'w', encoding='utf-8'), indent=2)
-    print('%s: %d frames (%.1f s of game time), %d checkpoints; %d bytes cut off the end' % (
-        out, frames, game_s, kept, len(data) - end))
+    print('%s: %d frames (%.1f s of game time), %d checkpoints, %s; %d bytes cut off the end' % (
+        out, frames, game_s, kept, 'track kept' if has_track else 'no track', len(data) - end))
 
 
 def main():

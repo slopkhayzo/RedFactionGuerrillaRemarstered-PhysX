@@ -16,6 +16,8 @@ namespace world_mirror {
 
 bool install(const Config& cfg);
 bool ready();  // the level's static world is in the host (first export sent), so debris can be handed over
+// Experiment.PhysXWorldCheck: the check once more, where the player is in 3 s (tests, after zones streamed).
+void check_again();
 
 struct FrameStats {
     uint32_t groups;     // Havok bodies mirrored

@@ -38,6 +38,19 @@ fn hkpContinuousSimulation::advanceTime
 
 # test automation and save safety
 fn main_menu_handle_selection
+# New Game without input (Test.AutoNewGame): the message boxes main_menu_process_delayed_selection raises, the intro video
+fn main_menu_autosave_cb
+fn main_menu_difficulty_cb
+fn main_menu_golden_hammer_cb
+fn video_cutscene_play_process
+fn video_cutscene_play
+fn main_menu_process_delayed_selection
+fn ui_hide_msgbox
+var Main_menu_delayed_selection
+var Main_menu_delayed_selection_state
+var Message_box_handle_main
+var Video_cutscene_bink_handle
+var Button_info
 fn hud_ui_save_load_selection_made
 fn keen::SaveData::SaveDataProviderWin32Steam::writeFileToSteamStorage
 fn game_save_clear_load_directory_cache
@@ -100,6 +113,8 @@ fn rfg_dyn_shardify_work
 fn general_mover::apply_damage
 fn object_mover_process_explosion_hit
 fn object_mover::handle_fading
+fn general_mover::update_render_opacity
+var Lparam_super_overbrighten
 fn rfgl_maybe_delete_objects
 fn rfgl_desired_values
 fn rfg_dyn_maybe_delete
@@ -193,6 +208,8 @@ fn hkReferencedObject::removeReference
 pub ??_7obj_zone@@6B@ as obj_zone_vftable
 fn obj_zone::process_melee_hit
 fn object::process_bullet_hit
+# a melee blow's sphere cast and its hits (passed on to the pieces in PhysX when a mod enlarges it)
+fn human_combat_process_hits
 var Bullet_movable_scalar
 fn havok_raycast @00435AA0
 fn raycast_input::raycast_input @001E22B0
@@ -204,11 +221,31 @@ fn raycast_output::raycast_output
 fn raycast_output::~raycast_output
 fn havok_memory_watch_dog_free_memory @0041C5B0
 fn watch_dog_remove_objects_from_island
+# restoration (world::restore_object: activities restore their buildings when they start, the EDF rebuilds): the
+# object is destroyed with its descendants (restore_destroy_object) and streamed in again from its zone
+fn world::restore_object
+fn restore_destroy_object
 fn havok_sim_islands_process_post
 fn hkSolverAllocator::setBuffer
 fn hkFreeListMemorySystem::mainQuit
 var Havok_memory
 var Havok_mem_largest_runtime_block
+fn havok_memory_watch_dog_free_memory @0041C5B0 as havok_memory_watch_dog_free_island
+fn hkpConstraintSolverSetup::calcBufferSize
+fn hkSolverBuildJacobianFromAtomsNotContact
+fn hkpWorldOperationUtil::addConstraintToCriticalLockedIsland
+fn hkpWorldOperationUtil::removeConstraintFromCriticalLockedIsland
+# Havok island audit (experiments/havok_audit.h): the edges of the step, an island's solve, the solver's crash sites
+fn havok_update_status
+fn hkpConstraintSolverSetup::solve
+fn hkSolveConstraints
+fn hkpConstraintSolverSetup::_buildJacobianElements
+fn hkpWorldConstraintUtil::removeConstraint
+fn hkCpuPostCollideJob
+fn hkCpuSplitSimulationIslandJobImpl
+fn hkCpuAgentSectorJob
+fn hkpWorldOperationUtil::mergeIslands
+pub ??_7hkpSimpleConstraintContactMgr@@6B@ as hkpSimpleConstraintContactMgr_vftable
 # a piece's mesh lives in its building's chunk, a stream2 container the movers using it keep loaded (object::srid);
 # zones stream out in world::do_frame (sim/render handshake), containers unload in stream2_do_frame right after it
 fn world::destream_zone
@@ -234,6 +271,9 @@ fn hkpJobQueueUtils::popIntegrateJob
 fn hkpJobQueueUtils::finishIntegrateJob
 fn hkpJobQueueUtils::popCollideJob
 fn hkpJobQueueUtils::finishCollideJob
+fn hkpSingleThreadedJobsOnIsland::cpuBroadPhaseJob
+fn hkpAgentSectorHeader::allocate
+fn hkJobQueue::addJob @00BBBFE0 as hkJobQueue__addJobEntry
 fn hkJobQueue::hkJobQueue
 fn hkJobQueueHwSetup::hkJobQueueHwSetup
 fn hkJobQueue::processAllJobs
@@ -299,6 +339,7 @@ fn timestamp::set_rand
 fn timestamp_realtime::set_rand
 
 # record/replay harness: start states (Wrecking Crew match, save load) and checkpoint state
+fn ingame_options_exit_to_main_menu
 fn verify_gamesave_start
 fn wrecking_crew_match_begin
 fn wrecking_crew_get_map_file_name

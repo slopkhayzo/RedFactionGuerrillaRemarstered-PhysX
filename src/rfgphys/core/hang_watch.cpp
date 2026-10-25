@@ -22,6 +22,8 @@ namespace {
 constexpr int kGameplay = 1;          // GS_GAMEPLAY
 constexpr double kBusyShare = 0.5;    // a thread using half a core or more over the probe is busy
 constexpr DWORD kProbeMs = 1000;
+constexpr double kFirstStallNoteMs = 5000;  // a gameplay frame held this long is noted in the log, then at 10 s, 20 s
+constexpr double kOtherStateHangMs = 60000;  // unattended runs: a menu or loading frame held this long
 
 double g_hang_ms = 0;
 bool g_unattended = false;
@@ -83,15 +85,15 @@ std::vector<Busy> busy_threads() {
     return out;
 }
 
-void report(double stalled_ms, const std::vector<Busy>& busy) {
+void report(double stalled_ms, int state, const std::vector<Busy>& busy) {
     std::string list;
     for (const Busy& b : busy) {
         char item[48];
         snprintf(item, sizeof(item), "%s%lu (%.0f%%)", list.empty() ? "" : ", ", b.tid, b.share * 100.0);
         list += item;
     }
-    LOG("hang: no gameplay frame has ended for %.0f s (frame %llu); busy threads: %s", stalled_ms / 1000.0,
-        gameloop::frames_ended(), list.empty() ? "none" : list.c_str());
+    LOG("hang: no frame has ended for %.0f s (game state %d, frame %llu); busy threads: %s", stalled_ms / 1000.0,
+        state, gameloop::frames_ended(), list.empty() ? "none" : list.c_str());
     const DWORD sim = gameloop::sim_thread_id(), render = telemetry::render_thread_id();
     thread_dump::log_thread(sim, "sim");
     thread_dump::log_thread(render, "render");
@@ -104,18 +106,35 @@ DWORD WINAPI watch_main(void*) {
     unsigned long long seen = gameloop::frames_ended();
     int64_t since = session::qpc();
     bool told_idle = false;
+    double next_note_ms = kFirstStallNoteMs;
     for (;;) {
         Sleep(1000);
         const unsigned long long frames = gameloop::frames_ended();
-        // Menus and loading screens may legitimately hold a frame for long; only gameplay frames are watched.
-        if (frames != seen || gameloop::last_state() != kGameplay) {
+        const int state = gameloop::last_state();
+        // Menus and loading screens may legitimately hold a frame for long: in play only gameplay frames are watched.
+        // Unattended runs watch the others too, with a longer limit (four test runs froze loading a save, and the
+        // user closed their windows).
+        const bool gameplay = state == kGameplay;
+        if (frames != seen || (!gameplay && !g_unattended)) {
+            if (next_note_ms > kFirstStallNoteMs)  // a stall was noted: say that it ended
+                LOG("hang watch: frames go on (state %d) after %.0f s", gameloop::last_state(),
+                    session::ticks_to_ms(session::qpc() - since) / 1000.0);
             seen = frames;
             since = session::qpc();
             told_idle = false;
+            next_note_ms = kFirstStallNoteMs;
             continue;
         }
         const double stalled = session::ticks_to_ms(session::qpc() - since);
-        if (stalled < g_hang_ms) continue;
+        const double limit = gameplay ? g_hang_ms : std::max(g_hang_ms, kOtherStateHangMs);
+        // A freeze the user ends before the report still leaves a trace: frames stopped, rather than a game that ran
+        // on without showing it.
+        if (stalled >= next_note_ms && next_note_ms < limit) {
+            LOG("hang watch: no frame has ended for %.0f s (game state %d, frame %llu)", stalled / 1000.0, state,
+                frames);
+            next_note_ms *= 2;
+        }
+        if (stalled < limit) continue;
         const std::vector<Busy> busy = busy_threads();
         if (gameloop::frames_ended() != seen) continue;  // it moved on during the probe
         if (busy.empty() && !g_unattended) {
@@ -125,8 +144,9 @@ DWORD WINAPI watch_main(void*) {
             told_idle = true;
             continue;
         }
-        report(stalled + kProbeMs, busy);
-        session::exit_now("the game hung: a gameplay frame never ended (hang report in the log)");
+        report(stalled + kProbeMs, state, busy);
+        session::exit_now(gameplay ? "the game hung: a gameplay frame never ended (hang report in the log)"
+                                   : "the game hung: a menu or loading frame never ended (hang report in the log)");
     }
 }
 
@@ -140,7 +160,8 @@ void start(const Config& cfg) {
                    cfg.exit_after_s > 0 || cfg.exit_after_gameplay_s > 0 || cfg.exit_after_main_menu_s > 0;
     CloseHandle(CreateThread(nullptr, 256 * 1024, &watch_main, nullptr, 0, nullptr));
     LOG("hang watch: a gameplay frame still running after %d s ends the game with a hang report (%s)", cfg.hang_s,
-        g_unattended ? "unattended run: whatever its threads do" : "when a thread of the game is busy");
+        g_unattended ? "unattended run: whatever its threads do; a menu or loading frame after 60 s too"
+                     : "when a thread of the game is busy");
     if (cfg.test_hang_after_s > 0) {
         g_test_hang_after_s = cfg.test_hang_after_s;
         session::add_frame_callback(&test_hang_frame);

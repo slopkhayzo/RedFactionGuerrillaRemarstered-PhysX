@@ -19,7 +19,12 @@ struct Config;
 // Colliding debris merges into a few large simulation islands, and the game deletes the debris of any island whose
 // solver memory exceeds its 1 MB solver buffer (havok_sim_islands_process_post): with DebrisCollide=2 a whole debris
 // field vanished in one frame. The experiment gives Havok's solver a larger buffer (Experiment.SolverBufferMB,
-// default 16) and raises that limit to match (research/docs/01-findings.md §10.4).
+// default 16) and raises that limit to match (research/docs/01-findings.md §10.4). An island that outgrows even that
+// gets a buffer it fits in, up to 96 MB, instead of losing all but 64 of its bodies.
+//
+// Havok's solver setup for constraints other than plain contacts loops for good on an atom it cannot get past; a
+// tower shattered into 2,700 pieces hung the game there. Such an atom now ends its constraint's setup, and the log
+// reports it (Test.SolverGuard checks the guard at start-up).
 namespace experiments {
 
 bool install_debris_collision(const Config& cfg);

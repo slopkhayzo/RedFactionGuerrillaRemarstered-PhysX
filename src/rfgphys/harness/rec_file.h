@@ -12,7 +12,7 @@ namespace rec {
 constexpr uint32_t kInputSize = 0x444;  // cached_input_state: one controller, mouse, 256 keys
 constexpr uint32_t kMaxGov = 8;         // load-governor readings kept per frame
 
-enum StartType : uint32_t { kStartNone = 0, kStartSave = 1, kStartWreckingCrew = 2 };
+enum StartType : uint32_t { kStartNone = 0, kStartSave = 1, kStartWreckingCrew = 2, kStartNewGame = 3 };
 constexpr uint32_t kFlagVirtualClock = 1;
 
 #pragma pack(push, 1)
@@ -72,8 +72,9 @@ struct Frame {
     uint8_t input[kInputSize]{};
 };
 
-// Sim-thread writer. Records are encoded into a memory buffer and written out in blocks; `committed_` marks the end
-// of the last complete record so a flush at process exit never writes half a frame.
+// Sim-thread writer. Records are encoded into a memory buffer and written out in blocks, and at least every
+// kWriteEveryFrames frames, so a crash (which skips the exit flush) loses only the last fraction of a second;
+// `committed_` marks the end of the last complete record so a flush at process exit never writes half a frame.
 class Writer {
 public:
     bool open(const std::wstring& path, const Header& header);
@@ -88,6 +89,7 @@ private:
     Header header_{};
     std::vector<uint8_t> buf_;
     size_t committed_ = 0;
+    uint32_t since_write_ = 0;  // records appended since the last write
     uint8_t prev_[kInputSize]{};
 };
 

@@ -9,6 +9,7 @@ namespace {
 
 constexpr uint8_t kRecordTag = 0xA5;
 constexpr size_t kWriteBlock = 64 * 1024;
+constexpr uint32_t kWriteEveryFrames = 64;  // about a quarter second of gameplay
 constexpr size_t kMinGap = 4;  // equal bytes that may be folded into a run instead of starting a new one
 
 template <typename T>
@@ -41,6 +42,7 @@ bool Writer::open(const std::wstring& path, const Header& header) {
     memset(prev_, 0, sizeof(prev_));
     buf_.clear();
     buf_.reserve(kWriteBlock * 2);
+    since_write_ = 0;
     put(buf_, header_);
     committed_ = buf_.size();
     return true;
@@ -82,13 +84,14 @@ void Writer::append(const Frame& f) {
     memcpy(buf_.data() + count_at, &runs, sizeof(runs));
     memcpy(prev_, f.input, kInputSize);
     committed_ = buf_.size();
-    if (buf_.size() >= kWriteBlock) write_out();
+    if (buf_.size() >= kWriteBlock || ++since_write_ >= kWriteEveryFrames) write_out();
 }
 
 void Writer::write_out() {
     write_all(file_, buf_.data(), committed_);
     buf_.erase(buf_.begin(), buf_.begin() + ptrdiff_t(committed_));
     committed_ = 0;
+    since_write_ = 0;
 }
 
 void Writer::finish(uint32_t frame_count) {
