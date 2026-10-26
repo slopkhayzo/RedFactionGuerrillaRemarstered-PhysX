@@ -2,15 +2,19 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "core/config.h"
 #include "core/log.h"
 #include "core/session.h"
 #include "game/rfg.h"
+#include "experiments/keep_debris.h"
 #include "physx/debris_offload.h"
 
 namespace restore_building {
@@ -204,6 +208,89 @@ uint32_t havok_pieces(bool sample) {
     return from_it;
 }
 
+// What the PhysX pieces near the building broke off, and the loose chunks lying there (rfg_movers with handles the
+// zone handed out in play). After a restoration only the debris of what the game does not rebuild should be left:
+// neighbours it damaged or destroyed, and their loose chunks.
+constexpr uint32_t kObjSubType = 0x7F;
+constexpr uint8_t kTypeMover = 2, kSubGeneral = 0, kSubRfg = 1;
+bool dynamic_handle(uint32_t h) { return ((h >> 16) & 0xFF) == 0xFF; }
+
+void classify_pieces(const char* when) {
+    const std::vector<uint32_t> around = debris_offload::pieces_near(g_building, kDebrisRadius);
+    const auto& restored = debris_offload::last_restored();
+    const uint32_t building_uid = [] {
+        const uint8_t* b = object_from_handle(g_handle);
+        return b ? *reinterpret_cast<const uint32_t*>(b + kMoverChunkObjUid) : 0xFFFFFFFFu;
+    }();
+    uint32_t none = 0, it = 0, in_restored = 0, lv_standing = 0, lv_nobody = 0, lv_destroyed = 0, lv_gone = 0;
+    uint32_t dy_rfg = 0, dy_gm = 0, dy_other = 0, dy_gone = 0, same_uid = 0;
+    std::unordered_map<uint32_t, uint32_t> by_original;
+    for (const uint32_t slot : around) {
+        const uint32_t original = debris_offload::piece_original(slot);
+        ++by_original[original];
+        if (original == 0xFFFFFFFFu) {
+            ++none;
+            continue;
+        }
+        if (original == g_handle) ++it;
+        in_restored += restored.count(original) != 0;
+        const uint8_t* obj = object_from_handle(original);
+        if (obj && *reinterpret_cast<const uint32_t*>(obj + kMoverChunkObjUid) == building_uid) ++same_uid;
+        if (dynamic_handle(original)) {
+            if (!obj) ++dy_gone;
+            else if (obj[kObjType] == kTypeMover && obj[kObjSubType] == kSubRfg) ++dy_rfg;
+            else if (obj[kObjType] == kTypeMover && obj[kObjSubType] == kSubGeneral) ++dy_gm;
+            else ++dy_other;
+        } else {
+            if (!obj) ++lv_gone;
+            else if (obj[kObjFlags] & kObjDestroyed) ++lv_destroyed;
+            else if (body_of(obj)) ++lv_standing;
+            else ++lv_nobody;
+        }
+    }
+    LOG("restore diag %s: %zu PhysX pieces within %.0f m; broke off: nothing %u, the building %u, an object of the last "
+        "restoration %u; level objects standing %u, without a body %u, destroyed %u, gone %u; objects made in play "
+        "(loose chunks %u, general movers %u, other %u, gone %u); original with the building's chunk object uid %u; "
+        "%zu different originals", when, around.size(), double(kDebrisRadius), none, it, in_restored, lv_standing,
+        lv_nobody, lv_destroyed, lv_gone, dy_rfg, dy_gm, dy_other, dy_gone, same_uid, by_original.size());
+    std::vector<std::pair<uint32_t, uint32_t>> top(by_original.begin(), by_original.end());
+    std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (size_t k = 0; k < top.size() && k < 8; ++k) {
+        const uint8_t* obj = object_from_handle(top[k].first);
+        float d = -1;
+        if (obj) d = distance(reinterpret_cast<const float*>(obj + kObjPos), g_building);
+        LOG("restore diag %s:   %u pieces off %08X (%s): %s, type %d/%d, %s, chunk object uid %08X%s, %.1f m away",
+            when, top[k].second, top[k].first, dynamic_handle(top[k].first) ? "made in play" : "level object",
+            obj ? "exists" : "gone", obj ? int(obj[kObjType]) : -1, obj ? int(obj[kObjSubType]) : -1,
+            !obj ? "-" : (obj[kObjFlags] & kObjDestroyed) ? "destroyed" : body_of(obj) ? "has a body" : "no body",
+            obj ? *reinterpret_cast<const uint32_t*>(obj + kMoverChunkObjUid) : 0xFFFFFFFFu,
+            restored.count(top[k].first) ? ", in the last restoration" : "", double(d));
+    }
+}
+
+void count_loose_chunks(const char* when) {
+    uint8_t* w = world();
+    uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
+    const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldRfgMovers);
+    const int n = *reinterpret_cast<const int*>(w + kWorldRfgMoverCount);
+    uint32_t level = 0, dynamic = 0, dynamic_destroyed = 0, dynamic_moving = 0;
+    for (int i = 0; all && movers && i < n; ++i) {
+        const uint8_t* obj = all[movers[i]];
+        if (!obj || distance(reinterpret_cast<const float*>(obj + kObjPos), g_building) > kDebrisRadius) continue;
+        const uint32_t h = *reinterpret_cast<const uint32_t*>(obj + kObjHandle);
+        if (!dynamic_handle(h)) {
+            ++level;
+            continue;
+        }
+        ++dynamic;
+        if (obj[kObjFlags] & kObjDestroyed) ++dynamic_destroyed;
+        const uint8_t* body = body_of(obj);
+        if (body && body[kBodyMotionType] != kMotionFixed) ++dynamic_moving;
+    }
+    LOG("restore diag %s: rfg_movers whose position is within %.0f m: level objects %u, made in play %u (%u destroyed, "
+        "%u with a moving body)", when, double(kDebrisRadius), level, dynamic, dynamic_destroyed, dynamic_moving);
+}
+
 void on_frame(int game_state) {
     if (game_state != kGameplay || g_phase == kDone) return;
     if (!g_since) g_since = session::qpc();
@@ -243,6 +330,8 @@ void on_frame(int game_state) {
         if (t < g_phase_at + kRestoreAfter) return;
         g_havok_before = havok_pieces(false);
         g_physx_before = debris_offload::count_pieces_of(g_handle);
+        classify_pieces("before the restoration");
+        count_loose_chunks("before the restoration");
         const bool queued =
             rfg::fn<bool(__thiscall*)(void*, uint32_t)>(r::world__restore_object)(world(), g_handle);
         LOG("restore building: cycle %d of %d: before the restoration %u pieces that broke off it in Havok, %u in "
@@ -255,6 +344,16 @@ void on_frame(int game_state) {
     case kCheck: {
         if (t < g_phase_at + kCheckAfter) return;
         const uint32_t havok = havok_pieces(false), physx = debris_offload::count_pieces_of(g_handle);
+        classify_pieces("after the restoration");
+        count_loose_chunks("after the restoration");
+        {
+            const auto& chunks = experiments::last_restored_chunks();
+            uint32_t still = 0;
+            for (const uint32_t h : chunks) still += object_from_handle(h) != nullptr;
+            LOG("restore diag after the restoration: the restoration took %zu loose chunks' shards along (%llu chunks noted "
+                "so far); %u of those chunks are still in the world", chunks.size(),
+                static_cast<unsigned long long>(experiments::loose_chunks_noted()), still);
+        }
         const uint8_t* obj = object_from_handle(g_handle);
         const bool stands = standing(g_handle);
         const bool ok = g_havok_before + g_physx_before > 0 && havok + physx == 0 && stands;

@@ -38,13 +38,13 @@ $recName = Split-Path $recDir -Leaf
 Write-Output ("recording {0}: {1}, {2} frames, {3:N1} s of game time" -f $recName, $manifest.start.type, $manifest.frames, $manifest.game_seconds)
 
 if ($manifest.start.type -eq 'save') {
-    # Replays load the save from the real save folder (writes stay blocked): it must still be the recorded one.
+    # The game lists the save folder's saves, and the plugin hands it the recording's copy when it reads the save
+    # (harness.cpp, redirect_recorded_save): the slot must exist, its content may have changed since the recording.
     $copy = Join-Path $recDir $manifest.start.file
     $real = Join-Path $RfgSaveDir $manifest.start.file
     if (-not (Test-Path $copy) -or -not (Test-Path $real)) { Write-Output "save file $($manifest.start.file) missing"; exit 6 }
     if ((Get-FileHash $copy).Hash -ne (Get-FileHash $real).Hash) {
-        Write-Output "the save in slot $($manifest.start.slot) changed since this recording was made: cannot replay it yet"
-        exit 6
+        Write-Output "the save in slot $($manifest.start.slot) changed since this recording was made: the replay reads the recording's copy"
     }
 }
 if (Get-Process -Name rfg -ErrorAction SilentlyContinue) { Write-Output 'rfg.exe is already running: aborting'; exit 3 }

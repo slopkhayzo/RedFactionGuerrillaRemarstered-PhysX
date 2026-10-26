@@ -3,7 +3,8 @@ rfgphys @VERSION@ - physics mod for Red Faction Guerrilla Re-Mars-tered
 
 What it does
 ------------
-- Debris is never removed: buildings you bring down stay as rubble.
+- Debris is never removed: buildings you bring down stay as rubble. When the game rebuilds a building (an activity
+  starting over, a structure the EDF restores), its rubble goes with it.
 - Debris pieces are simulated by NVIDIA PhysX 5 on the graphics card, in a separate process, so piles of tens of
   thousands of pieces keep a high frame rate.
 - Debris pieces collide with each other and pile up, explosions throw piles around, and you can stand on heavy

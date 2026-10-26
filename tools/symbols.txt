@@ -202,6 +202,8 @@ var Num_explosion_infos
 fn havok_body_free
 fn havok_body_set_pos_orient @00423790 as havok_body_set_pos_orient_by_handle
 fn havok_body_set_linear_velocity @00423870 as havok_body_set_linear_velocity_by_handle
+# property 7 on a stand-in: the body does not drive its object (havok_update_pos_and_orient), as on a walker's limbs
+fn havok_set_property
 # stand-ins with the pieces' own shapes, hits on them (melee, bullets: the zone object they carry), projectiles
 fn hkReferencedObject::addReference
 fn hkReferencedObject::removeReference
@@ -225,6 +227,9 @@ fn watch_dog_remove_objects_from_island
 # object is destroyed with its descendants (restore_destroy_object) and streamed in again from its zone
 fn world::restore_object
 fn restore_destroy_object
+# loose chunks: rfg_dyn_shardify_work (listed above) makes a new rfg_mover of each part that comes loose and reports
+# (source, new) to activity_register_damage_mark_objects
+fn activity_register_damage_mark_objects
 fn havok_sim_islands_process_post
 fn hkSolverAllocator::setBuffer
 fn hkFreeListMemorySystem::mainQuit

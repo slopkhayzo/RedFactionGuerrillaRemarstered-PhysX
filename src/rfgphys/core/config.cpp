@@ -78,6 +78,7 @@ Config load_config(const std::wstring& ini_path) {
     c.test_zone_tour = get_int(ini_path, L"Test", L"ZoneTour", 0);
     c.test_fly_camera = get_int(ini_path, L"Test", L"FlyCamera", 0) != 0;
     c.test_stand_in_probe = get_int(ini_path, L"Test", L"StandInProbe", 0) != 0;
+    c.test_stand_in_drives_zone = get_int(ini_path, L"Test", L"StandInDrivesZone", 0) != 0;
     c.test_vehicle_push = get_int(ini_path, L"Test", L"VehiclePush", 0) != 0;
     c.test_restore_building = get_int(ini_path, L"Test", L"RestoreBuilding", 0);
     c.test_view_shots = get_int(ini_path, L"Test", L"ViewShots", 0);
@@ -89,6 +90,7 @@ Config load_config(const std::wstring& ini_path) {
     c.test_inspect_frames = get_string(ini_path, L"Test", L"InspectFrames", L"");
     c.auto_load_save = get_int(ini_path, L"Test", L"AutoLoadSave", 0) != 0;
     c.block_save_writes = get_int(ini_path, L"Test", L"BlockSaveWrites", 0) != 0;
+    c.test_god_mode = get_int(ini_path, L"Test", L"GodMode", 0) != 0;
     c.test_reset_destruction = get_int(ini_path, L"Test", L"ResetDestruction", 0) != 0;
     c.test_auto_new_game = get_int(ini_path, L"Test", L"AutoNewGame", 0) != 0;
     // DebrisCollide replaced WorldOnlyDebrisCollide (which only changed layers and so had no visible effect).

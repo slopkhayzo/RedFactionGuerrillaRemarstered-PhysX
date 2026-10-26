@@ -37,7 +37,10 @@ Development builds are `RelWithDebInfo` (`tools\build.ps1` without `-Config`). E
 An unattended run (queue job) boots the game, optionally loads the most recent save, plays idle, exits, and fails
 with exit code 5 if any save file changed. Save writes are always blocked in these runs, and the real save folder is
 backed up to `runs\save_backups` first. Such a run ends by itself with a hang report when a gameplay frame runs for
-30 s or a menu or loading frame for 60 s, and a timed one (`-ExitAfterGameplaySeconds`) 5 s into the death menu.
+30 s or a menu or loading frame for 60 s, and a timed one (`-ExitAfterGameplaySeconds`) 5 s into the death menu. The
+player is invulnerable in these runs (`Test.GodMode=1`; `-Set 'Test.GodMode=0'` to play fair); replays take it with
+`-Set 'Test.GodMode=1'`. A replay that starts from a save reads the recording's copy of it, so the player may go on
+playing (and saving) between recording and replaying.
 
 ```powershell
 & $q submit -Name 'RFG gameplay smoke test' -Owner 'RedFactionGuerrillaRemarstered-PhysX' -TimeoutMinutes 12 `
@@ -64,7 +67,13 @@ path moved with how many farther off did.
 (`world::restore_object`), and 5 s after that the log says how many of the pieces that broke off it are left in Havok
 and in PhysX and whether it stands again (`restore building: ... passed`). `Test.RestoreBuilding=N` does it N times
 (about 21 s each), as a demolition replayed over and over, and compares the general movers and the free render
-instances after the first and the last cycle.
+instances after the first and the last cycle. Before and after each restoration, `restore diag` lines sort the PhysX
+pieces within 60 m by what they broke off (the building, other level objects standing or gone, loose chunks made in
+play) and count the loose chunks there; afterwards only the debris of what the game does not rebuild (damaged or
+destroyed neighbours) should be left, and none of the restored building's loose chunks should still be in the world.
+A building's loose chunks are rfg_movers the game makes while it comes apart (`rfg_dyn_shardify_work`); the restore
+hierarchy does not name them, so KeepDebris notes each one with the object it came off and a restoration takes their
+shards along too.
 
 `Test.ViewShots=1` (campaign, with `-AutoLoadSave`, 60 s of gameplay) is for comparing settings on screen: from 10 s in,
 a screenshot a second for 40 s (`view_NN.png`), the camera turned about 36 degrees every 4 s, and the frame times of
@@ -119,6 +128,14 @@ session that crashed, track included.
 `Test.StandInProbe=1` checks the pieces' Havok stand-ins every 2 s: a ray with the game's default filter (the one
 melee and bullets use) through a piece that has one, and a hammer-like blow through the zone object's
 `process_melee_hit`; the log says whether the ray found the stand-in and whether the piece moved in the host.
+
+Stand-ins carry the zone object and have Havok property 7, as a walker's limbs do, so that the game's per-step pose
+update (`havok_update_pos_and_orient`) leaves the zone object where it is. Before 0.3.3 it moved the zone object to a
+stand-in every step, and the minimap, which places each zone's tile at its object (`obj_zone::get_bbox`), showed black
+voids and seams. `rfgphys.log` warns if a zone object that stand-ins carry ever moves (`WARNING the zone object
+stand-ins carry ... moved`); `Test.StandInDrivesZone=1` brings the old behaviour back for comparisons. The replay of
+`20261025-231412-save-slot0` with `Harness.ScreenshotEvery=460` shows it: with the old behaviour the minimap is 15-87%
+black from frame 41,400 to 47,840, with property 7 about 2%.
 
 `physx_host.log` sums up every 5 s: bodies, awake and frozen ones (frozen as calm or as going nowhere), what woke them,
 the restless pieces (awake for over 5 s without a break: a pile that jitters), how many pieces were put back on the

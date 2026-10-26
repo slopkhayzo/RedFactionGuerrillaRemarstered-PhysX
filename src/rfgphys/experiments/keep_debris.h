@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
 struct Config;
 
@@ -49,5 +50,8 @@ struct KeepDebrisFrame {
 };
 KeepDebrisFrame keep_debris_take_frame();  // sim thread, end of frame
 int32_t debris_pool_capacity();
+// Diagnostics: the loose chunks the last restoration took (handles), and how many chunks were noted.
+const std::vector<uint32_t>& last_restored_chunks();
+uint64_t loose_chunks_noted();
 
 }  // namespace experiments

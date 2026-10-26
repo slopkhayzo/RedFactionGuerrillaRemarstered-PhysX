@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(rfgphys VERSION 0.3.0 LANGUAGES C CXX)
+project(rfgphys VERSION 0.3.4 LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "rfg.exe is 32-bit: configure with -A Win32")

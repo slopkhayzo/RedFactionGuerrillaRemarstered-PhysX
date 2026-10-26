@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -168,6 +169,7 @@ void recycle(const uint8_t* zone, int need) {
 }
 
 constexpr int kGameplayState = 1;  // GS_GAMEPLAY
+constexpr int kLoadState = 2;      // GS_LOAD
 
 // Sim thread, end of frame; registered with or without KeepDebris (telemetry reports the zones either way). Zones are
 // only read in gameplay: loading and leaving a level rebuild them.
@@ -549,6 +551,35 @@ std::atomic<uint32_t> g_restored_debris{0};
 uint32_t g_restore_logs = 0;
 std::vector<uint8_t*> g_restore_matches;  // sim thread
 
+// Loose chunks. When a building comes apart, rfg_dyn_shardify_work makes a new rfg_mover of each part that came loose
+// (a handle the zone hands out in play) and tells activity_register_damage_mark_objects(source, new chunk). The
+// shards that break off such a chunk later carry the chunk's handle as original_object (rfg_dyn_create_shard), not
+// the building's, and the restoration hierarchy knows only level objects: a restored building's chunks went with it,
+// their shards stayed (in the restore test about 80 pieces a cycle, piling up with every replay of an activity). The
+// chunks are noted here with the level object they came off (a chunk off a chunk: that one's), and a restored object
+// takes its chunks' shards along. The other caller, rfg_dyn_apply_shape_cutter, passes (attacker, mover).
+SRWLOCK g_chunk_lock = SRWLOCK_INIT;
+std::unordered_map<uint32_t, uint32_t> g_chunk_root;  // under g_chunk_lock: loose chunk -> the level object
+uint64_t g_chunks_noted = 0, g_chunks_restored = 0;
+std::vector<uint32_t> g_last_restored_chunks;  // diagnostics: the loose chunks of the last restoration
+
+void(__cdecl* o_mark_objects)(uint8_t*, uint8_t*) = nullptr;
+void __cdecl d_mark_objects(uint8_t* source, uint8_t* made) {
+    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
+    if (source && made && within(caller, r::rfg_dyn_shardify_work, rfg::size::rfg_dyn_shardify_work)) {
+        const uint32_t from = *reinterpret_cast<const uint32_t*>(source + kObjHandle);
+        const uint32_t chunk = *reinterpret_cast<const uint32_t*>(made + kObjHandle);
+        if (from != 0xFFFFFFFFu && chunk != 0xFFFFFFFFu && chunk != from) {
+            AcquireSRWLockExclusive(&g_chunk_lock);
+            const auto it = g_chunk_root.find(from);
+            g_chunk_root[chunk] = it != g_chunk_root.end() ? it->second : from;
+            ++g_chunks_noted;
+            ReleaseSRWLockExclusive(&g_chunk_lock);
+        }
+    }
+    o_mark_objects(source, made);
+}
+
 void(__cdecl* o_restore_destroy)(void*, uint32_t) = nullptr;
 void __cdecl d_restore_destroy(void* restored, uint32_t handle) {
     if (handle != 0xFFFFFFFFu) {
@@ -561,12 +592,36 @@ void __cdecl d_restore_destroy(void* restored, uint32_t handle) {
 
 // Sim thread, end of a frame: the debris of the objects restored since the last gameplay frame.
 void take_restored_debris(int game_state) {
+    // A level load starts the zones' handles over: the notes of loose chunks go.
+    static int last_state = -1;
+    if (game_state == kLoadState && last_state != kLoadState) {
+        AcquireSRWLockExclusive(&g_chunk_lock);
+        g_chunk_root.clear();
+        ReleaseSRWLockExclusive(&g_chunk_lock);
+    }
+    last_state = game_state;
     if (game_state != kGameplayState) return;
     std::unordered_set<uint32_t> handles;
     AcquireSRWLockExclusive(&g_restored_lock);
     handles.swap(g_restored_handles);
     ReleaseSRWLockExclusive(&g_restored_lock);
     if (handles.empty() || !single_player()) return;
+    // The restored objects' loose chunks went with them: their shards go too, and the notes of them.
+    uint32_t chunks = 0;
+    AcquireSRWLockExclusive(&g_chunk_lock);
+    for (auto it = g_chunk_root.begin(); it != g_chunk_root.end();) {
+        if (handles.count(it->second)) {
+            handles.insert(it->first);
+            if (!chunks) g_last_restored_chunks.clear();
+            g_last_restored_chunks.push_back(it->first);
+            ++chunks;
+            it = g_chunk_root.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    g_chunks_restored += chunks;
+    ReleaseSRWLockExclusive(&g_chunk_lock);
     uint8_t* w = world();
     uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
     const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldGeneralMovers);
@@ -582,9 +637,10 @@ void take_restored_debris(int game_state) {
     for (uint8_t* obj : g_restore_matches) destroy(w, obj, false);
     g_restored_debris.fetch_add(uint32_t(g_restore_matches.size()), std::memory_order_relaxed);
     debris_offload::forget_pieces_of(handles);
-    if (!g_restore_matches.empty() && g_restore_logs++ < 20)
-        LOG("experiment KeepDebris: %zu objects restored; the %u pieces of debris that broke off them go with them",
-            handles.size(), uint32_t(g_restore_matches.size()));
+    if ((!g_restore_matches.empty() || chunks) && g_restore_logs++ < 20)
+        LOG("experiment KeepDebris: %zu objects restored (%u of them loose chunks that came off them); the %u pieces of "
+            "debris in Havok that broke off them go with them", handles.size(), chunks,
+            uint32_t(g_restore_matches.size()));
 }
 
 // havok_memory_listener::allocationFailure(size): the game prints Havok's memory statistics and then loops forever.
@@ -628,6 +684,9 @@ bool install_keep_debris(const Config& cfg) {
     // Kept debris and pieces in PhysX outlive what they broke off; a restored object takes them along.
     if (cfg.exp_keep_debris || cfg.exp_physx_debris) {
         if (!hooks::create(r::restore_destroy_object, &d_restore_destroy, &o_restore_destroy, "restore_destroy_object"))
+            return false;
+        if (!hooks::create(r::activity_register_damage_mark_objects, &d_mark_objects, &o_mark_objects,
+                           "activity_register_damage_mark_objects"))
             return false;
         session::add_frame_callback(&take_restored_debris);
     }
@@ -673,6 +732,9 @@ KeepDebrisFrame keep_debris_take_frame() {
     f.render_used = f.render_max - rfg::global<int32_t>(r::rl_destroyable_model_instance__ms_object_pool + 0xC);
     return f;
 }
+
+const std::vector<uint32_t>& last_restored_chunks() { return g_last_restored_chunks; }
+uint64_t loose_chunks_noted() { return g_chunks_noted; }
 
 int32_t debris_pool_capacity() { return *reinterpret_cast<int32_t*>(debris_pool() + kPoolCapacity); }
 

@@ -1062,6 +1062,14 @@ constexpr int8_t kObjTypeZone = 19;  // OT_ZONE
 uint8_t* g_zone_obj = nullptr;            // the last one handed out
 uint32_t g_zone_changes = 0;
 std::vector<uint8_t*> g_stand_in_zones;  // zone objects carried by stand-ins since they were last all freed
+// Where each of those was when a stand-in first carried it: nothing may move it (see create_stand_in).
+struct CarriedZone {
+    const uint8_t* zone;
+    float pos[3];
+};
+std::vector<CarriedZone> g_carried_zones;
+uint32_t g_zone_moved_logs = 0;
+bool g_stand_in_drives_zone = false;  // Test.StandInDrivesZone
 
 uint8_t* zone_object() {
     uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
@@ -1114,11 +1122,22 @@ void create_stand_in(uint32_t slot, const float pos[3], const float rot[9]) {
         ++g_stand_in_failures;
         return;
     }
+    // Property 7, as a walker's limbs have it: the body does not drive its object. Each step the game sets the object
+    // of every active body to the body's pose (havok_update_pos_and_orient), and stand-ins carry the zone object: the
+    // zone's minimap tile (obj_zone::get_bbox, its position plus its extents) went wherever a stand-in was (players:
+    // the minimap shaking, black voids and seams in it, the sky changing across them).
+    if (!g_stand_in_drives_zone)
+        if (void* body = static_cast<void* const*>(rfg::addr(r::Hk_rigid_bodies))[handle])
+            rfg::fn<void(__cdecl*)(void*, uint32_t, void*)>(r::havok_set_property)(body, 7, reinterpret_cast<void*>(1));
     p.stand_in = handle;
     memcpy(p.si_pos, pos, sizeof(p.si_pos));
     g_stand_in_slots.push_back(slot);
-    if (std::find(g_stand_in_zones.begin(), g_stand_in_zones.end(), zone) == g_stand_in_zones.end())
+    if (std::find(g_stand_in_zones.begin(), g_stand_in_zones.end(), zone) == g_stand_in_zones.end()) {
         g_stand_in_zones.push_back(zone);
+        CarriedZone c{zone, {}};
+        memcpy(c.pos, zone + 0x04, sizeof(c.pos));
+        g_carried_zones.push_back(c);
+    }
     ++g_stand_ins_created;
     g_stand_ins_peak = std::max(g_stand_ins_peak, ++g_stand_ins_live);
 }
@@ -1337,7 +1356,20 @@ void update_stand_ins() {
         p.stand_in = kNoStandIn;
     }
     g_stand_in_slots.resize(keep);
-    if (g_stand_in_slots.empty() && g_stand_ins_to_free.empty()) g_stand_in_zones.clear();
+    for (const CarriedZone& c : g_carried_zones) {
+        const float* now = reinterpret_cast<const float*>(c.zone + 0x04);
+        const float dx = now[0] - c.pos[0], dy = now[1] - c.pos[1], dz = now[2] - c.pos[2];
+        if (dx * dx + dy * dy + dz * dz > 1e-4f && g_zone_moved_logs < 5) {
+            ++g_zone_moved_logs;
+            LOG("debris offload: WARNING the zone object stand-ins carry (%p) moved %.2f m, from (%.1f, %.1f, %.1f) to "
+                "(%.1f, %.1f, %.1f)", static_cast<const void*>(c.zone), double(std::sqrt(dx * dx + dy * dy + dz * dz)),
+                double(c.pos[0]), double(c.pos[1]), double(c.pos[2]), double(now[0]), double(now[1]), double(now[2]));
+        }
+    }
+    if (g_stand_in_slots.empty() && g_stand_ins_to_free.empty()) {
+        g_stand_in_zones.clear();
+        g_carried_zones.clear();
+    }
     g_stats.stand_ins = g_stand_ins_live;
 }
 
@@ -1749,6 +1781,7 @@ void free_all_stand_ins() {
     }
     g_stand_in_slots.clear();
     g_stand_in_zones.clear();
+    g_carried_zones.clear();
 }
 
 void log_explosion_infos();  // below, with the explosion hook
@@ -2252,14 +2285,17 @@ void recycle_far_pieces() {
 
 // A restored object (world::restore_object: destroyed and streamed in again, as an activity's building when the
 // activity starts over) takes the pieces that broke off it along: in the game they would have faded out long before.
-// They go at the next handshake, where render instances may be released.
+// They go at the next handshake, where render instances may be released. The handles come from KeepDebris: the
+// restored objects and the loose chunks that came off them (experiments/keep_debris.cpp).
 // One pass over the pieces for all of them (a save's load restores thousands of objects).
-std::unordered_set<uint32_t> g_restored;  // sim thread: handles of restored objects
+std::unordered_set<uint32_t> g_restored;  // sim thread: handles of restored objects and their loose chunks
+std::unordered_set<uint32_t> g_last_restored;  // diagnostics: the handles of the last restoration
 uint64_t g_restored_pieces = 0;
 uint32_t g_restore_logs = 0;
 
 void forget_restored() {
     if (g_restored.empty()) return;
+    g_last_restored = g_restored;
     uint32_t n = 0;
     for (uint32_t s = 0; s < g_slots; ++s)
         if (g_pieces[s].inst && g_restored.count(g_pieces[s].original)) {
@@ -2268,8 +2304,8 @@ void forget_restored() {
         }
     g_restored_pieces += n;
     if (n && g_restore_logs++ < 20)
-        LOG("debris offload: %zu objects were restored; the %u pieces that broke off them went with them",
-            g_restored.size(), n);
+        LOG("debris offload: %zu objects were restored (with their loose chunks); the %u pieces that broke off them "
+            "went with them", g_restored.size(), n);
     g_restored.clear();
 }
 
@@ -2660,6 +2696,7 @@ bool install(const Config& cfg) {
             "waiting)", g_adopt_delay_ms, kMaxWaiting);
     g_diag = cfg.telemetry;
     g_probe = cfg.test_stand_in_probe;
+    g_stand_in_drives_zone = cfg.test_stand_in_drives_zone;
     for (size_t at = 0; at < cfg.test_inspect_frames.size();) {
         const size_t comma = cfg.test_inspect_frames.find(L',', at);
         const std::wstring item = cfg.test_inspect_frames.substr(at, comma == std::wstring::npos ? std::wstring::npos : comma - at);
@@ -2707,6 +2744,12 @@ void forget_pieces_of(const std::unordered_set<uint32_t>& object_handles) {
     for (const uint32_t handle : object_handles)
         if (handle != kNoObject) g_restored.insert(handle);
 }
+
+uint32_t piece_original(uint32_t slot) {
+    return g_on && slot < g_slots && g_pieces[slot].inst ? g_pieces[slot].original : kNoObject;
+}
+
+const std::unordered_set<uint32_t>& last_restored() { return g_last_restored; }
 
 uint32_t count_pieces_of(uint32_t object_handle) {
     uint32_t n = 0;

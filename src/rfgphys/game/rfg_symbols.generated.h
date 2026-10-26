@@ -138,6 +138,7 @@ inline uint32_t explosion_create = 0x002EC640;  // Steam 0x002EC720; explosion_c
 inline uint32_t havok_body_free = 0x004231A0;  // Steam 0x00423110; havok_body_free, 126 bytes: void __cdecl(uint, bool, bool, bool)
 inline uint32_t havok_body_set_pos_orient_by_handle = 0x00423790;  // Steam 0x00423700; havok_body_set_pos_orient, 145 bytes: void __cdecl(uint, vector*, matrix*)
 inline uint32_t havok_body_set_linear_velocity_by_handle = 0x00423870;  // Steam 0x004237E0; havok_body_set_linear_velocity, 125 bytes: void __cdecl(uint, vector*)
+inline uint32_t havok_set_property = 0x00416C30;  // Steam 0x00416B80; havok_set_property, 61 bytes: void __cdecl(hkpWorldObject*, uint, void*)
 inline uint32_t hkReferencedObject__addReference = 0x00413FD0;  // Steam 0x00413F20; hkReferencedObject::addReference, 46 bytes: void __thiscall hkReferencedObject::()
 inline uint32_t hkReferencedObject__removeReference = 0x0031A620;  // Steam 0x0031A6A0; hkReferencedObject::removeReference, 65 bytes: void __thiscall hkReferencedObject::()
 inline uint32_t obj_zone__process_melee_hit = 0x00671240;  // Steam 0x00671600; obj_zone::process_melee_hit, 5 bytes: bool __thiscall obj_zone::(object*, float, vector*, vector*, vector*, uint, weapon_info*)
@@ -155,6 +156,7 @@ inline uint32_t havok_memory_watch_dog_free_memory = 0x0041C5B0;  // Steam 0x004
 inline uint32_t watch_dog_remove_objects_from_island = 0x0041C490;  // Steam 0x0041C3F0; watch_dog_remove_objects_from_island, 142 bytes: int __cdecl(hkpSimulationIsland*, int, int*)
 inline uint32_t world__restore_object = 0x00534B70;  // Steam 0x00534CE0; world::restore_object, 42 bytes: bool __thiscall world::(uint)
 inline uint32_t restore_destroy_object = 0x0053D890;  // Steam 0x0053D9F0; restore_destroy_object, 91 bytes: void __cdecl(hash_table<unsigned int,&hash_uint,2048,unsigned short>*, uint)
+inline uint32_t activity_register_damage_mark_objects = 0x00399BE0;  // Steam 0x00399C60; activity_register_damage_mark_objects, 54 bytes: void __cdecl(object*, object*)
 inline uint32_t havok_sim_islands_process_post = 0x00431C10;  // Steam 0x00431BA0; havok_sim_islands_process_post, 538 bytes: void __cdecl()
 inline uint32_t hkSolverAllocator__setBuffer = 0x0090FF00;  // Steam 0x00910270; hkSolverAllocator::setBuffer, 77 bytes: void __thiscall hkSolverAllocator::(void*, int)
 inline uint32_t hkFreeListMemorySystem__mainQuit = 0x008F3C60;  // Steam 0x008F3FB0; hkFreeListMemorySystem::mainQuit, 117 bytes: hkResult __thiscall hkFreeListMemorySystem::(hkFlags<enum hkMemorySystem::FlagBits,int>)
@@ -461,6 +463,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::havok_body_free, {0x004231A0, 0x00423110}},
     {&rva::havok_body_set_pos_orient_by_handle, {0x00423790, 0x00423700}},
     {&rva::havok_body_set_linear_velocity_by_handle, {0x00423870, 0x004237E0}},
+    {&rva::havok_set_property, {0x00416C30, 0x00416B80}},
     {&rva::hkReferencedObject__addReference, {0x00413FD0, 0x00413F20}},
     {&rva::hkReferencedObject__removeReference, {0x0031A620, 0x0031A6A0}},
     {&rva::obj_zone__process_melee_hit, {0x00671240, 0x00671600}},
@@ -478,6 +481,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::watch_dog_remove_objects_from_island, {0x0041C490, 0x0041C3F0}},
     {&rva::world__restore_object, {0x00534B70, 0x00534CE0}},
     {&rva::restore_destroy_object, {0x0053D890, 0x0053D9F0}},
+    {&rva::activity_register_damage_mark_objects, {0x00399BE0, 0x00399C60}},
     {&rva::havok_sim_islands_process_post, {0x00431C10, 0x00431BA0}},
     {&rva::hkSolverAllocator__setBuffer, {0x0090FF00, 0x00910270}},
     {&rva::hkFreeListMemorySystem__mainQuit, {0x008F3C60, 0x008F3FB0}},
@@ -780,6 +784,7 @@ inline constexpr uint32_t explosion_create = 520;
 inline constexpr uint32_t havok_body_free = 126;
 inline constexpr uint32_t havok_body_set_pos_orient_by_handle = 145;
 inline constexpr uint32_t havok_body_set_linear_velocity_by_handle = 125;
+inline constexpr uint32_t havok_set_property = 61;
 inline constexpr uint32_t hkReferencedObject__addReference = 46;
 inline constexpr uint32_t hkReferencedObject__removeReference = 65;
 inline constexpr uint32_t obj_zone__process_melee_hit = 5;
@@ -797,6 +802,7 @@ inline constexpr uint32_t havok_memory_watch_dog_free_memory = 250;
 inline constexpr uint32_t watch_dog_remove_objects_from_island = 142;
 inline constexpr uint32_t world__restore_object = 42;
 inline constexpr uint32_t restore_destroy_object = 91;
+inline constexpr uint32_t activity_register_damage_mark_objects = 54;
 inline constexpr uint32_t havok_sim_islands_process_post = 538;
 inline constexpr uint32_t hkSolverAllocator__setBuffer = 77;
 inline constexpr uint32_t hkFreeListMemorySystem__mainQuit = 117;

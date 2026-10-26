@@ -33,6 +33,8 @@ struct Config {
     int test_zone_tour = 0;           // > 0: that many hops across the open world instead, one every 15 s, blowing
                                       // up buildings after each landing (test/zone_cycle.h)
     bool test_fly_camera = false;     // a scripted fly camera flight with screenshots (dev/fly_camera.h)
+    bool test_stand_in_drives_zone = false;  // stand-ins without property 7, as before 0.3.3: they move the zone
+                                             // object they carry (physx/debris_offload.cpp; comparisons only)
     bool test_stand_in_probe = false; // every 2 s: a ray through a piece's stand-in and a blow on it, checked
                                       // (physx/debris_offload.cpp)
     bool test_vehicle_push = false;   // a vehicle moved through rubble in PhysX, checked (test/vehicle_push.h)
@@ -53,6 +55,7 @@ struct Config {
                                       // (physx/debris_offload.cpp)
     bool auto_load_save = false;      // main menu -> Load Game -> most recent save, without input
     bool block_save_writes = false;   // never write or erase save data (always on for unattended runs)
+    bool test_god_mode = false;       // the player takes no damage (run_game.ps1 runs; test/automation.cpp)
     bool test_reset_destruction = false;  // AutoLoadSave loads with the world's destruction reset (buildings back up)
     bool test_auto_new_game = false;  // main menu -> New Game (normal, no golden hammer), intro skipped, without input
 

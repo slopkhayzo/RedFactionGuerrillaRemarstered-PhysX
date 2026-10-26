@@ -33,6 +33,7 @@ $env:RFGPHYS_TEST_EXITAFTERGAMEPLAYSECONDS = "$ExitAfterGameplaySeconds"
 $env:RFGPHYS_TEST_EXITAFTERSECONDS = "$([Math]::Max(30, $TimeoutSeconds - 20))"
 $env:RFGPHYS_TEST_AUTOLOADSAVE = $(if ($AutoLoadSave) { '1' } else { '0' })
 $env:RFGPHYS_TEST_BLOCKSAVEWRITES = '1'   # unattended runs never write or erase save data
+$env:RFGPHYS_TEST_GODMODE = '1'           # nor die (teleports, rubble, the AI); -Set 'Test.GodMode=0' to play fair
 if ($Release) {
     $marker = Join-Path $GameDir 'scripts\rfgphys_installed_package.txt'
     Write-Output "release package: $(if (Test-Path $marker) { Get-Content $marker } else { 'none installed (a development deployment)' })"

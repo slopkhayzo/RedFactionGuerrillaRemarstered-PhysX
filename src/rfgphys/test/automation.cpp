@@ -26,6 +26,7 @@ bool g_caught_input = false;
 // keen::InputSystem: ControllerInfo[16] at +0x11AC, 0x18 bytes each, device class at +0 (1 keyboard, 2 mouse).
 constexpr uint32_t kInputControllerInfos = 0x11AC, kControllerInfoSize = 0x18, kMaxControllers = 16;
 constexpr int kClassKeyboard = 1, kClassMouse = 2;
+constexpr uint32_t kHumanFlags = 0xB4, kHumanInvulnerable = 0x20;  // human: flags, the invulnerable bit
 
 }  // namespace
 
@@ -195,6 +196,19 @@ void on_frame(int state) {
             LOG("automation: a handbook pane waits for a key -> closed");
         }
     }
+    // Test.GodMode: the flag human::is_invulnerable reads first (player_set_player_invulnerable sets it too, and starts a
+    // glow), again every frame: a test's teleports and a replay that drifts from its recording got the player killed.
+    if (g_cfg.test_god_mode && state == GS_GAMEPLAY) {
+        if (uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(rfg::rva::player_get_local_player)()) {
+            uint32_t& flags = *reinterpret_cast<uint32_t*>(player + kHumanFlags);
+            if (!(flags & kHumanInvulnerable)) {
+                flags |= kHumanInvulnerable;
+                static bool logged = false;
+                if (!logged) LOG("automation: god mode, the player takes no damage (Test.GodMode)");
+                logged = true;
+            }
+        }
+    }
     // The death menu waits for a choice and the gameplay clock stops: a timed run would sit there until its watchdog
     // (a test's teleport put the player under the ground; the user ended the game from the menu).
     if (g_cfg.exit_after_gameplay_s > 0 && state == GS_PLAYER_DEATH_OPTIONS && in_state_ms > 5000)
@@ -219,7 +233,7 @@ bool install(const Config& cfg) {
                             &d_write_file, &o_write_file, "SaveDataProviderWin32Steam::writeFileToSteamStorage");
         LOG("automation: save writes and erases are blocked for this session");
     }
-    if (cfg.auto_load_save || cfg.test_auto_new_game || cfg.exit_after_gameplay_s > 0)
+    if (cfg.auto_load_save || cfg.test_auto_new_game || cfg.exit_after_gameplay_s > 0 || cfg.test_god_mode)
         session::add_frame_callback(&on_frame);
     // The intro skip, for an automated new game and for replays (a new game's replay drives the same menus).
     if (cfg.test_auto_new_game || cfg.harness_mode == 2)

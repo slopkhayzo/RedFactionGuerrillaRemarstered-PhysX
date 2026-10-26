@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <cwctype>
 #include <map>
 #include <set>
 #include <string>
@@ -762,6 +763,86 @@ void leave_tick(int state) {
     if (now - g_leave_t0 > 40000) session::exit_now("replay finished; leaving the level timed out");
 }
 
+// ---- the recorded save ----
+
+// A replay that starts from a save loads it from the save folder, where the player may have saved again since the
+// recording (play sessions between recordings made them unreplayable). The game reads saves through its platform
+// layer (sw_api.dll's ISteamRemoteStorage on GOG), which opens the file: opened for reading, the save file gets the
+// recording's copy instead. Nothing in the save folder is written (save writes stay blocked in unattended runs, and a
+// write here is refused).
+std::wstring g_save_name, g_save_copy;  // the recorded save's file name, the copy in the recording
+std::atomic<uint32_t> g_save_redirects{0};
+using CreateFileWFn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+using CreateFileAFn = HANDLE(WINAPI*)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+CreateFileWFn o_create_file_w = nullptr;
+CreateFileAFn o_create_file_a = nullptr;
+
+// <anything>\autocloud\save\<the recorded file>, either slash.
+bool is_recorded_save(const std::wstring& path) {
+    std::wstring p = path;
+    for (wchar_t& c : p) c = c == L'/' ? L'\\' : wchar_t(towlower(c));
+    std::wstring tail = L"autocloud\\save\\" + g_save_name;
+    for (wchar_t& c : tail) c = wchar_t(towlower(c));
+    return p.size() >= tail.size() && p.compare(p.size() - tail.size(), tail.size(), tail) == 0;
+}
+
+constexpr DWORD kWriteAccess = GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE;
+
+HANDLE WINAPI d_create_file_w(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disposition,
+                              DWORD flags, HANDLE templ) {
+    if (name && !g_save_name.empty() && is_recorded_save(name)) {
+        if (access & kWriteAccess) {
+            LOG("harness: a write to the save (%ls) refused during the replay", name);
+            SetLastError(ERROR_ACCESS_DENIED);
+            return INVALID_HANDLE_VALUE;
+        }
+        if (g_save_redirects.fetch_add(1) < 3) LOG("harness: the game opens %ls: it reads the recording's copy", name);
+        return o_create_file_w(g_save_copy.c_str(), access, share, sa, disposition, flags, templ);
+    }
+    return o_create_file_w(name, access, share, sa, disposition, flags, templ);
+}
+
+HANDLE WINAPI d_create_file_a(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disposition,
+                              DWORD flags, HANDLE templ) {
+    if (name && !g_save_name.empty()) {
+        wchar_t wide[MAX_PATH * 2];
+        if (MultiByteToWideChar(CP_ACP, 0, name, -1, wide, int(std::size(wide))) > 0 && is_recorded_save(wide))
+            return d_create_file_w(wide, access, share, sa, disposition, flags, templ);
+    }
+    return o_create_file_a(name, access, share, sa, disposition, flags, templ);
+}
+
+void redirect_recorded_save(const std::wstring& dir) {
+    static bool hooked = false;
+    g_save_name.assign(g_header.save_file, g_header.save_file + strnlen(g_header.save_file, sizeof(g_header.save_file)));
+    if (g_save_name.empty()) {  // the header leaves it out (the manifest has it): the slot's copy in the recording
+        WIN32_FIND_DATAW fd;
+        const std::wstring pattern = dir + L"\\keen_savegame_*_" + std::to_wstring(g_header.save_slot) + L".sav";
+        HANDLE f = FindFirstFileW(pattern.c_str(), &fd);
+        if (f != INVALID_HANDLE_VALUE) {
+            g_save_name = fd.cFileName;
+            FindClose(f);
+        }
+    }
+    g_save_copy = dir + L"\\" + g_save_name;
+    if (g_save_name.empty() || GetFileAttributesW(g_save_copy.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        LOG("harness: the recording has no copy of its save (%ls): the save folder's is loaded", g_save_copy.c_str());
+        g_save_name.clear();
+        return;
+    }
+    if (hooked) return;
+    HMODULE kb = GetModuleHandleW(L"KernelBase.dll");
+    void* w = kb ? reinterpret_cast<void*>(GetProcAddress(kb, "CreateFileW")) : nullptr;
+    void* a = kb ? reinterpret_cast<void*>(GetProcAddress(kb, "CreateFileA")) : nullptr;
+    hooked = w && a && hooks::create_at(w, reinterpret_cast<void*>(&d_create_file_w),
+                                        reinterpret_cast<void**>(&o_create_file_w), "CreateFileW") &&
+             hooks::create_at(a, reinterpret_cast<void*>(&d_create_file_a), reinterpret_cast<void**>(&o_create_file_a),
+                              "CreateFileA");
+    LOG("harness: the save (%ls) is read from the recording%s", g_save_name.c_str(),
+        hooked ? "" : " - HOOK FAILED: the save folder's is loaded");
+    if (!hooked) g_save_name.clear();
+}
+
 bool load_recording() {
     const std::wstring dir = g_cfg.harness_recording;
     std::string error;
@@ -790,6 +871,7 @@ bool load_recording() {
         g_load_error = "the recording has no frames (not finished?)";
         return false;
     }
+    if (g_header.start_type == rec::kStartSave) redirect_recorded_save(dir);
     if (!g_reader.next(g_transition) || !(g_transition.flags & rec::kFrameTransition)) {
         g_load_error = "the recording does not start with a load transition frame";
         return false;

@@ -42,5 +42,9 @@ bool piece_position(uint32_t slot, float out[3]);
 // at the next sim/render handshake. And how many live pieces broke off one (tests).
 void forget_pieces_of(const std::unordered_set<uint32_t>& object_handles);
 uint32_t count_pieces_of(uint32_t object_handle);
+// Diagnostics: the object a live piece broke off (0xFFFFFFFF: none, or no piece), and the objects of the last
+// restoration.
+uint32_t piece_original(uint32_t slot);
+const std::unordered_set<uint32_t>& last_restored();
 
 }  // namespace debris_offload
