@@ -52,7 +52,8 @@ $knownDumps = Get-CrashDumpNames $GameDir
 Set-SteamLaunchEnv $GameDir
 Write-Output "starting rfg.exe, run folder $run"
 # Sledge sometimes fails to create its hooks at start (sledge\sledge.log): the game never reaches its first frame and
-# crashes on its way out. The game is then started once more, as run_replay.ps1 does.
+# crashes on its way out, at times several starts in a row. The game is then started again after a pause, up to 4
+# times, as run_replay.ps1 does.
 for ($attempt = 1; ; $attempt++) {
     $started = Get-Date
     $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
@@ -66,12 +67,14 @@ for ($attempt = 1; ; $attempt++) {
     Write-Output "rfg.exe exit code: $code"
     Stop-StrayGame
     $sledgeError = Get-SledgeStartError $GameDir $started
-    if (-not $sledgeError -or $attempt -ge 2) { break }
+    if (-not $sledgeError) { break }
     Write-Output "Sledge failed to start (the game never reached its first frame): $sledgeError"
+    if ($attempt -ge 4) { break }
     Copy-NewCrashDumps $GameDir $knownDumps $run | Out-Null
-    Rename-Item $run ((Split-Path $run -Leaf) + '-sledge-failed')
+    Rename-Item $run ((Split-Path $run -Leaf) + "-sledge-failed-$attempt")
     New-Item -ItemType Directory -Force $run | Out-Null
     $knownDumps = Get-CrashDumpNames $GameDir
+    Start-Sleep -Seconds 15
     Write-Output 'starting the game again (the failed start''s files are in the -sledge-failed folder)'
 }
 
