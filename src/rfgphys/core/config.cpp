@@ -82,6 +82,9 @@ Config load_config(const std::wstring& ini_path) {
     c.test_stand_in_drives_zone = get_int(ini_path, L"Test", L"StandInDrivesZone", 0) != 0;
     c.test_vehicle_push = get_int(ini_path, L"Test", L"VehiclePush", 0) != 0;
     c.test_restore_building = get_int(ini_path, L"Test", L"RestoreBuilding", 0);
+    c.test_stress_pieces = get_int(ini_path, L"Test", L"StressPieces", 0);
+    c.test_stress_radius_m = get_int(ini_path, L"Test", L"StressRadiusM", 120);
+    c.test_stress_start_s = get_int(ini_path, L"Test", L"StressStartS", 15);
     c.test_view_shots = get_int(ini_path, L"Test", L"ViewShots", 0);
     c.test_viewpoints = get_int(ini_path, L"Test", L"Viewpoints", 0);
     c.test_solver_guard = get_int(ini_path, L"Test", L"SolverGuard", 0) != 0;

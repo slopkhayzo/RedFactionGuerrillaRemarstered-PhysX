@@ -286,6 +286,7 @@ inline uint32_t rl_fp_kdtree__ms_class_factory_info = 0x01113AF8;  // Steam 0x01
 inline uint32_t rl_scene_renderer__ms_visible_renderable_instances_max = 0x010F945C;  // Steam 0x010FA45C; int
 inline uint32_t rl_scene__ms_renderable_instances_max = 0x010F9454;  // Steam 0x010FA454; int
 inline uint32_t Havok_mempool = 0x01958FC8;  // Steam 0x01959FC8; mempool
+inline uint32_t s_largeBlockAllocator = 0x0278128C;  // Steam 0x0278228C; hkMemoryAllocator*
 inline uint32_t obj_class_instantiator__hash_size = 0x01293538;  // Steam 0x01294538; int
 inline uint32_t obj_class_instantiator__alloc_funcs = 0x02C19FD0;  // Steam 0x02C1AFD0; fn*[3072 bytes]
 inline uint32_t obj_class_instantiator__max_objects = 0x02C23E98;  // Steam 0x02C24E98; int[3072 bytes]
@@ -624,6 +625,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::rl_scene_renderer__ms_visible_renderable_instances_max, {0x010F945C, 0x010FA45C}},
     {&rva::rl_scene__ms_renderable_instances_max, {0x010F9454, 0x010FA454}},
     {&rva::Havok_mempool, {0x01958FC8, 0x01959FC8}},
+    {&rva::s_largeBlockAllocator, {0x0278128C, 0x0278228C}},
     {&rva::obj_class_instantiator__hash_size, {0x01293538, 0x01294538}},
     {&rva::obj_class_instantiator__alloc_funcs, {0x02C19FD0, 0x02C1AFD0}},
     {&rva::obj_class_instantiator__max_objects, {0x02C23E98, 0x02C24E98}},

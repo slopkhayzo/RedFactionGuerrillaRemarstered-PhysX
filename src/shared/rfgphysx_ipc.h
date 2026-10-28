@@ -75,7 +75,8 @@ struct alignas(64) Control {
     // Game -> host.
     std::atomic<uint32_t> game_heartbeat;  // +1 every game frame
     std::atomic<uint32_t> quit;            // 1: the host exits
-    uint32_t reserved2[14];
+    std::atomic<uint32_t> test_flags;      // TestFlags: tests only, 0 in play (a host before them reads nothing here)
+    uint32_t reserved2[13];
 
     // Command ring counters: byte positions that only grow (and wrap at 2^32); the ring offset is position & (size-1).
     alignas(64) std::atomic<uint32_t> ring_head;  // written by the game: end of the last complete record
@@ -86,6 +87,13 @@ struct alignas(64) Control {
 
 constexpr uint32_t kFresh = 0x80000000u;   // in snapshot_latest: published and not taken yet
 constexpr uint32_t kIndexMask = 0x3u;
+
+// Control::test_flags.
+enum TestFlags : uint32_t {
+    // Removed statics wake no frozen pieces (Test.StressPieces: buildings restored over their rubble came down on it
+    // again and again, and woke all of it each time).
+    kTestNoUnsupportedWakes = 1u << 0,
+};
 
 // ---- commands -----------------------------------------------------------------------------------------------------
 
@@ -358,7 +366,8 @@ inline uint8_t* snapshot_states(SnapshotHeader* s, uint32_t max_bodies) {
 static_assert(std::atomic<uint32_t>::is_always_lock_free && sizeof(std::atomic<uint32_t>) == 4);
 static_assert(sizeof(Control) == 576 && offsetof(Control, host_state) == 64 && offsetof(Control, query_done) == 84 &&
                   offsetof(Control, host_message) == 128 &&
-                  offsetof(Control, game_heartbeat) == 384 && offsetof(Control, ring_head) == 448 &&
+                  offsetof(Control, game_heartbeat) == 384 && offsetof(Control, test_flags) == 392 &&
+                  offsetof(Control, ring_head) == 448 &&
                   offsetof(Control, ring_tail) == 512,
               "Control layout differs between the 32- and 64-bit builds");
 static_assert(sizeof(CmdHeader) == 8 && sizeof(StaticPlane) % 8 == 0 && sizeof(StaticBox) % 8 == 0 &&

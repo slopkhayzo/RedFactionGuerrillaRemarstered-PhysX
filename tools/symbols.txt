@@ -136,6 +136,7 @@ fn mempool::init
 fn mempool_init_alloc
 fn rfg_init_stage_1_prepare
 var Havok_mempool
+var s_largeBlockAllocator
 fn havok_memory_listener::allocationFailure
 fn havok_collect_objects_fast @00429B20 as havok_collect_objects_in_sphere
 fn explosion_apply_damage

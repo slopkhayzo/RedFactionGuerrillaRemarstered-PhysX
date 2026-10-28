@@ -41,6 +41,7 @@ uint32_t host_statics();  // static actors in the host's scene
 uint32_t max_bodies();
 float step_hz();
 uint64_t host_cpu_100ns();  // CPU time (kernel + user, 100 ns units) the host process has used; 0 without one
+void set_test_flags(uint32_t flags);  // rfgphysx::TestFlags, for tests (Test.StressPieces)
 
 // The newest snapshot, taken at the start of this frame's callbacks (simulation thread); null before the first one.
 // `fresh` is true in the frame it arrived. Valid until the next frame.

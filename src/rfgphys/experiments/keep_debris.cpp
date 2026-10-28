@@ -552,6 +552,7 @@ std::unordered_set<uint32_t> g_restored_handles;  // under g_restored_lock
 std::atomic<uint32_t> g_restored_debris{0};
 uint32_t g_restore_logs = 0;
 std::vector<uint8_t*> g_restore_matches;  // sim thread
+bool g_keep_restored = false;  // Test.StressPieces: the debris stays, and piles up with every restoration
 
 // Loose chunks. When a building comes apart, rfg_dyn_shardify_work makes a new rfg_mover of each part that came loose
 // (a handle the zone hands out in play) and tells activity_register_damage_mark_objects(source, new chunk). The
@@ -624,6 +625,7 @@ void take_restored_debris(int game_state) {
     }
     g_chunks_restored += chunks;
     ReleaseSRWLockExclusive(&g_chunk_lock);
+    if (g_keep_restored) return;
     uint8_t* w = world();
     uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
     const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldGeneralMovers);
@@ -683,7 +685,8 @@ bool install_keep_debris(const Config& cfg) {
             LOG("experiment DebrisPool: the world is already initialized; general_mover's object lists stay at 3,072");
         }
     }
-    // Kept debris and pieces in PhysX outlive what they broke off; a restored object takes them along.
+    // Kept debris and pieces in PhysX outlive what they broke off; a restored object takes them along (but in
+    // Test.StressPieces, test/stress_pieces.h).
     if (cfg.exp_keep_debris || cfg.exp_physx_debris) {
         if (!hooks::create(r::restore_destroy_object, &d_restore_destroy, &o_restore_destroy, "restore_destroy_object"))
             return false;
@@ -691,6 +694,7 @@ bool install_keep_debris(const Config& cfg) {
                            "activity_register_damage_mark_objects"))
             return false;
         session::add_frame_callback(&take_restored_debris);
+        g_keep_restored = cfg.test_stress_pieces > 0;
     }
     if (!cfg.exp_keep_debris) return true;
     if (!census::install()) return false;

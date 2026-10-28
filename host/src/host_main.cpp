@@ -1112,6 +1112,7 @@ struct Host {
     // 400 m across is not looked at.
     uint32_t wake_unsupported(PxBounds3 b) {
         if (b.isEmpty() || !frozen_count || !b.isFinite()) return 0;
+        if (sh.control->test_flags.load(std::memory_order_relaxed) & ipc::kTestNoUnsupportedWakes) return 0;
         b.minimum -= PxVec3(0.5f, 0.5f, 0.5f);
         b.maximum += PxVec3(0.5f, 3.0f, 0.5f);
         if (b.getDimensions().maxElement() > 400.0f) return 0;

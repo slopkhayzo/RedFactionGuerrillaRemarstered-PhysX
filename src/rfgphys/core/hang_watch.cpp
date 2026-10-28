@@ -117,6 +117,22 @@ BOOL CALLBACK log_window(HWND wnd, LPARAM) {
     return TRUE;
 }
 
+// Unattended runs: Sledge's box when it cannot start ("Unhandled exception during initialization: Failed to create
+// hook: post_event", in streaks; tools\run_game.ps1) holds the main thread before the first frame. The run ends at once
+// instead of after the 60 s limit, and run_game.ps1 and run_replay.ps1 start the game again.
+BOOL CALLBACK find_sledge_box(HWND wnd, LPARAM found) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(wnd, &pid);
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(wnd)) return TRUE;
+    wchar_t cls[16] = L"", title[16];
+    GetClassNameW(wnd, cls, int(std::size(cls)));
+    if (wcscmp(cls, L"#32770") != 0) return TRUE;
+    window_text(wnd, title, int(std::size(title)));
+    if (wcscmp(title, L"Sledge") != 0) return TRUE;
+    *reinterpret_cast<HWND*>(found) = wnd;
+    return FALSE;
+}
+
 void report(double stalled_ms, int state, const std::vector<Busy>& busy) {
     std::string list;
     for (const Busy& b : busy) {
@@ -155,6 +171,15 @@ DWORD WINAPI watch_main(void*) {
         Sleep(1000);
         const unsigned long long frames = gameloop::frames_ended();
         const int state = gameloop::last_state();
+        if (g_unattended && frames == 0) {
+            HWND box = nullptr;
+            EnumWindows(&find_sledge_box, LPARAM(&box));
+            if (box) {
+                LOG("hang watch: Sledge's box is up before the first frame:");
+                EnumChildWindows(box, &log_child_text, 0);
+                session::exit_now("Sledge could not start the game (unattended run: ended at once)");
+            }
+        }
         // Menus and loading screens may legitimately hold a frame for long: in play only gameplay frames are watched.
         // Unattended runs watch the others too, with a longer limit (four test runs froze loading a save, and the
         // user closed their windows).

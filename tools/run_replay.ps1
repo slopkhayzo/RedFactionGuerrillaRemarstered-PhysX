@@ -121,10 +121,10 @@ for ($i = 1; $i -le $Repeat; $i++) {
             $sledgeError = Get-SledgeStartError $GameDir $started
             if (-not $sledgeError) { break }
             Write-Output "  Sledge failed to start (the game never reached its first frame): $sledgeError"
-            if ($attempt -ge 4 -or (Test-Path (Join-Path $run 'replay.json'))) { break }
+            if ($attempt -ge 6 -or (Test-Path (Join-Path $run 'replay.json'))) { break }
             Rename-Item $run ((Split-Path $run -Leaf) + "-sledge-failed-$attempt")
             New-Item -ItemType Directory -Force $run | Out-Null
-            Start-Sleep -Seconds 15
+            Start-Sleep -Seconds 10
             Write-Output '  starting the game again (the failed start''s files are in the -sledge-failed folder)'
         }
 

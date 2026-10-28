@@ -75,6 +75,22 @@ A building's loose chunks are rfg_movers the game makes while it comes apart (`r
 hierarchy does not name them, so KeepDebris notes each one with the object it came off and a restoration takes their
 shards along too.
 
+`Test.StressPieces=N` (campaign, with `-AutoLoadSave`; set `Experiment.PhysXMaxBodies=262144` for more than 65,536)
+piles rubble up past what any base map holds: the same buildings come down again and again, and restorations leave
+their rubble where it lies. `Test.StressStartS` (15) into gameplay, the standing buildings within `Test.StressRadiusM`
+(120 m) of the player are noted. A cycle blows each one up with vehicle bombs throughout its box (up to three rounds
+while a fifth of it still stands), waits until its rubble is in PhysX and its piles, holds the view over the area for
+4 s, measured, and has the game restore the buildings. The bombs do not kick the pieces in PhysX, and a building coming
+down again wakes none of the rubble it was restored over (the host's `kTestNoUnsupportedWakes`; a real map has no
+rubble inside standing buildings), so the rubble of the cycles before stays in its piles. Each cycle's `stress: cycle N` line has the pieces, the piles, the render instances
+left, Havok's heap, the address space and the overview's frame times, and `stress: cycle N piles` the joins, the pieces
+that left piles or were given up far away, and the render task's time by part; `stress_cycle_N.png` is the overview of
+cycles 1, 2, 4, 8 and so on. It stops at N pieces or before a limit (slots for one more cycle, Havok's heap past 88%,
+under 6,000 render instances, under 120 MB of address space, the run's `ExitAfterGameplaySeconds`), measures the
+player's view at rest, runs the viewpoints with `Test.Viewpoints=1`, and ends an unattended run. The rubble lies denser
+than in a real map and in more piles (each restored building is a new one, and piles never mix buildings), but it loads
+the address space, the slots and the draws the same way.
+
 `Test.ViewShots=1` (campaign, with `-AutoLoadSave`, 60 s of gameplay) is for comparing settings on screen: from 10 s in,
 a screenshot a second for 40 s (`view_NN.png`), the camera turned about 36 degrees every 4 s, and the frame times of
 those 40 s in a histogram (`view shots: ... frames`). `Test.ViewShots=N` (N > 1) runs N seconds, in bursts of four shots
@@ -167,8 +183,8 @@ tools\replay_windows.py runs\<a> runs\<b> ...` compares replays of one recording
 leaves its pile. A pile takes at most `PhysXDebrisPileMaxPieces` (512), and a cell's few pieces join their building's
 pile next door after `PhysXDebrisPileNextDoorS` (10 s). The level's end logs `N pieces drawn by M piles` and `piles this level: ... made, ... joined, ...
 left again`. On the 245 s wcdlc7 replay the whole match went from 166-172 FPS without piles to 208-212.
-`Test.Viewpoints=1` (replays) measures a levelled map from fixed views placed around its debris before the replay
-ends: `viewpoints: view N` lines (frame times and each view's time window) and `viewpoint_N.png`;
+`Test.Viewpoints=1` (replays, and at the end of `Test.StressPieces`) measures a levelled map from fixed views placed
+around its debris before the replay ends: `viewpoints: view N` lines (frame times and each view's time window) and `viewpoint_N.png`;
 `Test.Viewpoints=2/3/4` first puts all debris, the piles or the pieces of their own out of sight. `python
 tools\profile_report.py runs\<run> --from-ms A --to-ms B` profiles one such window. On wcdlc7 the high views went
 from 23 ms without piles to 8.8 ms, and to 5.9-6.5 ms once compiled meshes free their CPU copies. The game keeps

@@ -52,6 +52,8 @@ struct View {
 bool g_on = false;
 int g_mode = 1;  // Test.Viewpoints: 1 as it is, 2-4 with the debris (all, piles, pieces of their own) out of sight
 bool g_active = false, g_finished = false;
+bool g_held = false;  // hold_view: another test's view
+View g_held_view;
 std::vector<View> g_views;
 size_t g_view = 0;
 int64_t g_view_since = 0, g_last_frame = 0;
@@ -84,11 +86,18 @@ View look(const std::string& name, Vec pos, Vec target, float hand) {
     return v;
 }
 
+// `hand` for look(): the game camera's own.
+float camera_hand() {
+    const Vec* orient = &field<Vec>(camera(), kCamRenderOrient);
+    return dot(cross(orient[1], orient[2]), orient[0]) >= 0 ? 1.f : -1.f;
+}
+
 // game_render_setup_frame hands the camera's view to the render camera, in the sim/render handshake: while a view is
 // held, the view drawn is the test's (as the fly camera does it).
 void __cdecl d_render_setup(void* renderer) {
-    if (g_active && g_view < g_views.size()) {
-        const View& v = g_views[g_view];
+    const View* held = g_held ? &g_held_view : g_active && g_view < g_views.size() ? &g_views[g_view] : nullptr;
+    if (held) {
+        const View& v = *held;
         uint8_t* cam = camera();
         field<Vec>(cam, kCamRenderPos) = v.pos;
         Vec* orient = &field<Vec>(cam, kCamRenderOrient);
@@ -175,29 +184,43 @@ void on_frame(int game_state) {
 }  // namespace
 
 bool install(const Config& cfg) {
-    if (!cfg.test_viewpoints) return true;
-    if (cfg.harness_mode != 2) {
-        LOG("viewpoints: only in replays (Harness.Mode=replay)");
+    const bool stress = cfg.test_stress_pieces > 0;
+    if (!cfg.test_viewpoints && !stress) return true;
+    if (cfg.harness_mode != 2 && !stress) {
+        LOG("viewpoints: only in replays (Harness.Mode=replay) and with Test.StressPieces");
         return true;
     }
     bool ok = hooks::create(r::game_render_setup_frame, &d_render_setup, &o_render_setup, "game_render_setup_frame");
     ok &= screenshot::install();
     if (!ok) return false;
+    if (!cfg.test_viewpoints) return true;  // the held views of Test.StressPieces only
     g_on = true;
     g_mode = cfg.test_viewpoints;
     session::add_frame_callback(&on_frame);
-    LOG("viewpoints test armed: after the recording's last frame the view holds at viewpoints around the debris, %.0f s "
-        "each", kHoldS);
+    LOG("viewpoints test armed: after the %s the view holds at viewpoints around the debris, %.0f s each",
+        stress ? "stress test" : "recording's last frame", kHoldS);
     return true;
 }
 
 bool wanted() { return g_on && !g_finished && !g_active; }
 
+void hold_view(const float pos[3], const float target[3]) {
+    g_held_view = look("held", Vec{pos[0], pos[1], pos[2]}, Vec{target[0], target[1], target[2]}, camera_hand());
+    g_held = true;
+    rfg::fn<void(__cdecl*)(bool)>(r::hud_hide)(true);
+}
+
+void release_view() {
+    if (!g_held) return;
+    g_held = false;
+    rfg::fn<void(__cdecl*)(bool)>(r::hud_hide)(false);
+}
+
 void begin() {
     uint8_t* cam = camera();
     const Vec pos = field<Vec>(cam, kCamRenderPos);
     const Vec* orient = &field<Vec>(cam, kCamRenderOrient);
-    const float hand = dot(cross(orient[1], orient[2]), orient[0]) >= 0 ? 1.f : -1.f;
+    const float hand = camera_hand();
     View last;
     last.name = "the replay's last view";
     last.pos = pos;

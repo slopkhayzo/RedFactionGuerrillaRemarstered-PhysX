@@ -249,6 +249,10 @@ bool ready() { return g_state == State::Ready; }
 uint32_t max_bodies() { return g_ctl ? g_ctl->max_bodies : 0; }
 float step_hz() { return g_ctl ? g_ctl->step_hz : 60.0f; }
 
+void set_test_flags(uint32_t flags) {
+    if (g_ctl) g_ctl->test_flags.store(flags, std::memory_order_relaxed);
+}
+
 uint64_t host_cpu_100ns() {
     FILETIME created, exited, kernel, user;
     if (!g_process || !GetProcessTimes(g_process, &created, &exited, &kernel, &user)) return 0;

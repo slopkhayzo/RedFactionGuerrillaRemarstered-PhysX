@@ -51,9 +51,10 @@ $knownDumps = Get-CrashDumpNames $GameDir
 
 Set-SteamLaunchEnv $GameDir
 Write-Output "starting rfg.exe, run folder $run"
-# Sledge sometimes fails to create its hooks at start (sledge\sledge.log): the game never reaches its first frame and
-# crashes on its way out, at times several starts in a row. The game is then started again after a pause, up to 4
-# times, as run_replay.ps1 does.
+# Sledge sometimes fails to create its hooks at start (sledge\sledge.log): the game never reaches its first frame. The
+# failures come in streaks (on 2026-10-28, 19 of 21 starts in one job, 11 of 12 save-start replays in a row), for a
+# reason inside Sledge. The game is then started again after a pause, up to 6 times, as run_replay.ps1 does; the hang
+# watch ends such a start at once (about 14 s each).
 for ($attempt = 1; ; $attempt++) {
     $started = Get-Date
     $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
@@ -69,12 +70,12 @@ for ($attempt = 1; ; $attempt++) {
     $sledgeError = Get-SledgeStartError $GameDir $started
     if (-not $sledgeError) { break }
     Write-Output "Sledge failed to start (the game never reached its first frame): $sledgeError"
-    if ($attempt -ge 4) { break }
+    if ($attempt -ge 6) { break }
     Copy-NewCrashDumps $GameDir $knownDumps $run | Out-Null
     Rename-Item $run ((Split-Path $run -Leaf) + "-sledge-failed-$attempt")
     New-Item -ItemType Directory -Force $run | Out-Null
     $knownDumps = Get-CrashDumpNames $GameDir
-    Start-Sleep -Seconds 15
+    Start-Sleep -Seconds 10
     Write-Output 'starting the game again (the failed start''s files are in the -sledge-failed folder)'
 }
 
@@ -91,6 +92,10 @@ if (($savesBefore -join ';') -ne ($savesAfter -join ';')) {
     exit 5
 }
 Write-Output "save files verified untouched ($($savesAfter.Count) files)"
+if ($sledgeError) {
+    Write-Output "Sledge failed to start the game $attempt times in a row: the run did not happen"
+    exit 6
+}
 
 $log = Join-Path $run 'rfgphys.log'
 if (-not (Test-Path $log)) { Write-Output 'no rfgphys.log: the plugin did not load'; exit 2 }

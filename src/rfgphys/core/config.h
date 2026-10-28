@@ -42,6 +42,10 @@ struct Config {
     bool test_vehicle_push = false;   // a vehicle moved through rubble in PhysX, checked (test/vehicle_push.h)
     int test_restore_building = 0;    // > 0: that many times, a building blown up and restored by the game takes
                                       // its debris along, checked (test/restore_building.h)
+    int test_stress_pieces = 0;       // > 0: the buildings near the player blown up and restored over and over, their
+                                      // rubble kept, up to that many pieces, measured (test/stress_pieces.h)
+    int test_stress_radius_m = 120;   // StressPieces: the buildings within this distance of the player
+    int test_stress_start_s = 15;     // StressPieces: seconds of gameplay before the first cycle
     int test_view_shots = 0;          // 1: a screenshot a second for 40 s while the camera turns, and the frame
                                       // times; > 1: that many seconds, in bursts (test/view_shots.h)
     int test_viewpoints = 0;          // replays: after the last frame the view holds at viewpoints around the debris,

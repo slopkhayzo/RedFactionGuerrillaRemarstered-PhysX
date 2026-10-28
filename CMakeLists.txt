@@ -36,6 +36,7 @@ add_library(rfgphys SHARED
     src/rfgphys/telemetry/profiler.cpp
     src/rfgphys/test/automation.cpp
     src/rfgphys/test/restore_building.cpp
+    src/rfgphys/test/stress_pieces.cpp
     src/rfgphys/test/vehicle_push.cpp
     src/rfgphys/test/view_shots.cpp
     src/rfgphys/test/viewpoints.cpp

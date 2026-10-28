@@ -29,6 +29,7 @@
 #include "telemetry/telemetry.h"
 #include "test/automation.h"
 #include "test/restore_building.h"
+#include "test/stress_pieces.h"
 #include "test/vehicle_push.h"
 #include "test/view_shots.h"
 #include "test/viewpoints.h"
@@ -119,6 +120,7 @@ void init() {
     zone_cycle::install(cfg);
     vehicle_push::install(cfg);
     restore_building::install(cfg);
+    stress_pieces::install(cfg);
     visit::install(cfg);
     view_shots::install(cfg);
     viewpoints::install(cfg);

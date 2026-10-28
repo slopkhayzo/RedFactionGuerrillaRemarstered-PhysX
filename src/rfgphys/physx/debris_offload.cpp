@@ -4,6 +4,7 @@
 #include <intrin.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -2591,14 +2592,18 @@ constexpr double kPileSettleMs = 1500;       // a pile takes new pieces this lon
 constexpr uint32_t kPileMinNew = 4;          // frozen pieces in a cell that start a pile there
 // Each join and each split moves the building's whole sub-instance array in the game (about 50-100 us for the
 // largest buildings): 512 of them in one frame took up to 39 ms.
-constexpr uint32_t kPileJoinsPerScan = 128;  // pieces joining piles per scan, at most
-constexpr uint32_t kPileScanFrames = 15;     // how often frozen pieces are looked over for piles
+constexpr double kPileScanMs = 100;          // how often frozen pieces are looked over for piles
 constexpr uint32_t kUnpilesPerFrame = 256;   // pieces leaving piles in one frame, at most
 constexpr uint32_t kPileRetriesPerFrame = 8; // piles asking for their compile again in one frame, at most
-// The render task adds to the frame: a scan's joins took up to 7.3 ms in one frame, 128 of them. Past these times a
-// scan stops (the next frame goes on with it) and piles that lost pieces are sized again in a later frame (until then
-// their bounds are only too large).
-constexpr double kPileJoinBudgetMs = 1.0;
+// The render task adds to the frame: a scan's joins took up to 7.3 ms in one frame, 128 of them. Past these times the
+// joins stop (the next frame goes on with the scan's cells, without looking the pieces over again) and piles that lost
+// pieces are sized again in a later frame (until then their bounds are only too large). With more than
+// kPileBacklog pieces ready, the joins take kPileJoinBudgetBehindMs a frame: a piece drawn on its own costs about
+// 1 us every frame and its join 50 us once. Counted in frames instead (128 joins every 15), the piles fell behind in
+// slow frames, which the pieces left on their own made slower still (Test.StressPieces: 17,000 of 69,000 pieces piled,
+// 52 ms a frame).
+constexpr double kPileJoinBudgetMs = 1.0, kPileJoinBudgetBehindMs = 3.0;
+constexpr size_t kPileBacklog = 2000;
 constexpr double kPileResizeBudgetMs = 0.5;
 // A cell with fewer still pieces than kPileMinNew and no pile of its own: they join their building's pile in a
 // neighbouring cell. Such pieces were nearly all the pieces left on their own at a levelled map's end (930-1,040 of
@@ -3133,15 +3138,18 @@ void piles_frame() {
     const uint8_t* states = pxbridge::states(s);
     const uint32_t slots = std::min<uint32_t>(std::min<uint32_t>(s->slots, g_vehicle_first), g_slots);
     const double now_ms = session::since_start_ms();
-    static uint32_t frame = 0;
-    static bool behind = false;  // the last scan stopped at its time budget: this frame goes on with it
-    uint32_t budget = kPileJoinsPerScan;
-    const bool scan = behind || frame % kPileScanFrames == 0;
-    ++frame;
-    behind = false;
+    // Every kPileScanMs the still pieces of their own are sorted into their building's cells (`ready`); the joins go on
+    // frame after frame within their time budget until the cells are done, and only then is the next scan due.
+    static std::unordered_map<uint64_t, std::vector<uint32_t>> ready;
+    static double next_scan_ms = 0;
+    static bool resume = false;  // the last frame ran out of time: this one goes on with the scan's cells
+    static size_t backlog = 0;   // pieces ready at the last scan
+    const bool scan = !resume && now_ms >= next_scan_ms;
     if (scan) {
-        static std::unordered_map<uint64_t, std::vector<uint32_t>> ready;
+        next_scan_ms = now_ms + kPileScanMs;
+        if (ready.size() > 4096) ready.clear();  // the cells of past scans
         for (auto& [key, v] : ready) v.clear();
+        backlog = 0;
         // The frozen pieces of their own (move_piece lists them when they freeze; the ones that moved again, joined a
         // pile or went leave the list here).
         for (auto it = g_pile_candidates.begin(); it != g_pile_candidates.end();) {
@@ -3159,6 +3167,7 @@ void piles_frame() {
                 continue;
             ready[merge_cell_key(*reinterpret_cast<void* const*>(p->inst + kInstShared), poses[i].pos, g_pile_cell)]
                 .push_back(i);
+            ++backlog;
         }
         uint32_t waiting = 0;  // pieces ready for their cell's pile while it settles
         for (const auto& [key, v] : ready) {
@@ -3169,17 +3178,33 @@ void piles_frame() {
                 waiting += uint32_t(v.size());
         }
         g_waiting_for_pile = waiting;
-        const double deadline_ms = session::since_start_ms() + kPileJoinBudgetMs;
+        if (g_no_pile_near.size() > 16384) g_no_pile_near.clear();
+    }
+    if (scan || resume) {
+        const bool resumed = resume;
+        resume = false;
+        const double deadline_ms =
+            session::since_start_ms() + (backlog > kPileBacklog ? kPileJoinBudgetBehindMs : kPileJoinBudgetMs);
+        // A pile's place in a cell, a full pile's next one and the next-door joins as before; a cell done (its pieces
+        // joined, or nothing to do for them until the next scan) is emptied, so a frame that goes on skips it.
         for (auto& [key, v] : ready) {
-            if (!budget) break;
             if (v.empty()) continue;
             if (session::since_start_ms() > deadline_ms) {
-                behind = true;
+                resume = true;
                 break;
             }
+            if (resumed)  // since the scan, pieces may have woken, gone or joined
+                v.erase(std::remove_if(v.begin(), v.end(),
+                                       [&](uint32_t i) {
+                                           const Piece& p = g_pieces[i];
+                                           return i >= slots || !p.inst || !p.candidate || p.pile != kNoPile ||
+                                                  !(states[i] & ipc::kPoseAlive) || (states[i] & ipc::kPoseAwake);
+                                       }),
+                        v.end());
+            if (v.empty()) continue;
             const auto at = g_pile_at.find(key);
             const auto room = [](uint32_t members) { return g_pile_max ? size_t(g_pile_max - members) : SIZE_MAX; };
-            size_t asked = std::min<size_t>(v.size(), budget), joined = 0;
+            size_t asked = v.size(), joined = 0;
             if (at != g_pile_at.end()) {
                 const uint32_t id = at->second;
                 if (g_pile_max && g_piles[id].members >= g_pile_max) {
@@ -3187,39 +3212,47 @@ void piles_frame() {
                     ++g_piles_full;
                     continue;
                 }
-                if (!g_piles[id].unfinished && now_ms - g_piles[id].changed_ms < kPileSettleMs) continue;
+                if (!g_piles[id].unfinished && now_ms - g_piles[id].changed_ms < kPileSettleMs) {
+                    v.clear();
+                    continue;
+                }
                 asked = std::min(asked, room(g_piles[id].members));
                 joined = join_pile(id, v.data(), asked, poses, now_ms, deadline_ms);
                 g_piles[id].unfinished = joined < v.size();
-            } else if (v.size() >= kPileMinNew && asked >= 2) {
+            } else if (v.size() >= kPileMinNew) {
                 asked = std::min(asked, room(0));
                 joined = make_pile(key, v.data(), asked, poses, now_ms, deadline_ms);
                 g_piles[g_pile_at[key]].unfinished = joined < v.size();
             } else {
-                if (g_next_door_ms <= 0) continue;
-                double still_ms = 0;  // the longest any of them has been still
-                for (const uint32_t slot : v) still_ms = std::max(still_ms, now_ms - g_pieces[slot].frozen_since_ms);
-                if (still_ms < g_next_door_ms) continue;
-                double& until = g_no_pile_near[key];
-                if (now_ms < until) continue;
-                bool busy = false;
-                const uint32_t next_door = settled_pile_near(key, now_ms, busy);
+                uint32_t next_door = kNoPile;
+                if (g_next_door_ms > 0) {
+                    double still_ms = 0;  // the longest any of them has been still
+                    for (const uint32_t slot : v)
+                        still_ms = std::max(still_ms, now_ms - g_pieces[slot].frozen_since_ms);
+                    if (still_ms >= g_next_door_ms) {
+                        double& until = g_no_pile_near[key];
+                        bool busy = false;
+                        if (now_ms >= until) {
+                            next_door = settled_pile_near(key, now_ms, busy);
+                            if (next_door == kNoPile && !busy) until = now_ms + kNoPileNearRetryMs;
+                        }
+                    }
+                }
                 if (next_door == kNoPile) {
-                    if (!busy) until = now_ms + kNoPileNearRetryMs;
+                    v.clear();
                     continue;
                 }
                 asked = std::min(asked, room(g_piles[next_door].members));
                 joined = join_pile(next_door, v.data(), asked, poses, now_ms, deadline_ms);
                 g_joined_next_door += joined;
             }
-            budget -= uint32_t(joined);
-            if (joined < asked) {  // out of time on the way: the next frame goes on
-                behind = true;
+            if (joined < asked) {  // out of time on the way: the next frame goes on with the rest
+                v.erase(v.begin(), v.begin() + ptrdiff_t(joined));
+                resume = true;
                 break;
             }
+            v.clear();
         }
-        if (ready.size() > 4096) ready.clear();  // the cells of past frames
-        if (g_no_pile_near.size() > 16384) g_no_pile_near.clear();
     }
     uint32_t retries = 0, meshless = 0;
     const int64_t sizes_start = session::qpc();
@@ -3400,12 +3433,13 @@ struct PendingExplosion {
 CRITICAL_SECTION g_expl_lock;
 std::vector<PendingExplosion> g_expl_pending;
 uint32_t g_expl_forwarded = 0, g_expl_at_stand_ins = 0;
+std::atomic<bool> g_expl_kicks{true};  // kick_pieces_for_test
 
 void(__cdecl* o_explosion)(void*, void*, void*, float*, void*, float*, void*, bool) = nullptr;
 void __cdecl d_explosion(void* info, void* source, void* target, float* pos, void* orient, float* dir, void* weapon,
                          bool flag) {
     o_explosion(info, source, target, pos, orient, dir, weapon, flag);
-    if (!g_on || !pos || !info) return;
+    if (!g_on || !pos || !info || !g_expl_kicks.load(std::memory_order_relaxed)) return;
     const auto* in = static_cast<const uint8_t*>(info);
     const float r1 = *reinterpret_cast<const float*>(in + kExplRadius);
     const float r2 = *reinterpret_cast<const float*>(in + kExplSecondaryRadius);
@@ -3981,6 +4015,16 @@ bool piece_position(uint32_t slot, float out[3]) {
 }
 
 void hide_debris_for_test(int what) { g_hide_request = what; }
+
+void kick_pieces_for_test(bool on) { g_expl_kicks.store(on, std::memory_order_relaxed); }
+
+Census census() {
+    if (!g_on) return {};
+    Census c{uint32_t(g_vehicle_first - g_free.size()), g_vehicle_first, g_piles_live, g_piled_now, g_waiting_for_pile,
+             uint32_t(g_pile_candidates.size()), g_piled_total, g_unpiled_total, g_recycled_total, g_task_frames, {}};
+    for (int k = 0; k < kTaskParts; ++k) c.task_ms[k] = g_task[k].total;
+    return c;
+}
 
 bool debris_extent(float centre[3], float& radius, float& low_y, uint32_t& pieces) {
     const ipc::SnapshotHeader* s = g_on ? pxbridge::snapshot(nullptr) : nullptr;

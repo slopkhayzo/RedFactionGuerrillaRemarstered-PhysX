@@ -43,6 +43,19 @@ bool debris_extent(float centre[3], float& radius, float& low_y, uint32_t& piece
 // Test.Viewpoints 2-4 (what the rest of the scene costs): from the next sim/render handshake, the debris (1: all,
 // 2: the piles, 3: the pieces of their own) is drawn 10 km below where it lies, and nothing moves any more.
 void hide_debris_for_test(int what);
+// Test.StressPieces: off, explosions no longer kick the pieces in PhysX, so the rubble of the cycles before stays at
+// rest while the same buildings come down again (on by default).
+void kick_pieces_for_test(bool on);
+// Test.StressPieces (simulation thread): the pieces the host simulates and the slots there are for them, the piles
+// and the pieces in them, the still pieces that waited for a pile at the last scan and the still pieces of their own
+// looked over for piles; since the level's start, pieces that joined and left piles and pieces given up far away for
+// render instances, and the render task's frames and its time in moves, splits out of piles, piles and the rest.
+struct Census {
+    uint32_t live, slots, piles, piled, waiting, candidates;
+    uint64_t joined, unpiled, recycled, task_frames;
+    double task_ms[4];
+};
+Census census();
 
 // Simulation thread: these objects were restored (destroyed and streamed in again): the pieces that broke off them go
 // at the next sim/render handshake. And how many live pieces broke off one (tests).
