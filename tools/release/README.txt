@@ -9,6 +9,8 @@ What it does
   thousands of pieces keep a high frame rate.
 - Debris pieces collide with each other and pile up, explosions throw piles around, and you can stand on heavy
   rubble while lighter pieces get pushed aside.
+- Rubble at rest is drawn the way a standing building is: the pieces of one building lying close together become one
+  mesh, and a piece knocked loose leaves it again. A levelled map keeps its frame rate, even seen from high above.
 - Vehicles and walkers push rubble out of their way, rockets strike piles, and the sledgehammer and bullets knock
   pieces around. Mods that widen the sledgehammer's blow (Sledge's Sledgehammer Shockwave) throw the rubble too.
 - Flying and falling debris still smashes what it hits, as in the game: new pieces stay with the game's own physics

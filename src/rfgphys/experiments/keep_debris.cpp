@@ -15,6 +15,7 @@
 #include "core/log.h"
 #include "core/session.h"
 #include "game/rfg.h"
+#include "harness/harness.h"
 #include "hooks/hooks.h"
 #include "physx/debris_offload.h"
 #include "telemetry/object_census.h"
@@ -268,10 +269,11 @@ void log_shatter_burst(int free_at_start) {
     const uint32_t hidden = g_burst_hidden.exchange(0, std::memory_order_relaxed);
     const uint32_t kept = g_burst_kept.exchange(0, std::memory_order_relaxed);
     const uint32_t gated = g_burst_gated.exchange(0, std::memory_order_relaxed);
-    if (pieces >= kBurstPieces)
-        LOG("experiment KeepDebris: shatter burst: %u chunks, %u pieces (in shatters over 75 m from the camera %u, out "
-            "of view %u), %u kept from the game's deletion, %u deleted at once (the zone budget, %d handles free)",
-            chunks, pieces, distant, hidden, kept, gated, free_at_start);
+    if (pieces < kBurstPieces) return;
+    LOG("experiment KeepDebris: shatter burst: %u chunks, %u pieces (in shatters over 75 m from the camera %u, out "
+        "of view %u), %u kept from the game's deletion, %u deleted at once (the zone budget, %d handles free)",
+        chunks, pieces, distant, hidden, kept, gated, free_at_start);
+    harness::shot_series();
 }
 
 // rfg_dyn_maybe_delete(mover, ...): object_mover_process_explosion_hit asks whether an explosion's impulse is strong

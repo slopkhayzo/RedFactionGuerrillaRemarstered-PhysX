@@ -37,6 +37,12 @@ FrameStats take_frame();  // telemetry, simulation thread
 // is now (from the newest snapshot; false if the slot holds no piece).
 std::vector<uint32_t> pieces_near(const float center[3], float radius);
 bool piece_position(uint32_t slot, float out[3]);
+// Where the level's debris lies (Test.Viewpoints, simulation thread): the live pieces' mean position, the horizontal
+// distance from it within which 80% of them lie, and the height of the lowest tenth. False without pieces.
+bool debris_extent(float centre[3], float& radius, float& low_y, uint32_t& pieces);
+// Test.Viewpoints 2-4 (what the rest of the scene costs): from the next sim/render handshake, the debris (1: all,
+// 2: the piles, 3: the pieces of their own) is drawn 10 km below where it lies, and nothing moves any more.
+void hide_debris_for_test(int what);
 
 // Simulation thread: these objects were restored (destroyed and streamed in again): the pieces that broke off them go
 // at the next sim/render handshake. And how many live pieces broke off one (tests).

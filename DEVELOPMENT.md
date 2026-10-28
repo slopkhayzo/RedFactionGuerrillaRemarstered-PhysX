@@ -145,11 +145,37 @@ second (bubbling; landings and tumbles count too), and the melee sweeps (blows w
 with the pieces they pushed. `rfgphys.log` ends with how many pieces fell through the world anyway (given up below
 -400 m).
 
+`Harness.ShotsAfterBlow=N` takes a screenshot on each of the N frames after a wide melee blow starts or a frame
+shatters 500 pieces or more (up to 600 a session), to see what a hit does frame by frame. `deletions.csv` names the
+game function behind every destroyed object, by object type.
+
 `Test.InspectFrames=4400,5000` (replays; pair it with `Harness.ScreenshotFrames`) describes the view at those replay
 frames in the log: what the game's default ray, its destroyable-geometry ray and a fan of rays around the view hit
 (object, motion, pieces left in a building), the pieces in PhysX near the hit and along the view ray (frozen, awake or
 asleep, and any the host has no body for), the Havok bodies around, and the view ray against the static world in the
 host.
+
+Rendering: `Telemetry.RenderCensus=1` writes `render_timeline.csv` (per render frame: `before_kick_ms`, the render
+thread's visibility pass and batch building, which grows with the instances in view; `rt_parallel_ms`, its own passes
+while the scene thread draws; the scene thread; draw calls on each), and `Telemetry.RenderRouting=1` counts the
+destroyable instances' render calls, pieces apart (`render routing` lines every 5 s; it costs render-thread time). At
+the level's end `rfgphys.log` describes what the renderer has of the pieces (`render view of N pieces`: their material
+maps, sub-instances, buildings, frozen share, and how they would group by building and cell). `python
+tools\replay_windows.py runs\<a> runs\<b> ...` compares replays of one recording window by window of replay frames.
+`Experiment.PhysXDebrisPiles=1` draws the still pieces (frozen or asleep in PhysX) of one building lying in one cell
+(`PhysXDebrisPileCellM`, 16 m) as one compiled instance, a pile (`physx/debris_offload.cpp`, piles); a piece that moves
+leaves its pile. A pile takes at most `PhysXDebrisPileMaxPieces` (512), and a cell's few pieces join their building's
+pile next door after `PhysXDebrisPileNextDoorS` (10 s). The level's end logs `N pieces drawn by M piles` and `piles this level: ... made, ... joined, ...
+left again`. On the 245 s wcdlc7 replay the whole match went from 166-172 FPS without piles to 208-212.
+`Test.Viewpoints=1` (replays) measures a levelled map from fixed views placed around its debris before the replay
+ends: `viewpoints: view N` lines (frame times and each view's time window) and `viewpoint_N.png`;
+`Test.Viewpoints=2/3/4` first puts all debris, the piles or the pieces of their own out of sight. `python
+tools\profile_report.py runs\<run> --from-ms A --to-ms B` profiles one such window. On wcdlc7 the high views went
+from 23 ms without piles to 8.8 ms, and to 5.9-6.5 ms once compiled meshes free their CPU copies. The game keeps
+those copies in a 76 MB heap, where the largest piles had found no room and drew piece by piece. With telemetry,
+`buffer heap` lines (every 10 s and at the level's end) walk that heap and count compiles made, cancelled and failed,
+and the piles still without a mesh. `Telemetry.DrawStacks=N` samples the stack of one draw in N during the viewpoints
+(`draw_stacks.csv`: thread, time, return addresses as RVAs).
 
 A Wrecking Crew match without anyone at the keyboard: `Harness.Mode=record;Harness.AutoStart=wc` with
 `Harness.AutoStartOptions=<hex>` (the match setup, as `options_hex` in a recording's manifest) and

@@ -92,6 +92,7 @@ for ($i = 1; $i -le $Repeat; $i++) {
         $env:RFGPHYS_EXPERIMENT_PHYSXDEBRISBATCH = '1'
         $env:RFGPHYS_EXPERIMENT_PHYSXSOLIDDEBRIS = '0'
         $env:RFGPHYS_EXPERIMENT_PHYSXDEBRISDROPMESHES = '1'
+        $env:RFGPHYS_EXPERIMENT_PHYSXDEBRISPILES = '0'
         $env:RFGPHYS_EXPERIMENT_PHYSXSOLIDMASSKG = '0'
         $env:RFGPHYS_EXPERIMENT_PHYSXADOPTDELAYMS = '2000'
         $env:RFGPHYS_HARNESS_LEAVELEVELATEND = '0'
@@ -105,16 +106,26 @@ for ($i = 1; $i -le $Repeat; $i++) {
         Set-PluginOverrides $Set | Out-Null
         if ($settings) { Set-PluginOverrides $settings | Out-Null }
 
-        $knownDumps = Get-CrashDumpNames $GameDir
         Set-SteamLaunchEnv $GameDir | Out-Null
         Write-Output "[$(Get-Date -Format HH:mm:ss)] run $i/$Repeat variant '$label' -> $run"
-        $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
-        if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
-            Write-Output "  timeout after $TimeoutSeconds s: killing rfg.exe"
-            Stop-Process -Id $p.Id -Force
+        for ($attempt = 1; ; $attempt++) {
+            $knownDumps = Get-CrashDumpNames $GameDir
+            $started = Get-Date
+            $p = Start-Process -FilePath (Join-Path $GameDir 'rfg.exe') -WorkingDirectory $GameDir -PassThru
+            if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+                Write-Output "  timeout after $TimeoutSeconds s: killing rfg.exe"
+                Stop-Process -Id $p.Id -Force
+            }
+            Stop-StrayGame
+            $crashes = Copy-NewCrashDumps $GameDir $knownDumps $run
+            $sledgeError = Get-SledgeStartError $GameDir $started
+            if (-not $sledgeError) { break }
+            Write-Output "  Sledge failed to start (the game never reached its first frame): $sledgeError"
+            if ($attempt -ge 2 -or (Test-Path (Join-Path $run 'replay.json'))) { break }
+            Rename-Item $run ((Split-Path $run -Leaf) + '-sledge-failed')
+            New-Item -ItemType Directory -Force $run | Out-Null
+            Write-Output '  starting the game again (the failed start''s files are in the -sledge-failed folder)'
         }
-        Stop-StrayGame
-        $crashes = Copy-NewCrashDumps $GameDir $knownDumps $run
 
         $r = [ordered]@{ variant = $label; run = $i; completed = $false; frames = 0; divergence = ''; p50 = ''; p95 = ''; p99 = ''; fps = '';
                          created = ''; destroyed = ''; island_del = ''; gov_del = ''; bodies_end = ''; pool_min_free = '';

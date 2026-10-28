@@ -23,7 +23,7 @@
 namespace rfgphysx {
 
 constexpr uint32_t kMagic = 0x58505246;  // "FRPX"
-constexpr uint32_t kVersion = 7;
+constexpr uint32_t kVersion = 8;  // 8: a state byte per slot after the poses (snapshot_states)
 constexpr uint32_t kMaxRays = 4096;  // per RaycastBatch
 
 enum class HostState : uint32_t {
@@ -343,8 +343,16 @@ struct BodyPose {  // 64 bytes
     Quat prev_rot;
 };
 
+// A snapshot: the header, max_bodies poses, then each slot's flags again as one byte (PoseFlags, the low 8 bits), so
+// the game finds the bodies that move or changed in 64 KB instead of reading every pose (4 MB at 65,536 slots).
 constexpr uint32_t snapshot_stride(uint32_t max_bodies) {
-    return uint32_t((sizeof(SnapshotHeader) + size_t(max_bodies) * sizeof(BodyPose) + 63) & ~size_t(63));
+    return uint32_t((sizeof(SnapshotHeader) + size_t(max_bodies) * (sizeof(BodyPose) + 1) + 63) & ~size_t(63));
+}
+inline const uint8_t* snapshot_states(const SnapshotHeader* s, uint32_t max_bodies) {
+    return reinterpret_cast<const uint8_t*>(s + 1) + size_t(max_bodies) * sizeof(BodyPose);
+}
+inline uint8_t* snapshot_states(SnapshotHeader* s, uint32_t max_bodies) {
+    return reinterpret_cast<uint8_t*>(s + 1) + size_t(max_bodies) * sizeof(BodyPose);
 }
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free && sizeof(std::atomic<uint32_t>) == 4);

@@ -80,14 +80,30 @@ constexpr uint32_t kInstRecompileData = 0x158;
 constexpr uint32_t kDropPerFrame = 400;
 bool g_drop_meshes = false;
 uint32_t g_meshes_dropped = 0, g_recompiles_skipped = 0;
+void(__cdecl* o_start_recompile)(const void*, bool) = nullptr;  // rl_start_recompile_mesh_instance, hooked
 SRWLOCK g_piece_set_lock = SRWLOCK_INIT;
 std::unordered_set<const void*> g_piece_set;
+// The pieces' instances that got a compiled mesh (set_compiled_cache_data, which also clears the batchable bit) or
+// were just taken over: the render task gives the mesh back and sets the bit again, for these only (it used to look at
+// every piece's instance every frame). Any thread queues.
+SRWLOCK g_fix_lock = SRWLOCK_INIT;
+std::vector<uint8_t*> g_fix_queue;
 uint32_t g_slots = 0, g_player_slot = 0;
 constexpr uint32_t kNoStandIn = 0xFFFFFFFFu;
+constexpr uint32_t kNoPile = 0xFFFFFFFFu;
 struct Piece {
-    uint8_t* inst = nullptr;  // the render instance taken over; null: free slot
+    // What the render task looks at each frame for the pieces that move or changed (move_piece) comes first.
+    uint8_t* inst = nullptr;  // the render instance taken over; null: free slot. In a pile: the pile's instance
+    uint32_t pile = kNoPile;  // the pile drawing it (Experiment.PhysXDebrisPiles)
+    double frozen_since_ms = 0;  // since when it has been still in PhysX: frozen, or asleep (0: it moves)
     uint8_t settle = 0;       // 1 while the last applied pose was an interpolated (moving) one
     uint8_t fresh = 0;        // 1 from adoption until the render task first sees the piece
+    uint8_t candidate = 0;    // in g_pile_candidates (still, not in a pile)
+    float own_sub[12] = {};   // in a pile: its sub-instance's transform in its own instance, given back when it leaves
+    uint16_t sub_index = 0;   // in a pile: its sub-instance's index in its building
+    uint16_t submesh = 0;     // in a pile: its sub-instance's submesh
+    uint8_t disable_deferred = 0;  // in a pile: its sub-instance's flag of that name
+    float piled_pos[3] = {}, piled_q[4] = {};  // in a pile: where PhysX had it when it joined (it is drawn there)
     uint8_t heavy = 0;        // solid to the player (Experiment.PhysXSolidDebris)
     const uint8_t* shape = nullptr;  // its general_mover's hkpConvexVerticesShape, referenced: its stand-ins' shape
     uint32_t stand_in = kNoStandIn;  // Havok handle of its stand-in
@@ -104,6 +120,18 @@ struct Piece {
 };
 std::vector<Piece> g_pieces;
 std::vector<uint32_t> g_free;
+// The host state byte each slot had when the render task last acted on it (move_pieces): a slot is looked at again
+// only while its piece moves or when its state changed (a frozen pile of 30,000 pieces costs a 64 KB compare).
+std::vector<uint8_t> g_seen_state;
+// Still pieces not in a pile (Experiment.PhysXDebrisPiles): what piles_frame looks over for new piles.
+std::unordered_set<uint32_t> g_pile_candidates;
+// Where each piece is, for the stand-ins' search (update_stand_ins): its pose in the newest snapshot and its radius,
+// 16 bytes a slot instead of its record and its pose (r < 0: no live piece). move_piece writes it for the pieces that
+// move or changed; give_up clears it.
+struct Spatial {
+    float x, y, z, r;
+};
+std::vector<Spatial> g_spatial;
 std::unordered_map<uint64_t, uint32_t> g_shape_ids;
 uint32_t g_next_shape = 1;
 bool g_player_ready = false;
@@ -209,14 +237,8 @@ uint32_t intern_shape(const Parts& p, uint32_t flags) {
 
 // ---- render instances ----
 
-void move_instance(uint8_t* inst, const float pos[3], const float q[4]) {
-    const float x = q[0], y = q[1], z = q[2], w = q[3];
-    float* rot = reinterpret_cast<float*>(inst + kInstRot);  // rvec, uvec, fvec: the rotated x, y and z axes
-    rot[0] = 1 - 2 * (y * y + z * z), rot[1] = 2 * (x * y + z * w), rot[2] = 2 * (x * z - y * w);
-    rot[3] = 2 * (x * y - z * w), rot[4] = 1 - 2 * (x * x + z * z), rot[5] = 2 * (y * z + x * w);
-    rot[6] = 2 * (x * z + y * w), rot[7] = 2 * (y * z - x * w), rot[8] = 1 - 2 * (x * x + y * y);
-    memcpy(inst + kInstPos, pos, 12);
-    // As object_mover::update_render: mark the transform dirty, update the scene partition, tell the renderer.
+// As object_mover::update_render: mark the transform dirty, update the scene partition, tell the renderer.
+void refresh_instance(uint8_t* inst) {
     uint16_t& flags = *reinterpret_cast<uint16_t*>(inst + kInstFlags);
     flags = uint16_t((flags & 0xFFEF) | 1);
     if (rfg::fn<bool(__cdecl*)()>(r::RL_auto_partition_update)()) {
@@ -227,6 +249,43 @@ void move_instance(uint8_t* inst, const float pos[3], const float q[4]) {
         }
     }
     rfg::fn<void(__cdecl*)(uint8_t*)>(r::game_render_scene_update)(inst);
+}
+
+void rotation_of(const float q[4], float rot[9]) {  // rvec, uvec, fvec: the rotated x, y and z axes
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    rot[0] = 1 - 2 * (y * y + z * z), rot[1] = 2 * (x * y + z * w), rot[2] = 2 * (x * z - y * w);
+    rot[3] = 2 * (x * y - z * w), rot[4] = 1 - 2 * (x * x + z * z), rot[5] = 2 * (y * z + x * w);
+    rot[6] = 2 * (x * z + y * w), rot[7] = 2 * (y * z - x * w), rot[8] = 1 - 2 * (x * x + y * y);
+}
+
+void move_instance(uint8_t* inst, const float pos[3], const float q[4]) {
+    rotation_of(q, reinterpret_cast<float*>(inst + kInstRot));
+    memcpy(inst + kInstPos, pos, 12);
+    refresh_instance(inst);
+}
+
+// As move_instance, unless the instance is there already: within 0.05 mm, its axes within 5e-5 (0.003 degrees). PhysX
+// keeps a piece awake for a while after it stops, and the partition update is most of a move's cost; after a blast,
+// moving 2,000-3,000 awake pieces took up to 4 ms of the frame. Compared with what the instance shows, so a slow
+// piece still gets there (in steps of 0.05 mm).
+constexpr float kMoveEpsilon = 5e-5f;
+uint64_t g_moves_skipped = 0;
+bool move_instance_if_moved(uint8_t* inst, const float pos[3], const float q[4]) {
+    float rot[9];
+    rotation_of(q, rot);
+    const float* cur_rot = reinterpret_cast<const float*>(inst + kInstRot);
+    const float* cur_pos = reinterpret_cast<const float*>(inst + kInstPos);
+    bool there = true;
+    for (int k = 0; k < 3 && there; ++k) there = std::fabs(cur_pos[k] - pos[k]) < kMoveEpsilon;
+    for (int k = 0; k < 9 && there; ++k) there = std::fabs(cur_rot[k] - rot[k]) < kMoveEpsilon;
+    if (there) {
+        ++g_moves_skipped;
+        return false;
+    }
+    memcpy(inst + kInstRot, rot, sizeof(rot));
+    memcpy(inst + kInstPos, pos, 12);
+    refresh_instance(inst);
+    return true;
 }
 
 void release_instance(uint8_t* inst) {
@@ -247,16 +306,24 @@ std::vector<uint32_t> g_refs_to_release;
 uint64_t g_refs_taken = 0, g_refs_missing = 0, g_refs_released = 0;
 bool g_stream_owner_checked = false;
 
+void leave_pile(uint32_t slot);  // its sub-instance leaves the pile's instance, which stays for the others (piles)
+void cancel_compile(uint8_t* inst);  // the instance's pending mesh compile, if any, is aborted (piles)
+void queue_instance_fix(uint8_t* inst);  // its compiled mesh given back, its batchable bit set again (render task)
+
 void give_up(uint32_t slot, bool tell_host) {
     Piece& p = g_pieces[slot];
     if (!p.inst) return;
     if (p.stand_in != kNoStandIn) g_stand_ins_to_free.push_back(p.stand_in);
-    if (g_drop_meshes) {
-        AcquireSRWLockExclusive(&g_piece_set_lock);
-        g_piece_set.erase(p.inst);
-        ReleaseSRWLockExclusive(&g_piece_set_lock);
+    if (p.pile != kNoPile) {
+        leave_pile(slot);
+    } else {
+        if (g_drop_meshes) {
+            AcquireSRWLockExclusive(&g_piece_set_lock);
+            g_piece_set.erase(p.inst);
+            ReleaseSRWLockExclusive(&g_piece_set_lock);
+        }
+        release_instance(p.inst);
     }
-    release_instance(p.inst);
     // Sim thread, Havok not stepping (end of frame, the handshake, the level's end): the stand-in body (freed at the
     // end of the frame) holds a reference of its own.
     if (p.shape) rfg::fn<void(__thiscall*)(const void*)>(r::hkReferencedObject__removeReference)(p.shape);
@@ -264,6 +331,9 @@ void give_up(uint32_t slot, bool tell_host) {
     const auto chunk = g_chunk_pieces.find(p.chunk_uid);
     if (chunk != g_chunk_pieces.end() && --chunk->second == 0) g_chunk_pieces.erase(chunk);
     p = Piece{};
+    if (slot < g_seen_state.size()) g_seen_state[slot] = 0;
+    if (slot < g_spatial.size()) g_spatial[slot].r = -1.0f;
+    g_pile_candidates.erase(slot);
     g_free.push_back(slot);
     if (tell_host) pxbridge::destroy_body(slot);
     ++g_stats.released;
@@ -400,6 +470,60 @@ void __fastcall d_update_render_opacity(uint8_t* mover, void* edx) {
     o_update_render_opacity(mover, edx);
 }
 
+// world::object_physically_in_original_zone(object*): whether the object's position lies in the 511 m square of the
+// zone its handle belongs to. general_mover::update_pos_and_orient destroys a single-player general mover the moment
+// it leaves that square (the zone it lies in may stream out apart from its own). A piece waiting in Havok for PhysX
+// that a blow threw over a zone's border so went from the world in mid-flight: a shockwave hammer sent about 1,500 of
+// a tower's 2,000 pieces over one within 0.2 s of the hit (a Dust tower, 2026-10-28; "the structure almost
+// disappears"). Such a piece goes to PhysX at the end of the frame instead, where every piece goes with the zone it
+// lies in when that streams out. Only calls from that destroy are answered (rfg_mover and save code ask too), and
+// only for pieces adopt() takes; one that still has not gone over after kZoneKeepFrames is left to the game.
+constexpr uint32_t kZoneCheckReturn = 0x45;  // general_mover::update_pos_and_orient: after its call at +0x40
+constexpr uint32_t kZoneKeepFrames = 60;
+std::unordered_map<uint32_t, uint32_t> g_adopt_now;  // object handle -> the frame it left its zone
+uint32_t g_zone_frame = 0;
+uint64_t g_zone_kept = 0, g_zone_kept_adopted = 0, g_zone_left_to_game = 0;
+// The general movers the game deleted for leaving their zone, by why they were not kept (the log's census).
+enum { kZoneNotDebris, kZoneFading, kZoneNoInstance, kZoneNoBody, kZoneAttached, kZoneNotReady, kZoneReasons };
+uint64_t g_zone_deleted[kZoneReasons] = {};
+const void* g_zone_check_return = nullptr;
+bool(__fastcall* o_in_original_zone)(void*, void*, uint8_t*) = nullptr;
+bool __fastcall d_in_original_zone(void* w, void* edx, uint8_t* obj) {
+    const bool in = o_in_original_zone(w, edx, obj);
+    if (in || !g_on || _ReturnAddress() != g_zone_check_return || !obj) return in;
+    // Destroyed already (adopt() took it this frame; the object goes at the frame's end): the game's second destroy
+    // would do nothing (world::destroy_object skips a destroyed object), so it is not asked to.
+    if (obj[kObjFlags] & kObjDestroyed) return true;
+    if (!pxbridge::ready() || !world_mirror::ready()) {
+        ++g_zone_deleted[kZoneNotReady];
+        return in;
+    }
+    const uint32_t mflags = *reinterpret_cast<const uint32_t*>(obj + kMoverFlags);
+    const uint32_t* attach = reinterpret_cast<const uint32_t*>(obj + kObjAttach);
+    const bool has_instance = *reinterpret_cast<uint8_t* const*>(obj + kGmRenderInstance) != nullptr;
+    const bool has_body = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle) != 0xFFFFFFFFu;
+    const int why = !(mflags & kMoverLoadBalanced)         ? kZoneNotDebris
+                    : (mflags & kMoverFading)               ? kZoneFading
+                    : !has_instance                         ? kZoneNoInstance
+                    : !has_body                             ? kZoneNoBody
+                    : (attach[0] || attach[1] || attach[2]) ? kZoneAttached
+                                                            : -1;
+    if (why >= 0) {
+        ++g_zone_deleted[why];
+        return in;
+    }
+    const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHandle);
+    const auto [it, first] = g_adopt_now.try_emplace(handle, g_zone_frame);
+    if (first) {
+        ++g_zone_kept;
+    } else if (g_zone_frame - it->second > kZoneKeepFrames) {
+        g_adopt_now.erase(it);
+        ++g_zone_left_to_game;
+        return in;
+    }
+    return true;
+}
+
 void adopt() {
     uint8_t* w = world();
     uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
@@ -411,6 +535,8 @@ void adopt() {
     const auto destroy = rfg::fn<bool(__thiscall*)(void*, uint8_t*, bool)>(r::world__destroy_object);
     uint32_t budget = kAdoptPerFrame;
     const uint32_t now_ms = rfg::global<uint32_t>(r::Frametime_total_milliseconds);
+    ++g_zone_frame;
+    if (g_adopt_now.size() > 16384) g_adopt_now.clear();  // the game removed them otherwise
     if (g_first_seen.size() > 65536) {  // pieces the game removed while they waited
         for (auto it = g_first_seen.begin(); it != g_first_seen.end();)
             it = now_ms - it->second.since_ms > 4 * g_adopt_delay_ms + 10000 ? g_first_seen.erase(it) : std::next(it);
@@ -446,7 +572,8 @@ void adopt() {
                               av[0] * av[0] + av[1] * av[1] + av[2] * av[2] < kCalmSpin * kCalmSpin;
             if (calm && !wt.calm) wt.calm_since_ms = now_ms;
             wt.calm = calm;
-            if (now_ms - wt.since_ms < wait_ms) {
+            const bool left_zone = !g_adopt_now.empty() && g_adopt_now.count(obj_handle);  // goes over now
+            if (!left_zone && now_ms - wt.since_ms < wait_ms) {
                 g_waiting_list.emplace_back(obj_handle, inst);
                 ++waiting;
                 continue;
@@ -507,6 +634,7 @@ void adopt() {
             g_first_seen.erase(obj_handle);
             ++(at_rest ? g_went_at_rest : g_went_moving);
         }
+        if (!g_adopt_now.empty() && g_adopt_now.erase(obj_handle)) ++g_zone_kept_adopted;
         Piece& p = g_pieces[slot];
         p = Piece{};
         p.inst = inst;
@@ -520,7 +648,13 @@ void adopt() {
             AcquireSRWLockExclusive(&g_piece_set_lock);
             g_piece_set.insert(inst);
             ReleaseSRWLockExclusive(&g_piece_set_lock);
+            // The compile the game asked for when the piece split off makes a mesh that would only be given back:
+            // aborted at its next stop (or given back as before if it is done first). A mesh it already has goes in
+            // the next render task, where the batchable bit is set again too.
+            cancel_compile(inst);
         }
+        queue_instance_fix(inst);
+        if (slot < g_seen_state.size()) g_seen_state[slot] = 0;
         p.heavy = heavy ? 1 : 0;
         p.shape = own_shape;
         p.mass = mass;
@@ -539,64 +673,175 @@ void adopt() {
 // ---- per frame ----
 
 // Render task (below): the sim/render handshake, the render thread waiting.
+uint32_t g_unpiles_left = 0;  // this frame's budget (piles)
+// The render task's parts over the level (it adds to the frame): total and longest per frame, and their time in the
+// frames where the whole task took over 1 ms.
+struct TaskPart {
+    double total = 0, longest = 0, in_slow = 0;
+};
+enum { kTaskMoves, kTaskSplits, kTaskPiles, kTaskRest, kTaskParts };
+TaskPart g_task[kTaskParts];
+uint64_t g_task_frames = 0, g_task_slow = 0;
+double g_split_ms = 0;  // this frame's time in unpile()
+void note_task_frame(const double (&ms)[kTaskParts]) {
+    double sum = 0;
+    for (double v : ms) sum += v;
+    ++g_task_frames;
+    const bool slow = sum > 1.0;
+    g_task_slow += slow;
+    for (int k = 0; k < kTaskParts; ++k) {
+        g_task[k].total += ms[k];
+        g_task[k].longest = std::max(g_task[k].longest, ms[k]);
+        if (slow) g_task[k].in_slow += ms[k];
+    }
+}
+bool unpile(uint32_t slot, const ipc::BodyPose& b, double now_ms);  // piles
+bool moved_from_pile(const Piece& p, const ipc::BodyPose& b);       // piles
+extern bool g_piles_on;                                             // piles
+
+// Render task, first: the pieces' instances whose compiled mesh arrived (or that were just taken over) give it back
+// and are drawn batched again (Experiment.PhysXDebrisDropMeshes, PhysXDebrisBatch). A queued instance that is no
+// piece's any more (given up, or a pile's) is left alone.
+void fix_piece_instances() {
+    static std::vector<uint8_t*> work;
+    AcquireSRWLockExclusive(&g_fix_lock);
+    work.swap(g_fix_queue);
+    ReleaseSRWLockExclusive(&g_fix_lock);
+    if (work.empty()) return;
+    const auto delete_mesh = rfg::fn<void(__cdecl*)(void*)>(r::rl_delete_mesh_recompile_data);
+    size_t done = 0, drops = 0;
+    for (; done < work.size() && drops < kDropPerFrame; ++done) {
+        uint8_t* inst = work[done];
+        AcquireSRWLockShared(&g_piece_set_lock);
+        const bool piece = g_piece_set.count(inst) != 0;
+        ReleaseSRWLockShared(&g_piece_set_lock);
+        if (!piece) continue;
+        void*& mesh = *reinterpret_cast<void**>(inst + kInstRecompileData);
+        if (g_drop_meshes && mesh) {
+            delete_mesh(mesh);
+            mesh = nullptr;
+            ++drops;
+            ++g_meshes_dropped;
+        }
+        uint16_t& flags = *reinterpret_cast<uint16_t*>(inst + kInstFlags);
+        if (g_batch && !(flags & kInstBatchable)) {
+            flags |= kInstBatchable;
+            ++g_batch_restored;
+        }
+    }
+    if (done < work.size()) {  // the game's delete queue takes a few hundred a frame: the rest next frame
+        AcquireSRWLockExclusive(&g_fix_lock);
+        g_fix_queue.insert(g_fix_queue.begin(), work.begin() + done, work.end());
+        ReleaseSRWLockExclusive(&g_fix_lock);
+    }
+    work.clear();
+}
+
+void queue_instance_fix(uint8_t* inst) {
+    AcquireSRWLockExclusive(&g_fix_lock);
+    g_fix_queue.push_back(inst);
+    ReleaseSRWLockExclusive(&g_fix_lock);
+}
+
+// rl_destroyable_model_instance::set_compiled_cache_data(rl_mesh_recompile_data*, rl_mesh_recompile_parameters*): a
+// compiled mesh arrives (rl_mesh_recompile_finalize); it returns the one it replaces.
+void*(__fastcall* o_set_compiled)(uint8_t*, void*, void*, void*) = nullptr;
+void* __fastcall d_set_compiled(uint8_t* inst, void* edx, void* data, void* params) {
+    void* old = o_set_compiled(inst, edx, data, params);
+    AcquireSRWLockShared(&g_piece_set_lock);
+    const bool piece = g_piece_set.count(inst) != 0;
+    ReleaseSRWLockShared(&g_piece_set_lock);
+    if (piece) queue_instance_fix(inst);
+    return old;
+}
+
+// One slot that moves or changed state since the render task last acted on it.
+void move_piece(uint32_t i, uint8_t state, const ipc::BodyPose& b, float alpha, double now_ms) {
+    g_seen_state[i] = state;
+    Piece& p = g_pieces[i];
+    if (!p.inst || i == g_player_slot) return;
+    p.fresh = 0;
+    g_spatial[i] = (state & ipc::kPoseAlive) ? Spatial{b.pos.x, b.pos.y, b.pos.z, p.radius} : Spatial{0, 0, 0, -1.0f};
+    // Still: frozen by the host, or asleep in PhysX (a third of a levelled map's pieces fell asleep before the host
+    // froze them, and stayed out of the piles). Either wakes when something touches it.
+    const bool still = (state & ipc::kPoseAlive) && !(state & ipc::kPoseAwake);
+    if (!still) {
+        p.frozen_since_ms = 0;
+    } else {
+        if (!p.frozen_since_ms) p.frozen_since_ms = now_ms;
+        if (g_piles_on && p.pile == kNoPile && !p.candidate) {
+            p.candidate = 1;
+            g_pile_candidates.insert(i);
+        }
+    }
+    if (p.pile != kNoPile) {  // its pile draws it; once PhysX moved it, it goes on its own again
+        if (!still && moved_from_pile(p, b)) {
+            const int64_t t0 = session::qpc();
+            if (g_unpiles_left && unpile(i, b, now_ms))
+                --g_unpiles_left;
+            else
+                g_seen_state[i] = 0;  // looked at again next frame
+            g_split_ms += session::ticks_to_ms(session::qpc() - t0);
+        }
+        return;
+    }
+    if (!(state & ipc::kPoseAlive)) return;  // not created yet in the host
+    const bool awake = (state & ipc::kPoseAwake) != 0;
+    if (!awake && !p.settle) return;  // at rest and already placed there
+    float pos[3], q[4];
+    if (awake) {
+        pos[0] = b.prev_pos.x + (b.pos.x - b.prev_pos.x) * alpha;
+        pos[1] = b.prev_pos.y + (b.pos.y - b.prev_pos.y) * alpha;
+        pos[2] = b.prev_pos.z + (b.pos.z - b.prev_pos.z) * alpha;
+        ipc::Quat a = b.prev_rot, c = b.rot;
+        if (a.x * c.x + a.y * c.y + a.z * c.z + a.w * c.w < 0) c = {-c.x, -c.y, -c.z, -c.w};
+        q[0] = a.x + (c.x - a.x) * alpha, q[1] = a.y + (c.y - a.y) * alpha, q[2] = a.z + (c.z - a.z) * alpha,
+        q[3] = a.w + (c.w - a.w) * alpha;
+        const float inv = 1.0f / std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+        for (float& v : q) v *= inv;
+    } else {
+        pos[0] = b.pos.x, pos[1] = b.pos.y, pos[2] = b.pos.z;
+        q[0] = b.rot.x, q[1] = b.rot.y, q[2] = b.rot.z, q[3] = b.rot.w;
+    }
+    p.settle = awake ? 1 : 0;
+    if (pos[1] < kFloorY) {
+        give_up(i, true);
+        ++g_fell;
+        return;
+    }
+    if (move_instance_if_moved(p.inst, pos, q)) ++g_stats.moved;
+}
+
+// The slots to look at: awake in the host, or a state other than the one last acted on; 16 a step (SSE2).
 void move_pieces() {
     bool fresh = false;
     const ipc::SnapshotHeader* s = pxbridge::snapshot(&fresh);
     if (!s) return;
     const ipc::BodyPose* poses = pxbridge::poses(s);
+    const uint8_t* states = pxbridge::states(s);
     const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
+    if (g_seen_state.size() < size_t(g_slots) + 16) g_seen_state.resize(size_t(g_slots) + 16, 0);
+    if (g_spatial.size() < g_slots) g_spatial.resize(g_slots, Spatial{0, 0, 0, -1.0f});
     const float period_ms = 1000.0f / pxbridge::step_hz();
     float alpha = float(session::ticks_to_ms(session::qpc() - s->publish_qpc)) / period_ms;
     alpha = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
-    uint32_t drops = 0;
-    const auto delete_mesh = rfg::fn<void(__cdecl*)(void*)>(r::rl_delete_mesh_recompile_data);
-    for (uint32_t i = 0; i < slots; ++i) {
-        Piece& p = g_pieces[i];
-        if (!p.inst || i == g_player_slot) continue;
-        if (g_drop_meshes && drops < kDropPerFrame) {
-            void*& mesh = *reinterpret_cast<void**>(p.inst + kInstRecompileData);
-            if (mesh) {
-                delete_mesh(mesh);
-                mesh = nullptr;
-                ++drops;
-                ++g_meshes_dropped;
-            }
+    const double now_ms = session::since_start_ms();
+    const __m128i awake = _mm_set1_epi8(char(ipc::kPoseAwake));
+    for (uint32_t first = 0; first < slots; first += 16) {
+        // The state bytes past `slots` are within the snapshot (max_bodies is a multiple of 16) but not looked at.
+        const __m128i now = _mm_loadu_si128(reinterpret_cast<const __m128i*>(states + first));
+        const __m128i seen = _mm_loadu_si128(reinterpret_cast<const __m128i*>(g_seen_state.data() + first));
+        uint32_t mask = (~uint32_t(_mm_movemask_epi8(_mm_cmpeq_epi8(now, seen))) |
+                         uint32_t(_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_and_si128(now, awake), awake)))) &
+                        0xFFFFu;
+        if (slots - first < 16) mask &= (1u << (slots - first)) - 1;
+        while (mask) {
+            unsigned long bit;
+            _BitScanForward(&bit, mask);
+            mask &= mask - 1;
+            const uint32_t i = first + bit;
+            move_piece(i, states[i], poses[i], alpha, now_ms);
         }
-        if (g_batch) {
-            uint16_t& flags = *reinterpret_cast<uint16_t*>(p.inst + kInstFlags);
-            if (!(flags & kInstBatchable)) {
-                flags |= kInstBatchable;
-                ++g_batch_restored;
-            }
-        }
-        p.fresh = 0;
-        const ipc::BodyPose& b = poses[i];
-        if (!(b.flags & ipc::kPoseAlive)) continue;  // not created yet in the host
-        const bool awake = (b.flags & ipc::kPoseAwake) != 0;
-        if (!awake && !p.settle) continue;  // at rest and already placed there
-        float pos[3], q[4];
-        if (awake) {
-            pos[0] = b.prev_pos.x + (b.pos.x - b.prev_pos.x) * alpha;
-            pos[1] = b.prev_pos.y + (b.pos.y - b.prev_pos.y) * alpha;
-            pos[2] = b.prev_pos.z + (b.pos.z - b.prev_pos.z) * alpha;
-            ipc::Quat a = b.prev_rot, c = b.rot;
-            if (a.x * c.x + a.y * c.y + a.z * c.z + a.w * c.w < 0) c = {-c.x, -c.y, -c.z, -c.w};
-            q[0] = a.x + (c.x - a.x) * alpha, q[1] = a.y + (c.y - a.y) * alpha, q[2] = a.z + (c.z - a.z) * alpha,
-            q[3] = a.w + (c.w - a.w) * alpha;
-            const float inv = 1.0f / std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-            for (float& v : q) v *= inv;
-        } else {
-            pos[0] = b.pos.x, pos[1] = b.pos.y, pos[2] = b.pos.z;
-            q[0] = b.rot.x, q[1] = b.rot.y, q[2] = b.rot.z, q[3] = b.rot.w;
-        }
-        p.settle = awake ? 1 : 0;
-        if (pos[1] < kFloorY) {
-            give_up(i, true);
-            ++g_fell;
-            continue;
-        }
-        move_instance(p.inst, pos, q);
-        ++g_stats.moved;
     }
 }
 
@@ -1270,26 +1515,30 @@ void update_stand_ins() {
         };
         static std::vector<std::pair<float, uint32_t>> aim_hits;  // (distance along the line of fire, slot)
         aim_hits.clear();
-        for (uint32_t i = 0; i < slots; ++i) {
-            const Piece& p = g_pieces[i];
-            if (!p.inst) continue;
-            const ipc::BodyPose& b = poses[i];
-            if (!(b.flags & ipc::kPoseAlive)) continue;
-            const float dx = b.pos.x - px, dy = b.pos.y - py, dz = b.pos.z - pz;
+        const uint32_t scan = std::min<uint32_t>(slots, uint32_t(g_spatial.size()));
+        constexpr float kMostReach = std::max(kSolidReach, kGhostReach);
+        for (uint32_t i = 0; i < scan; ++i) {
+            const Spatial& sp = g_spatial[i];
+            if (sp.r < 0) continue;
+            const float dx = sp.x - px, dy = sp.y - py, dz = sp.z - pz;
             const float d2 = dx * dx + dy * dy + dz * dz;
-            const bool solid = p.heavy && g_solid;
-            const float reach = (solid ? kSolidReach : kGhostReach) + p.radius;
-            if (d2 < reach * reach) {
-                want(i, (solid ? 0.0f : 2000.0f) + std::sqrt(d2));
-                ++g_wanted_near;
+            const float most = kMostReach + sp.r;
+            if (d2 < most * most) {
+                const bool solid = g_pieces[i].heavy && g_solid;
+                const float reach = (solid ? kSolidReach : kGhostReach) + sp.r;
+                if (d2 < reach * reach) {
+                    want(i, (solid ? 0.0f : 2000.0f) + std::sqrt(d2));
+                    ++g_wanted_near;
+                }
             }
             for (size_t k = 0; k < paths.size(); ++k) {
                 const Segment& g = paths[k];
-                if (b.pos.x < g.lo[0] || b.pos.x > g.hi[0] || b.pos.y < g.lo[1] || b.pos.y > g.hi[1] ||
-                    b.pos.z < g.lo[2] || b.pos.z > g.hi[2])
+                if (sp.x < g.lo[0] || sp.x > g.hi[0] || sp.y < g.lo[1] || sp.y > g.hi[1] || sp.z < g.lo[2] ||
+                    sp.z > g.hi[2])
                     continue;
                 float along = 0;
-                if (distance_to_segment(b.pos, g.a, g.d, g.len2, &along) > g.margin + p.radius) continue;
+                if (distance_to_segment(ipc::Vec3{sp.x, sp.y, sp.z}, g.a, g.d, g.len2, &along) > g.margin + sp.r)
+                    continue;
                 if (k < projectile_paths) {
                     want(i, 1000.0f + along);
                     ++g_wanted_projectile;
@@ -1575,6 +1824,7 @@ void __cdecl d_combat_hits(void* human, void* input, bool secondary) {
         *it = Blow{human, move, g_next_blow_id++, now_ms, {b[0], b[1], b[2]}, {a[0], a[1], a[2]}, {b[0], b[1], b[2]},
                    radius, {s.impulse.x, s.impulse.y, s.impulse.z}};
         ++g_wide_blows;
+        harness::shot_series();  // Harness.ShotsAfterBlow
     } else {
         const float dx = b[0] - it->sent_end[0], dy = b[1] - it->sent_end[1], dz = b[2] - it->sent_end[2];
         send = dx * dx + dy * dy + dz * dz > (kBlowNewReach * radius) * (kBlowNewReach * radius);
@@ -2309,6 +2559,703 @@ void forget_restored() {
     g_restored.clear();
 }
 
+// ---- piles: frozen pieces drawn as compiled instances (Experiment.PhysXDebrisPiles) ----
+// The render thread's time follows the number of pieces in view, not what they draw: every piece is an
+// rl_destroyable_model_instance of one sub-instance, so each visible one is tested against every pass, walks its
+// building's whole material map (m_mat_map, 18 materials on average) twice and goes through add_to_batch on its own
+// (about 12,000 a frame in the heaviest part of the wcdlc7 replay, 31,000 pieces). A standing building is the other
+// way round: one instance whose sub-instances are compiled into one mesh (rl_start_recompile_mesh_instance), a draw
+// per material and pass. A pile turns the still pieces of one building lying in one cell (16 m) into that.
+// The game's machinery: a building's sub-instances are one array in its shared base
+// (rl_destroyable_model_instance_shared_base, m_base_sub_instances +0x14), each instance owning a contiguous range of it
+// (m_sub_instances +0x11C, m_num_sub_instances +0x120). unclaim_sub_instances gives sub-instances back to the base and
+// claim_sub_instances takes them, by their index in the building (m_sub_instance_original_index_map +0x0C, by place in
+// the array); the repair path (rfg_mover::create_subpieces) claims them and update_instances places them in the
+// instance, then calculate_local_aabb sizes it (as build_new_rl_instance_from_shape does); split makes a new instance
+// of some of an instance's sub-instances (the same indices), in the same scene partition. Each of these deletes the
+// instance's mesh and asks for a new compile: it draws batched until the new one arrives.
+// Measured with a one-shot merge at frame 40000 of wcdlc7 (2 runs each, frames 44000-45775): 12.0-13.1 -> 6.7-6.8 ms a
+// frame, before_kick 7.9-8.7 -> 2.8-3.0 ms, 40% fewer draws, the same address space. Drawn batched instead, piles
+// saved nothing: a pile is culled as one box, and each of its pieces is a draw of its own in every pass that sees any
+// part of it (twice the draws).
+constexpr uint32_t kInstMatMap = 0x118, kInstSubArray = 0x11C, kInstNumSubs = 0x120, kInstRenderableSubs = 0x124,
+                   kInstShared = 0x148;
+constexpr uint32_t kBaseOrigIndex = 0x0C, kBaseSubArray = 0x14;
+// rl_sub_instance: rl_compressed_transform (pos, pitch, bank, heading), m_instance_index, m_submesh_id, flags
+// (bit 0 visible, bit 1 active, bit 31 disable_deferred).
+constexpr uint32_t kSubSize = 0x20, kSubPitch = 0x0C, kSubSubmesh = 0x1A, kSubFlags = 0x1C;
+constexpr uint32_t kSubDisableDeferred = 0x80000000u;
+float g_pile_cell = 16.0f;  // m: Experiment.PhysXDebrisPileCellM
+constexpr double kPileFrozenMs = 2000;       // a piece still this long (frozen or asleep) joins a pile
+constexpr double kPileSettleMs = 1500;       // a pile takes new pieces this long after its last change at the soonest
+constexpr uint32_t kPileMinNew = 4;          // frozen pieces in a cell that start a pile there
+// Each join and each split moves the building's whole sub-instance array in the game (about 50-100 us for the
+// largest buildings): 512 of them in one frame took up to 39 ms.
+constexpr uint32_t kPileJoinsPerScan = 128;  // pieces joining piles per scan, at most
+constexpr uint32_t kPileScanFrames = 15;     // how often frozen pieces are looked over for piles
+constexpr uint32_t kUnpilesPerFrame = 256;   // pieces leaving piles in one frame, at most
+constexpr uint32_t kPileRetriesPerFrame = 8; // piles asking for their compile again in one frame, at most
+// The render task adds to the frame: a scan's joins took up to 7.3 ms in one frame, 128 of them. Past these times a
+// scan stops (the next frame goes on with it) and piles that lost pieces are sized again in a later frame (until then
+// their bounds are only too large).
+constexpr double kPileJoinBudgetMs = 1.0;
+constexpr double kPileResizeBudgetMs = 0.5;
+// A cell with fewer still pieces than kPileMinNew and no pile of its own: they join their building's pile in a
+// neighbouring cell. Such pieces were nearly all the pieces left on their own at a levelled map's end (930-1,040 of
+// about 31,000). Only once the first of them has been still for Experiment.PhysXDebrisPileNextDoorS (10 s; 0: never):
+// joining at once kept cells next to a pile from ever getting their own, and piles spread over several cells. A cell
+// with no pile next door is looked at again after kNoPileNearRetryMs.
+double g_next_door_ms = 10000;
+constexpr double kNoPileNearRetryMs = 3000;
+// Experiment.PhysXDebrisPileMaxPieces (0: none): a full pile keeps its pieces but leaves its cell's place
+// (g_pile_at), and the cell's next still pieces start another. With 16 m cells, piles near the action reached 2,100
+// pieces: every change recompiled all of them, and they drew piece by piece meanwhile (310 pieces a frame against
+// 120 at 8 m).
+uint32_t g_pile_max = 512;
+uint64_t g_piles_full = 0;
+// A woken piece leaves its pile only once it has moved from where it was drawn: blasts and the player wake many pieces
+// that go nowhere (the first runs split 81,000 pieces off their piles in a 245 s match and joined 107,000).
+constexpr float kUnpileMove = 0.02f;         // m
+constexpr float kUnpileTurnCos = 0.99996f;   // cos of half a 1 degree turn: |q1.q2| below this has turned more
+
+struct SubInstanceUpdate {  // rl_sub_instance_update
+    float m[12];            // rl_sub_instance_info::m_transform, matrix43: rvec, uvec, fvec, pos (in the instance)
+    uint32_t submesh_id;
+    uint32_t flags;         // bit 0 m_is_active, bit 1 m_disable_deferred
+    int32_t base_index;     // the sub-instance's index in its building
+};
+static_assert(sizeof(SubInstanceUpdate) == 0x3C, "rl_sub_instance_update");
+
+// The game's transforms: rows are the rotated x, y and z axes, a point goes to p * r + t.
+struct M43 {
+    float r[9];
+    float t[3];
+};
+
+M43 mul(const M43& a, const M43& b) {  // a, then b
+    M43 c;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            c.r[i * 3 + j] = a.r[i * 3] * b.r[j] + a.r[i * 3 + 1] * b.r[3 + j] + a.r[i * 3 + 2] * b.r[6 + j];
+    for (int j = 0; j < 3; ++j) c.t[j] = a.t[0] * b.r[j] + a.t[1] * b.r[3 + j] + a.t[2] * b.r[6 + j] + b.t[j];
+    return c;
+}
+
+M43 inverse(const M43& a) {  // of a rotation and a translation
+    M43 c;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) c.r[i * 3 + j] = a.r[j * 3 + i];
+    for (int j = 0; j < 3; ++j) c.t[j] = -(a.t[0] * c.r[j] + a.t[1] * c.r[3 + j] + a.t[2] * c.r[6 + j]);
+    return c;
+}
+
+M43 instance_matrix(const uint8_t* inst) {
+    M43 m;
+    memcpy(m.r, inst + kInstRot, sizeof(m.r));
+    memcpy(m.t, inst + kInstPos, sizeof(m.t));
+    return m;
+}
+
+M43 sub_instance_matrix(const uint8_t* sub) {  // in its instance
+    M43 m;
+    const float* angles = reinterpret_cast<const float*>(sub + kSubPitch);
+    rfg::fn<void(__thiscall*)(float*, float, float, float)>(r::matrix__set_angles)(m.r, angles[0], angles[1],
+                                                                                    angles[2]);
+    memcpy(m.t, sub, sizeof(m.t));
+    return m;
+}
+
+// A building's pieces in one cell of `size` m.
+uint64_t merge_cell_key(const void* base, const ipc::Vec3& p, float size) {
+    const auto c = [&](float v) { return uint64_t(uint32_t(int32_t(std::floor(v / size))) & 0x3FFu); };
+    return uint64_t(reinterpret_cast<uintptr_t>(base)) << 30 | c(p.x) << 20 | c(p.y) << 10 | c(p.z);
+}
+
+struct RlSplitInfo {  // rl_split_info
+    int32_t num_to_split;
+    int16_t* to_split;   // sub-instance indices in the building
+    int32_t num_to_disable;
+    int16_t* to_disable;
+    int32_t num_to_enable;
+    int16_t* to_enable;
+};
+static_assert(sizeof(RlSplitInfo) == 0x18, "rl_split_info");
+
+struct Pile {
+    uint8_t* inst = nullptr;  // its render instance (null: a free entry); not one of the pieces' instances any more
+    uint64_t key = 0;         // its building and cell
+    uint32_t members = 0;
+    double changed_ms = 0;    // pieces last joined or left
+    double retried_ms = 0;    // its compile last asked for again
+    double meshless_ms = 0;   // since when it has been without its mesh, drawn piece by piece (0: it has it)
+    bool resize = false;      // pieces left: its bounds are to be redone
+    // Its cell's last join stopped at the time budget: the rest of the cell joins in the next frames, without waiting
+    // for the settle time (each part of a join would have put it off again: a backlog of 500 pieces took ~40 s).
+    bool unfinished = false;
+};
+std::vector<Pile> g_piles;
+std::vector<uint32_t> g_free_piles;
+std::unordered_map<uint64_t, uint32_t> g_pile_at;  // building and cell -> pile
+bool g_piles_on = false;
+bool g_level_ending = false;  // the level's end gives every piece up: a pile goes at once with its last one
+uint64_t g_piled_total = 0, g_unpiled_total = 0, g_piles_made = 0, g_unpile_failures = 0;
+uint32_t g_piles_live = 0, g_piled_now = 0, g_piles_peak = 0, g_piled_peak = 0;
+
+// How long piles go without their mesh after a change (each change deletes it; the compile brings a new one), and
+// how many pieces they hold meanwhile: over the level, and over the 10 s between the buffer heap's log lines.
+constexpr double kMeshlessBuckets[5] = {100, 250, 500, 1000, 2000};
+struct MeshlessStats {
+    uint64_t times = 0, pieces = 0, frames = 0, piece_frames = 0;
+    double total_ms = 0, piece_ms = 0, longest_ms = 0;
+    uint32_t buckets[6] = {}, peak = 0;
+};
+MeshlessStats g_meshless, g_meshless_window;
+uint32_t g_meshless_now = 0;  // pieces in piles without their mesh, this frame
+uint32_t g_waiting_for_pile = 0;  // at the last scan: still pieces ready for their cell's pile while it settles
+void note_meshless(MeshlessStats& s, double ms, uint32_t members) {
+    ++s.times;
+    s.total_ms += ms;
+    s.piece_ms += ms * members;
+    s.pieces += members;
+    s.longest_ms = std::max(s.longest_ms, ms);
+    int b = 0;
+    while (b < 5 && ms >= kMeshlessBuckets[b]) ++b;
+    ++s.buckets[b];
+}
+void note_meshless_frame(MeshlessStats& s, uint32_t pieces) {
+    ++s.frames;
+    s.piece_frames += pieces;
+    s.peak = std::max(s.peak, pieces);
+}
+void format_meshless(const MeshlessStats& s, char* out, size_t size) {
+    snprintf(out, size, "%llu times, %.0f ms mean (%.0f weighted by the pieces), the longest %.0f ms (<100 ms %u, "
+             "<250 %u, <500 %u, <1 s %u, <2 s %u, more %u); pieces drawn piece by piece in them: %.0f a frame, at "
+             "most %u", static_cast<unsigned long long>(s.times), s.times ? s.total_ms / s.times : 0.0,
+             s.pieces ? s.piece_ms / s.pieces : 0.0, s.longest_ms, s.buckets[0], s.buckets[1], s.buckets[2],
+             s.buckets[3], s.buckets[4], s.buckets[5], s.frames ? double(s.piece_frames) / s.frames : 0.0, s.peak);
+}
+
+using ClaimFn = void(__thiscall*)(uint8_t*, int16_t*, int32_t);
+ClaimFn claim_fn() { return rfg::fn<ClaimFn>(r::rl_destroyable_model_instance__claim_sub_instances); }
+ClaimFn unclaim_fn() { return rfg::fn<ClaimFn>(r::rl_destroyable_model_instance__unclaim_sub_instances); }
+void update_sub_instances(uint8_t* inst, SubInstanceUpdate* u, int32_t n) {
+    rfg::fn<void(__thiscall*)(uint8_t*, SubInstanceUpdate*, int32_t)>(r::rl_destroyable_model_instance__update_instances)(
+        inst, u, n);
+}
+void size_instance(uint8_t* inst) {
+    rfg::fn<void(__thiscall*)(uint8_t*)>(r::rl_compound_mesh_instance__calculate_local_aabb)(inst);
+    refresh_instance(inst);
+}
+// A compile under way must not see its instance's sub-instances change: the mesh compiler (compile_cache_data, on its
+// own thread) counts the vertices and indices of the renderable sub-instances, sizes its buffers from that, then fills
+// them, and it stops at abort checks in between (the handshake pauses it there). Resumed after a change, it fills
+// buffers sized for the old sub-instances with the new ones, past their end: a heap corruption that crashed in
+// rl_mesh_recompile_finalize (2026-10-27, piles). Only a request whose valid flag (rl_mesh_recompile_parameters +8)
+// was cleared aborts at the next check. A new request clears the old one's, but rl_start_recompile_mesh_instance does
+// nothing at all when its pool of requests is empty, which the piles' traffic can make it (claim, unclaim, split and
+// update ask for a new compile after every change, through it). So before every change the piles make,
+// the pending compile of the instance changed is cancelled here, its request named by m_recompile_parameters_p
+// (+0x154) as long as the request still names the instance (+0).
+constexpr uint32_t kInstRecompileParams = 0x154, kParamsValid = 8;
+void cancel_compile(uint8_t* inst) {
+    uint8_t* params = *reinterpret_cast<uint8_t* const*>(inst + kInstRecompileParams);
+    if (params && *reinterpret_cast<uint8_t* const*>(params) == inst)
+        InterlockedExchange(reinterpret_cast<volatile LONG*>(params + kParamsValid), 0);
+}
+
+// compile_cache_data(rl_mesh_recompile_parameters*), on the compiler's thread: it takes the mesh's vertices and
+// indices from rl_init_params::m_pBufferAllocator (Init_params +0x14C: the 76 MB TLSF heap 'RFG_VramMempoolProvider'),
+// makes immutable D3D11 buffers of them (keen::graphics::initializeRenderGeometry, which copies them) and keeps them
+// as long as the mesh lives, read by nothing (rl_mesh_recompile_data +0x44 indices, +0x48 vertices: only the
+// destructors and rl_mesh_recompile_finalize free them, and tlsf_free takes null). When the heap has no room the
+// compile fails without a word and the instance stays without a mesh. With piles the copies filled it: 46 MB for 480
+// piles, and the 19 largest piles (5,300 pieces, up to 500 a pile) failed again and again and drew piece by piece
+// (2026-10-27). So with piles the copies go as soon as the mesh is made. Counted: meshes made, compiles cancelled
+// (their request's valid flag cleared), compiles that failed.
+bool g_free_mesh_copies = false;
+volatile LONG g_compiles_made = 0, g_compiles_cancelled = 0, g_compiles_failed = 0;
+uint8_t* buffer_allocator() {
+    return *reinterpret_cast<uint8_t* const*>(static_cast<const uint8_t*>(rfg::addr(r::Init_params)) + 0x14C);
+}
+void*(__fastcall* o_compile_cache)(uint8_t*, void*, uint8_t*) = nullptr;
+void* __fastcall d_compile_cache(uint8_t* inst, void* edx, uint8_t* params) {
+    uint8_t* data = static_cast<uint8_t*>(o_compile_cache(inst, edx, params));
+    if (data) {
+        InterlockedIncrement(&g_compiles_made);
+        if (g_free_mesh_copies) {
+            uint8_t* a = buffer_allocator();
+            using FreeFn = void(__thiscall*)(void*, void*);  // keen::MemoryAllocator::free, the third virtual
+            const FreeFn free_fn = reinterpret_cast<const FreeFn*>(*reinterpret_cast<void* const*>(a))[2];
+            for (const uint32_t at : {0x44u, 0x48u}) {
+                void*& copy = *reinterpret_cast<void**>(data + at);
+                free_fn(a, copy);
+                copy = nullptr;
+            }
+        }
+    } else if (!*reinterpret_cast<const volatile LONG*>(params + kParamsValid)) {
+        InterlockedIncrement(&g_compiles_cancelled);
+    } else {
+        InterlockedIncrement(&g_compiles_failed);
+    }
+    return data;
+}
+
+// The buffer heap, for the log: its RTTI type name (a keen BaseMemoryAllocator: TLSF or zone), its name (+0x3C) and,
+// for the TLSF one, its block (+0xC8) and its blocks walked (tlsf_walk_heap over TlsfAllocator::m_pPool, +0xC4) under
+// the allocator's own mutex (+4), as its allocate and free take it; it keeps no count of its own.
+struct HeapWalk {
+    uint64_t used = 0, free = 0;
+    uint32_t blocks = 0, largest_free = 0;
+};
+void __cdecl heap_walker(void*, size_t size, int used, void* user) {
+    HeapWalk& w = *static_cast<HeapWalk*>(user);
+    ++w.blocks;
+    if (used) {
+        w.used += size;
+    } else {
+        w.free += size;
+        w.largest_free = std::max(w.largest_free, uint32_t(size));
+    }
+}
+bool walk_pool(void* pool, HeapWalk& w) {
+    __try {
+        rfg::fn<void(__cdecl*)(void*, void(__cdecl*)(void*, size_t, int, void*), void*)>(r::tlsf_walk_heap)(
+            pool, &heap_walker, &w);
+        return true;
+    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        return false;
+    }
+}
+bool heap_names(const uint8_t* a, char (&kind)[48], char (&name)[64], uint32_t& size) {
+    __try {
+        const uint8_t* const* vtable = *reinterpret_cast<const uint8_t* const* const*>(a);
+        const uint8_t* col = vtable[-1];  // the RTTI complete object locator: its type descriptor at +0x0C
+        const char* type = reinterpret_cast<const char*>(*reinterpret_cast<const uint8_t* const*>(col + 0x0C) + 8);
+        strncpy_s(kind, type, _TRUNCATE);
+        strncpy_s(name, reinterpret_cast<const char*>(a + 0x3C), _TRUNCATE);
+        size = strstr(type, "Tlsf") ? *reinterpret_cast<const uint32_t*>(a + 0xCC) : 0;
+        return true;
+    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        return false;
+    }
+}
+
+void log_buffer_heap(const char* when) {
+    uint8_t* a = buffer_allocator();
+    char kind[48] = "?", name[64] = "?";
+    uint32_t size = 0;
+    if (!a || !heap_names(a, kind, name, size)) {
+        LOG("debris offload: buffer heap (%s): unreadable", when);
+        return;
+    }
+    HeapWalk w;
+    bool walked = false;
+    if (size) {
+        void* mutex = a + 4;
+        rfg::fn<bool(__thiscall*)(void*, uint32_t)>(r::keen__Mutex__lock)(mutex, 0);
+        walked = walk_pool(*reinterpret_cast<void**>(a + 0xC4), w);
+        rfg::fn<void(__thiscall*)(void*)>(r::keen__Mutex__unlock)(mutex);
+    }
+    char use[128] = "not walked";
+    if (walked)
+        snprintf(use, sizeof(use), "%.1f MB used, %.1f MB free (the largest free block %.2f MB), %u blocks",
+                 w.used / 1048576.0, w.free / 1048576.0, w.largest_free / 1048576.0, w.blocks);
+    uint32_t meshless = 0;
+    for (const Pile& pile : g_piles)
+        meshless += pile.inst && !*reinterpret_cast<void* const*>(pile.inst + kInstRecompileData);
+    char window[320];
+    format_meshless(g_meshless_window, window, sizeof(window));
+    g_meshless_window = MeshlessStats{};
+    LOG("debris offload: buffer heap (%s): %s '%s' of %.1f MB: %s; compiles: %ld meshes made, %ld cancelled, %ld "
+        "failed; meshes' own copies %s; %u of %u piles without a mesh now (%u pieces); since the last line, piles "
+        "without their mesh: %s; %u still pieces waiting for their cell's pile to settle", when, kind, name,
+        size / 1048576.0, use, g_compiles_made, g_compiles_cancelled, g_compiles_failed,
+        g_free_mesh_copies ? "freed once uploaded" : "kept", meshless, g_piles_live, g_meshless_now, window,
+        g_waiting_for_pile);
+}
+
+bool compile_wanted(const uint8_t* inst);
+// After a pile's sub-instances changed: claim, unclaim, split and update delete the instance's mesh and ask for a new
+// compile themselves; a pile with neither a mesh nor a pending request (the game's pool of requests was empty) gets
+// one here (nothing happens while the pool is empty: piles_frame asks again later). Called from the render task, in
+// the handshake, as the game calls it (the bool: false).
+uint32_t g_pile_compiles = 0, g_pile_compile_retries = 0;
+void compile_pile(uint8_t* inst) {
+    if (!compile_wanted(inst)) return;
+    ++g_pile_compiles;
+    (o_start_recompile ? o_start_recompile
+                       : rfg::fn<void(__cdecl*)(const void*, bool)>(r::rl_start_recompile_mesh_instance))(inst, false);
+}
+
+// Whether the instance has a mesh or a compile that will make one.
+bool compile_wanted(const uint8_t* inst) {
+    if (*reinterpret_cast<void* const*>(inst + kInstRecompileData)) return false;
+    const uint8_t* params = *reinterpret_cast<uint8_t* const*>(inst + kInstRecompileParams);
+    return !params || *reinterpret_cast<const uint8_t* const*>(params) != inst ||
+           !*reinterpret_cast<const volatile LONG*>(params + kParamsValid);
+}
+void set_piece_instance(const uint8_t* inst, bool piece) {  // a piece's instance gets no compiled mesh, a pile's does
+    if (!g_drop_meshes) return;
+    AcquireSRWLockExclusive(&g_piece_set_lock);
+    if (piece)
+        g_piece_set.insert(inst);
+    else
+        g_piece_set.erase(inst);
+    ReleaseSRWLockExclusive(&g_piece_set_lock);
+}
+
+// A piece of its own (one sub-instance, in its own instance): what it needs to leave a pile again later.
+void remember_own(Piece& p) {
+    const uint8_t* sub = *reinterpret_cast<uint8_t* const*>(p.inst + kInstSubArray);
+    const uint8_t* base = *reinterpret_cast<uint8_t* const*>(p.inst + kInstShared);
+    const uint8_t* all = *reinterpret_cast<uint8_t* const*>(base + kBaseSubArray);
+    const uint16_t* orig = *reinterpret_cast<const uint16_t* const*>(base + kBaseOrigIndex);
+    const M43 m = sub_instance_matrix(sub);
+    memcpy(p.own_sub, m.r, sizeof(m.r));
+    memcpy(p.own_sub + 9, m.t, sizeof(m.t));
+    p.sub_index = orig[(sub - all) / kSubSize];
+    p.submesh = *reinterpret_cast<const uint16_t*>(sub + kSubSubmesh);
+    p.disable_deferred = (*reinterpret_cast<const uint32_t*>(sub + kSubFlags) & kSubDisableDeferred) != 0;
+}
+
+SubInstanceUpdate sub_update(const Piece& p, const M43& m) {
+    SubInstanceUpdate u{};
+    memcpy(u.m, m.r, sizeof(m.r));
+    memcpy(u.m + 9, m.t, sizeof(m.t));
+    u.submesh_id = p.submesh;
+    u.flags = 1u | (p.disable_deferred ? 2u : 0u);
+    u.base_index = p.sub_index;
+    return u;
+}
+
+M43 own_matrix(const Piece& p) {
+    M43 m;
+    memcpy(m.r, p.own_sub, sizeof(m.r));
+    memcpy(m.t, p.own_sub + 9, sizeof(m.t));
+    return m;
+}
+
+void remember_piled_pose(Piece& p, const ipc::BodyPose& b) {
+    p.piled_pos[0] = b.pos.x, p.piled_pos[1] = b.pos.y, p.piled_pos[2] = b.pos.z;
+    p.piled_q[0] = b.rot.x, p.piled_q[1] = b.rot.y, p.piled_q[2] = b.rot.z, p.piled_q[3] = b.rot.w;
+}
+
+bool moved_from_pile(const Piece& p, const ipc::BodyPose& b) {
+    const float dx = b.pos.x - p.piled_pos[0], dy = b.pos.y - p.piled_pos[1], dz = b.pos.z - p.piled_pos[2];
+    if (dx * dx + dy * dy + dz * dz > kUnpileMove * kUnpileMove) return true;
+    const float dot = b.rot.x * p.piled_q[0] + b.rot.y * p.piled_q[1] + b.rot.z * p.piled_q[2] + b.rot.w * p.piled_q[3];
+    return std::fabs(dot) < kUnpileTurnCos;
+}
+
+void free_pile(uint32_t id) {
+    Pile& pile = g_piles[id];
+    const auto at = g_pile_at.find(pile.key);
+    if (at != g_pile_at.end() && at->second == id) g_pile_at.erase(at);
+    pile = Pile{};
+    g_free_piles.push_back(id);
+    --g_piles_live;
+}
+
+void pile_lost_one(uint32_t id, double now_ms) {
+    Pile& pile = g_piles[id];
+    --g_piled_now;
+    if (--pile.members == 0) {
+        release_instance(pile.inst);  // the sub-instances it still has go back to their building with it
+        free_pile(id);
+        return;
+    }
+    if (g_level_ending) return;
+    pile.changed_ms = now_ms;
+    pile.resize = true;
+    compile_pile(pile.inst);
+}
+
+// Frozen pieces of the pile's building and cell join it: each one's sub-instance leaves its own instance (released),
+// and the pile claims and places them all at once. The pile's frame is that of the piece it was made of. Each unclaim
+// moves the building's whole sub-instance array (128 pieces into one pile took 6-7 ms), so past deadline_ms (session
+// time; 0: none) the rest wait for the next scan: returns how many joined, at least one.
+size_t join_pile(uint32_t id, const uint32_t* slots, size_t n, const ipc::BodyPose* poses, double now_ms,
+                 double deadline_ms) {
+    Pile& pile = g_piles[id];
+    const M43 to_pile = inverse(instance_matrix(pile.inst));
+    static std::vector<int16_t> ids;
+    static std::vector<SubInstanceUpdate> updates;
+    ids.clear();
+    updates.clear();
+    const ClaimFn unclaim = unclaim_fn();
+    for (size_t k = 0; k < n; ++k) {
+        if (k && deadline_ms > 0 && session::since_start_ms() > deadline_ms) {
+            n = k;
+            break;
+        }
+        Piece& p = g_pieces[slots[k]];
+        uint8_t* own = p.inst;
+        remember_own(p);
+        remember_piled_pose(p, poses[slots[k]]);
+        updates.push_back(sub_update(p, mul(own_matrix(p), mul(instance_matrix(own), to_pile))));
+        int16_t sub = int16_t(p.sub_index);
+        ids.push_back(sub);
+        cancel_compile(own);
+        unclaim(own, &sub, 1);  // its instance is empty now
+        set_piece_instance(own, false);
+        release_instance(own);
+        p.inst = pile.inst;
+        p.pile = id;
+        p.candidate = 0;
+        g_pile_candidates.erase(slots[k]);
+    }
+    cancel_compile(pile.inst);
+    claim_fn()(pile.inst, ids.data(), int32_t(ids.size()));
+    update_sub_instances(pile.inst, updates.data(), int32_t(updates.size()));
+    size_instance(pile.inst);
+    compile_pile(pile.inst);
+    pile.members += uint32_t(n);
+    pile.changed_ms = now_ms;
+    g_piled_now += uint32_t(n);
+    g_piled_total += n;
+    return n;
+}
+
+// A pile of the frozen pieces in slots: the first one's instance becomes the pile's (its own sub-instance stays where
+// it is), the others join it (as join_pile, until deadline_ms), and its compiled mesh is made in the background.
+// Returns how many pieces it took.
+size_t make_pile(uint64_t key, const uint32_t* slots, size_t n, const ipc::BodyPose* poses, double now_ms,
+                 double deadline_ms) {
+    uint32_t id;
+    if (!g_free_piles.empty()) {
+        id = g_free_piles.back();
+        g_free_piles.pop_back();
+    } else {
+        id = uint32_t(g_piles.size());
+        g_piles.emplace_back();
+    }
+    Piece& first = g_pieces[slots[0]];
+    remember_own(first);
+    remember_piled_pose(first, poses[slots[0]]);
+    Pile& pile = g_piles[id];
+    pile.inst = first.inst;
+    pile.key = key;
+    pile.members = 1;
+    first.pile = id;
+    first.candidate = 0;
+    g_pile_candidates.erase(slots[0]);
+    set_piece_instance(pile.inst, false);
+    g_pile_at[key] = id;
+    ++g_piles_live;
+    ++g_piles_made;
+    ++g_piled_now;
+    ++g_piled_total;
+    return 1 + join_pile(id, slots + 1, n - 1, poses, now_ms, deadline_ms);
+}
+
+// PhysX woke a piece in a pile: the game splits its sub-instance off into an instance of its own again (in the pile's
+// frame), which gets the piece's own transform back and goes where PhysX has it.
+bool unpile(uint32_t slot, const ipc::BodyPose& b, double now_ms) {
+    Piece& p = g_pieces[slot];
+    const uint32_t id = p.pile;
+    int16_t sub = int16_t(p.sub_index);
+    RlSplitInfo info{1, &sub, 0, nullptr, 0, nullptr};
+    cancel_compile(g_piles[id].inst);
+    uint8_t* inst =
+        rfg::fn<uint8_t*(__thiscall*)(uint8_t*, RlSplitInfo*)>(r::rl_destroyable_model_instance__split)(g_piles[id].inst,
+                                                                                                         &info);
+    if (!inst) {
+        ++g_unpile_failures;
+        return false;
+    }
+    cancel_compile(inst);  // the one the new instance asked for: a piece is drawn batched, without a mesh
+    set_piece_instance(inst, true);  // before the update, which asks for another (skipped for pieces)
+    SubInstanceUpdate u = sub_update(p, own_matrix(p));
+    update_sub_instances(inst, &u, 1);
+    rfg::fn<void(__thiscall*)(uint8_t*)>(r::rl_compound_mesh_instance__calculate_local_aabb)(inst);
+    if (g_batch) *reinterpret_cast<uint16_t*>(inst + kInstFlags) |= kInstBatchable;
+    p.inst = inst;
+    p.pile = kNoPile;
+    p.settle = 1;
+    const float pos[3] = {b.pos.x, b.pos.y, b.pos.z}, q[4] = {b.rot.x, b.rot.y, b.rot.z, b.rot.w};
+    move_instance(inst, pos, q);
+    pile_lost_one(id, now_ms);
+    ++g_unpiled_total;
+    return true;
+}
+
+// give_up() of a piece in a pile: its sub-instance goes back to its building (drawn no more), the pile stays for the
+// others. The caller clears the slot.
+void leave_pile(uint32_t slot) {
+    Piece& p = g_pieces[slot];
+    const uint32_t id = p.pile;
+    p.pile = kNoPile;
+    Pile& pile = g_piles[id];
+    if (pile.members > 1 && !g_level_ending) {
+        int16_t sub = int16_t(p.sub_index);
+        cancel_compile(pile.inst);
+        unclaim_fn()(pile.inst, &sub, 1);
+    }
+    pile_lost_one(id, session::since_start_ms());
+}
+
+// The pile of a cell's building in one of the 26 cells around it that takes pieces now (the one with the most pieces),
+// or kNoPile; busy: there is one, but it changed too recently.
+std::unordered_map<uint64_t, double> g_no_pile_near;  // cell -> not looked at again before this time
+uint64_t g_joined_next_door = 0;
+uint32_t settled_pile_near(uint64_t key, double now_ms, bool& busy) {
+    const uint64_t base = key >> 30;
+    const int32_t c[3] = {int32_t(key >> 20 & 0x3FF), int32_t(key >> 10 & 0x3FF), int32_t(key & 0x3FF)};
+    uint32_t best = kNoPile, most = 0;
+    busy = false;
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dz = -1; dz <= 1; ++dz) {
+                if (!dx && !dy && !dz) continue;
+                const uint64_t cell = base << 30 | uint64_t((c[0] + dx) & 0x3FF) << 20 |
+                                      uint64_t((c[1] + dy) & 0x3FF) << 10 | uint64_t((c[2] + dz) & 0x3FF);
+                const auto at = g_pile_at.find(cell);
+                if (at == g_pile_at.end()) continue;
+                const Pile& pile = g_piles[at->second];
+                if (g_pile_max && pile.members >= g_pile_max) continue;
+                if (now_ms - pile.changed_ms < kPileSettleMs) {
+                    busy = true;
+                } else if (pile.members > most) {
+                    most = pile.members;
+                    best = at->second;
+                }
+            }
+    return best;
+}
+
+// Render task, after the pieces moved (move_pieces lets the woken ones out of their piles): frozen pieces join piles,
+// piles that lost pieces are sized again.
+void piles_frame() {
+    if (!g_piles_on) return;
+    const ipc::SnapshotHeader* s = pxbridge::snapshot(nullptr);
+    if (!s) return;
+    const ipc::BodyPose* poses = pxbridge::poses(s);
+    const uint8_t* states = pxbridge::states(s);
+    const uint32_t slots = std::min<uint32_t>(std::min<uint32_t>(s->slots, g_vehicle_first), g_slots);
+    const double now_ms = session::since_start_ms();
+    static uint32_t frame = 0;
+    static bool behind = false;  // the last scan stopped at its time budget: this frame goes on with it
+    uint32_t budget = kPileJoinsPerScan;
+    const bool scan = behind || frame % kPileScanFrames == 0;
+    ++frame;
+    behind = false;
+    if (scan) {
+        static std::unordered_map<uint64_t, std::vector<uint32_t>> ready;
+        for (auto& [key, v] : ready) v.clear();
+        // The frozen pieces of their own (move_piece lists them when they freeze; the ones that moved again, joined a
+        // pile or went leave the list here).
+        for (auto it = g_pile_candidates.begin(); it != g_pile_candidates.end();) {
+            const uint32_t i = *it;
+            Piece* p = i < slots ? &g_pieces[i] : nullptr;
+            const bool still = (states[i] & ipc::kPoseAlive) && !(states[i] & ipc::kPoseAwake);
+            if (!p || !p->inst || !p->candidate || p->pile != kNoPile || !still) {
+                if (p) p->candidate = 0;
+                it = g_pile_candidates.erase(it);
+                continue;
+            }
+            ++it;
+            if (p->fresh || i == g_player_slot || !p->frozen_since_ms || now_ms - p->frozen_since_ms < kPileFrozenMs ||
+                *reinterpret_cast<const int32_t*>(p->inst + kInstNumSubs) != 1)
+                continue;
+            ready[merge_cell_key(*reinterpret_cast<void* const*>(p->inst + kInstShared), poses[i].pos, g_pile_cell)]
+                .push_back(i);
+        }
+        uint32_t waiting = 0;  // pieces ready for their cell's pile while it settles
+        for (const auto& [key, v] : ready) {
+            if (v.empty()) continue;
+            const auto at = g_pile_at.find(key);
+            if (at != g_pile_at.end() && !g_piles[at->second].unfinished &&
+                now_ms - g_piles[at->second].changed_ms < kPileSettleMs)
+                waiting += uint32_t(v.size());
+        }
+        g_waiting_for_pile = waiting;
+        const double deadline_ms = session::since_start_ms() + kPileJoinBudgetMs;
+        for (auto& [key, v] : ready) {
+            if (!budget) break;
+            if (v.empty()) continue;
+            if (session::since_start_ms() > deadline_ms) {
+                behind = true;
+                break;
+            }
+            const auto at = g_pile_at.find(key);
+            const auto room = [](uint32_t members) { return g_pile_max ? size_t(g_pile_max - members) : SIZE_MAX; };
+            size_t asked = std::min<size_t>(v.size(), budget), joined = 0;
+            if (at != g_pile_at.end()) {
+                const uint32_t id = at->second;
+                if (g_pile_max && g_piles[id].members >= g_pile_max) {
+                    g_pile_at.erase(at);  // full: it keeps its pieces; the cell's next ones start another pile
+                    ++g_piles_full;
+                    continue;
+                }
+                if (!g_piles[id].unfinished && now_ms - g_piles[id].changed_ms < kPileSettleMs) continue;
+                asked = std::min(asked, room(g_piles[id].members));
+                joined = join_pile(id, v.data(), asked, poses, now_ms, deadline_ms);
+                g_piles[id].unfinished = joined < v.size();
+            } else if (v.size() >= kPileMinNew && asked >= 2) {
+                asked = std::min(asked, room(0));
+                joined = make_pile(key, v.data(), asked, poses, now_ms, deadline_ms);
+                g_piles[g_pile_at[key]].unfinished = joined < v.size();
+            } else {
+                if (g_next_door_ms <= 0) continue;
+                double still_ms = 0;  // the longest any of them has been still
+                for (const uint32_t slot : v) still_ms = std::max(still_ms, now_ms - g_pieces[slot].frozen_since_ms);
+                if (still_ms < g_next_door_ms) continue;
+                double& until = g_no_pile_near[key];
+                if (now_ms < until) continue;
+                bool busy = false;
+                const uint32_t next_door = settled_pile_near(key, now_ms, busy);
+                if (next_door == kNoPile) {
+                    if (!busy) until = now_ms + kNoPileNearRetryMs;
+                    continue;
+                }
+                asked = std::min(asked, room(g_piles[next_door].members));
+                joined = join_pile(next_door, v.data(), asked, poses, now_ms, deadline_ms);
+                g_joined_next_door += joined;
+            }
+            budget -= uint32_t(joined);
+            if (joined < asked) {  // out of time on the way: the next frame goes on
+                behind = true;
+                break;
+            }
+        }
+        if (ready.size() > 4096) ready.clear();  // the cells of past frames
+        if (g_no_pile_near.size() > 16384) g_no_pile_near.clear();
+    }
+    uint32_t retries = 0, meshless = 0;
+    const int64_t sizes_start = session::qpc();
+    for (uint32_t id = 0; id < g_piles.size(); ++id) {
+        Pile& pile = g_piles[id];
+        if (!pile.inst) continue;
+        if (pile.resize && session::ticks_to_ms(session::qpc() - sizes_start) < kPileResizeBudgetMs) {
+            pile.resize = false;
+            size_instance(pile.inst);
+        }
+        if (!*reinterpret_cast<void* const*>(pile.inst + kInstRecompileData)) {
+            meshless += pile.members;
+            if (!pile.meshless_ms) pile.meshless_ms = now_ms;
+        } else if (pile.meshless_ms) {
+            note_meshless(g_meshless, now_ms - pile.meshless_ms, pile.members);
+            note_meshless(g_meshless_window, now_ms - pile.meshless_ms, pile.members);
+            pile.meshless_ms = 0;
+        }
+        // A pile left without a mesh and without a compile (the game's pool of requests was empty, or its heap had no
+        // room) asks again, once it has been still for a while, and not more often than that (its own time: the
+        // change time holds joins back).
+        if (retries < kPileRetriesPerFrame && now_ms - pile.changed_ms >= kPileSettleMs &&
+            now_ms - pile.retried_ms >= kPileSettleMs && compile_wanted(pile.inst)) {
+            ++retries;
+            ++g_pile_compile_retries;
+            compile_pile(pile.inst);
+            pile.retried_ms = now_ms;
+        }
+    }
+    g_meshless_now = meshless;
+    note_meshless_frame(g_meshless, meshless);
+    note_meshless_frame(g_meshless_window, meshless);
+    g_piles_peak = std::max(g_piles_peak, g_piles_live);
+    g_piled_peak = std::max(g_piled_peak, g_piled_now);
+}
+
 // Telemetry.RenderRouting: the render threads tell the pieces apart with a sorted copy of their instances.
 void publish_for_routing() {
     static uint32_t frame = 0;
@@ -2321,16 +3268,52 @@ void publish_for_routing() {
     render_routing::publish_pieces(std::move(v));
 }
 
+// Test.Viewpoints 2-4: the instances go 10 km down (out of every view and shadow), in the handshake.
+int g_hide_request = 0;
+bool g_hidden = false;
+void hide_now(int what) {
+    std::unordered_set<uint8_t*> done;
+    auto hide = [&](uint8_t* inst) {
+        if (!inst || !done.insert(inst).second) return;
+        reinterpret_cast<float*>(inst + kInstPos)[1] -= 10000.0f;
+        refresh_instance(inst);
+    };
+    for (uint32_t s = 0; s < g_slots; ++s) {
+        const Piece& p = g_pieces[s];
+        if (!p.inst || s == g_player_slot) continue;
+        if (p.pile != kNoPile ? (what == 1 || what == 2) : (what == 1 || what == 3)) hide(p.inst);
+    }
+    LOG("debris offload: test: %zu render instances (%s) put out of sight", done.size(),
+        what == 1 ? "all debris" : what == 2 ? "the piles" : "the pieces of their own");
+    g_hidden = true;
+}
+
 void __cdecl render_task(void*, int) {
     if (!g_on) return;
     release_chunk_refs();
     if (!pxbridge::ready() || rfg::gameseq_get_state() != kGameplay) return;
+    if (g_hide_request) {
+        hide_now(g_hide_request);
+        g_hide_request = 0;
+    }
+    if (g_hidden) return;  // nothing moves the hidden instances back
     const int64_t t0 = session::qpc();
     forget_restored();
+    fix_piece_instances();
+    const int64_t t1 = session::qpc();
+    g_unpiles_left = kUnpilesPerFrame;
+    g_split_ms = 0;
     move_pieces();
+    const int64_t t2 = session::qpc();
+    piles_frame();
+    const int64_t t3 = session::qpc();
     batch_waiting();
     recycle_far_pieces();
-    g_stats.move_ms += float(session::ticks_to_ms(session::qpc() - t0));
+    const int64_t t4 = session::qpc();
+    const double moves = session::ticks_to_ms(t2 - t1);
+    note_task_frame({std::max(0.0, moves - g_split_ms), g_split_ms, session::ticks_to_ms(t3 - t2),
+                     session::ticks_to_ms(t1 - t0) + session::ticks_to_ms(t4 - t3)});
+    g_stats.move_ms += float(session::ticks_to_ms(t4 - t0));
     publish_for_routing();
 }
 
@@ -2367,6 +3350,7 @@ void on_frame(int game_state) {
             census_vehicles();
             census_islands();
             log_busy_proxies();
+            if (g_piles_on) log_buffer_heap("now");
         }
     }
     const int64_t t0 = session::qpc();
@@ -2382,7 +3366,6 @@ void on_frame(int game_state) {
 }
 
 // rl_start_recompile_mesh_instance(rl_destroyable_model_instance*, bool): no compiled meshes for the pieces.
-void(__cdecl* o_start_recompile)(const void*, bool) = nullptr;
 void __cdecl d_start_recompile(const void* inst, bool in_handshake) {
     AcquireSRWLockShared(&g_piece_set_lock);
     const bool piece = g_piece_set.count(inst) != 0;
@@ -2572,11 +3555,25 @@ void __cdecl d_chunk_unload(uint8_t* chunk, bool delete_mesh) {
     o_chunk_unload(chunk, delete_mesh);
 }
 
+// Pieces thrown out of their zone while they waited in Havok (d_in_original_zone), this session.
+void log_zone_crossings() {
+    uint64_t deleted = 0;
+    for (const uint64_t n : g_zone_deleted) deleted += n;
+    if (!g_zone_kept && !deleted) return;
+    LOG("debris offload: general movers that left their zone this session: %llu waiting pieces kept, %llu of them gone "
+        "to PhysX at once, %llu left to the game after %u frames; deleted by the game as before: %llu (not debris "
+        "%llu, fading %llu, no render instance %llu, no body %llu, attached %llu, PhysX not ready %llu)", g_zone_kept,
+        g_zone_kept_adopted, g_zone_left_to_game, kZoneKeepFrames, deleted, g_zone_deleted[kZoneNotDebris],
+        g_zone_deleted[kZoneFading], g_zone_deleted[kZoneNoInstance], g_zone_deleted[kZoneNoBody],
+        g_zone_deleted[kZoneAttached], g_zone_deleted[kZoneNotReady]);
+}
+
 void on_exit(bool) {
     if (!g_on) return;
     LOG("debris offload: %llu pieces taken over (%llu fell through the world); %u explosions sent to the host (%u went "
         "off at a stand-in); the game's explosion kicks: %u, %.2f m/s mean, %.2f max", g_total_adopted, g_fell,
         g_expl_forwarded, g_expl_at_stand_ins, g_kick_n, g_kick_n ? g_kick_sum / g_kick_n : 0.0, g_kick_max);
+    log_zone_crossings();
     if (g_adopted_faded)
         LOG("debris offload: %llu pieces went over faded by distance (not fully visible)", g_adopted_faded);
     if (g_wide_blows)
@@ -2609,8 +3606,148 @@ void on_exit(bool) {
 // them; the render instances taken over go now too, while the renderer still has them. (general_mover_level_shutdown
 // looked like the place but nothing calls it.)
 void(__cdecl* o_level_shutdown)() = nullptr;
+// What the renderer sees of the pieces (research: the render thread's cost per piece). rl_compound_mesh_instance:
+// m_mat_map (+0x118: rl_material_map, num_materials at +0x0C, is_set at +0x10), m_num_renderable_sub_instances
+// (+0x124); rl_destroyable_model_instance::m_shared_data (+0x148): the building's shared base (its pieces share it).
+// get_material_block_counts walks every material of the map and every renderable sub-instance, for each visible
+// piece once per frame and again when it is batched. Pieces in piles are counted apart.
+void log_render_stats() {
+    const ipc::SnapshotHeader* s = pxbridge::snapshot(nullptr);
+    const ipc::BodyPose* poses = s ? pxbridge::poses(s) : nullptr;
+    const uint32_t slots = s ? std::min<uint32_t>(s->slots, g_vehicle_first) : 0;
+    uint32_t mats[8] = {}, subs[8] = {}, pieces = 0, frozen = 0, awake = 0, piled = 0;
+    uint64_t mat_sum = 0, sub_sum = 0;
+    std::unordered_map<const void*, uint32_t> per_base;
+    // What merging frozen pieces would leave to draw: pieces of one building in one cell of 4, 8 or 16 m.
+    constexpr float kCells[3] = {4.0f, 8.0f, 16.0f};
+    std::unordered_map<uint64_t, uint32_t> groups[3];
+    auto bucket = [](uint32_t v) { return v <= 1 ? 0 : v <= 2 ? 1 : v <= 4 ? 2 : v <= 8 ? 3 : v <= 16 ? 4 : v <= 32 ? 5 : v <= 64 ? 6 : 7; };
+    for (uint32_t i = 0; i < g_vehicle_first && i < g_slots; ++i) {
+        const uint8_t* inst = g_pieces[i].inst;
+        if (!inst) continue;
+        if (g_pieces[i].pile != kNoPile) {
+            ++piled;
+            continue;
+        }
+        ++pieces;
+        const uint8_t* map = *reinterpret_cast<uint8_t* const*>(inst + kInstMatMap);
+        const uint32_t m = map && map[0x10] ? *reinterpret_cast<const uint32_t*>(map + 0x0C) : 0;
+        const uint32_t r = *reinterpret_cast<const uint32_t*>(inst + kInstRenderableSubs);
+        ++mats[bucket(m)];
+        ++subs[bucket(r)];
+        mat_sum += m;
+        sub_sum += r;
+        const void* base = *reinterpret_cast<void* const*>(inst + kInstShared);
+        ++per_base[base];
+        if (poses && i < slots) {
+            const bool is_frozen = (poses[i].flags & ipc::kPoseFrozen) != 0;
+            frozen += is_frozen;
+            awake += (poses[i].flags & ipc::kPoseAwake) != 0;
+            if (is_frozen)
+                for (int c = 0; c < 3; ++c) ++groups[c][merge_cell_key(base, poses[i].pos, kCells[c])];
+        }
+    }
+    if (g_piles_live) {
+        uint32_t compiled = 0, batched = 0, largest = 0;
+        // rl_mesh_recompile_data: keen::RenderGeometry (indexCount +0x10), vertex_stride +0x2C and index_stride +0x2E
+        // (ushort), num_verts +0x30, num_render_blocks +0x3C (one per material drawn: a draw per pass).
+        uint64_t vbytes = 0, ibytes = 0, blocks = 0;
+        uint32_t most_blocks = 0, meshless_members = 0, meshless_largest = 0, meshless_pending = 0;
+        for (const Pile& pile : g_piles) {
+            if (!pile.inst) continue;
+            const uint8_t* data = *reinterpret_cast<const uint8_t* const*>(pile.inst + kInstRecompileData);
+            compiled += data != nullptr;
+            batched += (*reinterpret_cast<const uint16_t*>(pile.inst + kInstFlags) & kInstBatchable) != 0;
+            largest = std::max(largest, pile.members);
+            if (data) {
+                const uint32_t n = *reinterpret_cast<const uint32_t*>(data + 0x3C);
+                vbytes += uint64_t(*reinterpret_cast<const uint32_t*>(data + 0x30)) *
+                          *reinterpret_cast<const uint16_t*>(data + 0x2C);
+                ibytes += uint64_t(*reinterpret_cast<const uint32_t*>(data + 0x10)) *
+                          *reinterpret_cast<const uint16_t*>(data + 0x2E);
+                blocks += n;
+                most_blocks = std::max(most_blocks, n);
+            } else {
+                meshless_members += pile.members;
+                meshless_largest = std::max(meshless_largest, pile.members);
+                meshless_pending += !compile_wanted(pile.inst);
+            }
+        }
+        LOG("debris offload: %u pieces drawn by %u piles at the end (%u with their compiled mesh, %u drawn batched while "
+            "it is made; the largest pile %u pieces)", piled, g_piles_live, compiled, batched, largest);
+        LOG("debris offload: the piles' meshes: %.1f MB of vertices, %.1f MB of indices, %.1f render blocks a pile (most "
+            "%u); without a mesh: %u piles of %u pieces (largest %u), %u of them with a compile under way",
+            vbytes / 1048576.0, ibytes / 1048576.0, compiled ? double(blocks) / compiled : 0.0, most_blocks,
+            g_piles_live - compiled, meshless_members, meshless_largest, meshless_pending);
+    }
+    log_buffer_heap("level end");
+    if (!pieces) return;
+    uint32_t biggest = 0, in_big = 0;
+    for (const auto& [base, n] : per_base) {
+        biggest = std::max(biggest, n);
+        if (n >= 100) in_big += n;
+    }
+    // Groups of one piece would stay as they are; the rest would each become one instance.
+    char merge[3][96];
+    for (int c = 0; c < 3; ++c) {
+        uint32_t multi = 0, in_multi = 0, largest = 0;
+        for (const auto& [key, n] : groups[c]) {
+            largest = std::max(largest, n);
+            if (n > 1) {
+                ++multi;
+                in_multi += n;
+            }
+        }
+        snprintf(merge[c], sizeof(merge[c]), "%.0f m: %u groups of 2+ holding %u pieces (largest %u)", kCells[c], multi,
+                 in_multi, largest);
+    }
+    LOG("debris offload: render view of %u pieces: materials in a piece's map %.1f mean (1: %u, 2: %u, 3-4: %u, 5-8: %u, "
+        "9-16: %u, 17-32: %u, 33-64: %u, more: %u); renderable sub-instances %.2f mean (1: %u, 2: %u, 3-4: %u, 5-8: %u, "
+        "more: %u); %zu shared bases (buildings), the biggest with %u pieces, %u pieces in bases of 100 or more; "
+        "frozen %u, awake %u", pieces, double(mat_sum) / pieces, mats[0], mats[1], mats[2], mats[3], mats[4], mats[5],
+        mats[6], mats[7], double(sub_sum) / pieces, subs[0], subs[1], subs[2], subs[3], subs[4] + subs[5] + subs[6] + subs[7],
+        per_base.size(), biggest, in_big, frozen, awake);
+    LOG("debris offload: frozen pieces of their own by building and cell: %s; %s; %s", merge[0], merge[1], merge[2]);
+    if (!g_piles_on || !poses) return;
+    // Why the still pieces of their own (frozen or asleep) are not in a pile, as piles_frame sees them.
+    const uint8_t* states = pxbridge::states(s);
+    const double now_ms = session::since_start_ms();
+    std::unordered_map<uint64_t, uint32_t> still_in_cell;
+    for (uint32_t i = 0; i < slots && i < g_slots; ++i) {
+        const Piece& p = g_pieces[i];
+        if (p.inst && p.pile == kNoPile && (states[i] & ipc::kPoseAlive) && !(states[i] & ipc::kPoseAwake))
+            ++still_in_cell[merge_cell_key(*reinterpret_cast<void* const*>(p.inst + kInstShared), poses[i].pos,
+                                           g_pile_cell)];
+    }
+    uint32_t still = 0, asleep = 0, no_candidate = 0, fresh = 0, not_yet = 0, subs_not_one = 0, pile_waits = 0,
+             next_door = 0, too_few = 0, ready = 0;
+    for (uint32_t i = 0; i < slots && i < g_slots; ++i) {
+        const Piece& p = g_pieces[i];
+        if (!p.inst || p.pile != kNoPile || !(states[i] & ipc::kPoseAlive) || (states[i] & ipc::kPoseAwake)) continue;
+        ++still;
+        asleep += !(states[i] & ipc::kPoseFrozen);
+        const uint64_t key = merge_cell_key(*reinterpret_cast<void* const*>(p.inst + kInstShared), poses[i].pos,
+                                            g_pile_cell);
+        bool busy = false;
+        if (!p.candidate) ++no_candidate;
+        else if (p.fresh) ++fresh;
+        else if (!p.frozen_since_ms || now_ms - p.frozen_since_ms < kPileFrozenMs) ++not_yet;
+        else if (*reinterpret_cast<const int32_t*>(p.inst + kInstNumSubs) != 1) ++subs_not_one;
+        else if (g_pile_at.count(key)) ++pile_waits;
+        else if (still_in_cell[key] >= kPileMinNew) ++ready;
+        else if (settled_pile_near(key, now_ms, busy) != kNoPile || busy) ++next_door;
+        else ++too_few;
+    }
+    LOG("debris offload: %u still pieces of their own (%u asleep, the rest frozen): %u not listed as candidates, %u "
+        "fresh, %u still for less than %.0f s, %u of other than one sub-instance, %u with a pile in their cell (joining "
+        "it after its settle time), %u with fewer than %u in their cell and a pile of their building next door, %u "
+        "with fewer and none next door, %u ready", still, asleep, no_candidate, fresh, not_yet, kPileFrozenMs / 1000.0,
+        subs_not_one, pile_waits, next_door, kPileMinNew, too_few, ready);
+}
+
 void __cdecl d_level_shutdown() {
     if (g_on) {
+        log_render_stats();
         free_all_stand_ins();  // while Havok's world is still there
         AcquireSRWLockExclusive(&g_piece_set_lock);
         g_piece_set.clear();
@@ -2620,11 +3757,57 @@ void __cdecl d_level_shutdown() {
         LeaveCriticalSection(&g_expl_lock);
         g_zone_obj = nullptr;
         uint32_t n = 0;
+        g_level_ending = true;
         for (uint32_t s = 0; s < g_slots; ++s)
             if (g_pieces[s].inst) {
                 give_up(s, false);
                 ++n;
             }
+        g_level_ending = false;
+        g_pile_candidates.clear();
+        g_no_pile_near.clear();
+        std::fill(g_seen_state.begin(), g_seen_state.end(), uint8_t(0));
+        AcquireSRWLockExclusive(&g_fix_lock);
+        g_fix_queue.clear();
+        ReleaseSRWLockExclusive(&g_fix_lock);
+        if (g_piles_made)
+            LOG("debris offload: piles this level: %llu made, %llu pieces joined one (%llu of them from the next cell), "
+                "%llu left one again when woken (%llu splits refused); %llu filled up; at most %u piles drawing %u "
+                "pieces at once; %u compiles asked for, %u of them again (no request had been made)", g_piles_made,
+                g_piled_total, g_joined_next_door, g_unpiled_total, g_unpile_failures, g_piles_full, g_piles_peak,
+                g_piled_peak, g_pile_compiles, g_pile_compile_retries);
+        g_joined_next_door = g_piles_full = 0;
+        if (g_piles_made) {
+            char meshless[320];
+            format_meshless(g_meshless, meshless, sizeof(meshless));
+            LOG("debris offload: piles without their mesh this level (after a change, until the new one): %s", meshless);
+        }
+        g_meshless = g_meshless_window = MeshlessStats{};
+        g_meshless_now = g_waiting_for_pile = 0;
+        if (g_task_frames) {
+            const char* names[kTaskParts] = {"moves", "splits out of piles", "piles (joins, sizes, retries)",
+                                             "the rest"};
+            double slow_total = 0;
+            for (const TaskPart& t : g_task) slow_total += t.in_slow;
+            char parts[kTaskParts][112];
+            for (int k = 0; k < kTaskParts; ++k)
+                snprintf(parts[k], sizeof(parts[k]), "%s %.3f ms a frame (longest %.2f, %.0f%% of the slow frames)",
+                         names[k], g_task[k].total / g_task_frames, g_task[k].longest,
+                         slow_total > 0 ? 100.0 * g_task[k].in_slow / slow_total : 0.0);
+            LOG("debris offload: render task this level: %llu frames, %llu of them over 1 ms; %s; %s; %s; %s; %llu "
+                "moves skipped (the instance already there)", static_cast<unsigned long long>(g_task_frames),
+                static_cast<unsigned long long>(g_task_slow), parts[0], parts[1], parts[2], parts[3],
+                static_cast<unsigned long long>(g_moves_skipped));
+        }
+        g_moves_skipped = 0;
+        for (TaskPart& t : g_task) t = TaskPart{};
+        g_task_frames = g_task_slow = 0;
+        g_pile_compiles = g_pile_compile_retries = 0;
+        g_piles.clear();
+        g_free_piles.clear();
+        g_pile_at.clear();
+        g_piles_live = g_piled_now = g_piles_peak = g_piled_peak = 0;
+        g_piles_made = g_piled_total = g_unpiled_total = g_unpile_failures = 0;
         // Before world::level_shutdown destreams the zones and releases what the level's objects still hold.
         const size_t refs = g_refs_to_release.size();
         release_chunk_refs();
@@ -2640,8 +3823,10 @@ void __cdecl d_level_shutdown() {
         if (g_adopt_delay_ms)
             LOG("debris offload: level end; at most %u new pieces were waiting in Havok at once; %u went over at rest "
                 "(frozen), %u moving", g_waiting_peak, g_went_at_rest, g_went_moving);
+        log_zone_crossings();
         g_first_seen.clear();
         g_waiting_list.clear();
+        g_adopt_now.clear();
         g_waiting = g_waiting_peak = g_went_at_rest = g_went_moving = 0;
         EnterCriticalSection(&g_blow_lock);
         g_blows.clear();
@@ -2682,12 +3867,32 @@ bool install(const Config& cfg) {
     ok &= hooks::create(r::world__destream_zone, &d_destream_zone, &o_destream_zone, "world::destream_zone");
     ok &= hooks::create(r::chunk_base_unload_internal, &d_chunk_unload, &o_chunk_unload, "chunk_base_unload_internal");
     if (!ok) return false;
+    // The zone check before general_mover::update_pos_and_orient's destroy: call (E8) at +0x40, test al, al after it.
+    const uint8_t* zone_call = static_cast<const uint8_t*>(rfg::addr(r::general_mover__update_pos_and_orient + 0x40));
+    if (zone_call[0] == 0xE8 && zone_call[5] == 0x84 && zone_call[6] == 0xC0 &&
+        hooks::create(r::world__object_physically_in_original_zone, &d_in_original_zone, &o_in_original_zone,
+                      "world::object_physically_in_original_zone"))
+        g_zone_check_return = zone_call + 5;
+    else
+        LOG("debris offload: WARNING the zone check in general_mover::update_pos_and_orient is not hooked: pieces thrown "
+            "out of their zone while they wait in Havok are deleted, as in the game");
     g_on = true;
     g_batch = cfg.exp_physx_debris_batch != 0;
     g_drop_meshes = g_batch && cfg.exp_physx_debris_drop_meshes != 0;
     if (g_drop_meshes && !hooks::create(r::rl_start_recompile_mesh_instance, &d_start_recompile, &o_start_recompile,
                                         "rl_start_recompile_mesh_instance"))
         g_drop_meshes = false;
+    if (g_batch && !hooks::create(r::rl_destroyable_model_instance__set_compiled_cache_data, &d_set_compiled,
+                                  &o_set_compiled, "set_compiled_cache_data"))
+        LOG("debris offload: WARNING set_compiled_cache_data not hooked: pieces that get a compiled mesh later are drawn "
+            "one by one");
+    if ((cfg.exp_physx_debris_piles || cfg.telemetry) &&
+        !hooks::create(r::rl_destroyable_model_instance__compile_cache_data, &d_compile_cache, &o_compile_cache,
+                       "compile_cache_data"))
+        LOG("debris offload: WARNING compile_cache_data not hooked: compiled meshes keep their copies in the game's "
+            "buffer heap (large piles may find no room)");
+    else
+        g_free_mesh_copies = cfg.exp_physx_debris_piles != 0;
     g_solid = cfg.exp_physx_solid_debris != 0;
     g_solid_mass_kg = cfg.exp_physx_solid_mass_kg;
     g_adopt_delay_ms = uint32_t(std::max(0, cfg.exp_physx_adopt_delay_ms));
@@ -2696,6 +3901,16 @@ bool install(const Config& cfg) {
             "waiting)", g_adopt_delay_ms, kMaxWaiting);
     g_diag = cfg.telemetry;
     g_probe = cfg.test_stand_in_probe;
+    g_piles_on = cfg.exp_physx_debris_piles != 0;
+    g_pile_cell = float(std::clamp(cfg.exp_physx_debris_pile_cell_m, 2, 64));
+    g_next_door_ms = 1000.0 * std::max(0, cfg.exp_physx_debris_pile_next_door_s);
+    g_pile_max = uint32_t(std::max(0, cfg.exp_physx_debris_pile_max_pieces));
+    if (g_piles_on)
+        LOG("debris offload: piles: pieces still for %.0f s (frozen or asleep) are drawn with the other still pieces of "
+            "their building in their %.0f m cell, as one compiled instance (from %u in a cell, up to %u a pile, 0: "
+            "no limit; fewer join their building's pile next door after %.0f s, 0: never); a piece that moves "
+            "leaves its pile again", kPileFrozenMs / 1000.0, double(g_pile_cell), kPileMinNew, g_pile_max,
+            g_next_door_ms / 1000.0);
     g_stand_in_drives_zone = cfg.test_stand_in_drives_zone;
     for (size_t at = 0; at < cfg.test_inspect_frames.size();) {
         const size_t comma = cfg.test_inspect_frames.find(L',', at);
@@ -2762,6 +3977,37 @@ bool piece_position(uint32_t slot, float out[3]) {
     if (!s || slot >= g_vehicle_first || !g_pieces[slot].inst) return false;
     const ipc::BodyPose& b = pxbridge::poses(s)[slot];
     out[0] = b.pos.x, out[1] = b.pos.y, out[2] = b.pos.z;
+    return true;
+}
+
+void hide_debris_for_test(int what) { g_hide_request = what; }
+
+bool debris_extent(float centre[3], float& radius, float& low_y, uint32_t& pieces) {
+    const ipc::SnapshotHeader* s = g_on ? pxbridge::snapshot(nullptr) : nullptr;
+    if (!s) return false;
+    const ipc::BodyPose* poses = pxbridge::poses(s);
+    const uint32_t slots = std::min<uint32_t>(std::min<uint32_t>(s->slots, g_vehicle_first), g_slots);
+    double sum[3] = {};
+    std::vector<float> ys;
+    for (uint32_t i = 0; i < slots; ++i) {
+        if (!g_pieces[i].inst || i == g_player_slot || !(poses[i].flags & ipc::kPoseAlive)) continue;
+        sum[0] += poses[i].pos.x, sum[1] += poses[i].pos.y, sum[2] += poses[i].pos.z;
+        ys.push_back(poses[i].pos.y);
+    }
+    pieces = uint32_t(ys.size());
+    if (!pieces) return false;
+    for (int k = 0; k < 3; ++k) centre[k] = float(sum[k] / pieces);
+    std::vector<float> d;
+    d.reserve(pieces);
+    for (uint32_t i = 0; i < slots; ++i) {
+        if (!g_pieces[i].inst || i == g_player_slot || !(poses[i].flags & ipc::kPoseAlive)) continue;
+        const float dx = poses[i].pos.x - centre[0], dz = poses[i].pos.z - centre[2];
+        d.push_back(std::sqrt(dx * dx + dz * dz));
+    }
+    std::nth_element(d.begin(), d.begin() + d.size() * 8 / 10, d.end());
+    radius = d[d.size() * 8 / 10];
+    std::nth_element(ys.begin(), ys.begin() + ys.size() / 10, ys.end());
+    low_y = ys[ys.size() / 10];
     return true;
 }
 

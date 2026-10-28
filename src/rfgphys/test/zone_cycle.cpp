@@ -194,6 +194,9 @@ bool land(uint8_t* player, const Point& at) {
 // centre nearest to it.
 void hop(uint8_t* player, bool home, double t) {
     const float* pos = reinterpret_cast<const float*>(player + kObjPos);
+    // A new hop ends the last one's wait to land: the hop home went to the start, and the wait of the hop before it
+    // (its ground had not streamed in yet) pulled the player back into the air there, to fall to death later.
+    g_land_at = -1;
     // The game streams zones around the camera, which stays behind while a teleported player hangs over ground not
     // loaded yet: for the test the streaming follows the player (world::do_frame, Stream_follows_player).
     rfg::global<uint8_t>(r::Stream_follows_player) = 1;

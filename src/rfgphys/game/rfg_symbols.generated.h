@@ -132,8 +132,21 @@ inline uint32_t rl_batched_pass__finalize_construction = 0x00155750;  // Steam 0
 inline uint32_t rl_batched_pass__partition_batched_instances = 0x001555C0;  // Steam 0x00155670; rl_batched_pass::partition_batched_instances, 279 bytes: void __thiscall rl_batched_pass::()
 inline uint32_t rl_renderer__begin_instancing_batch = 0x000C54A0;  // Steam 0x000C54F0; rl_renderer::begin_instancing_batch, 156 bytes: void* __thiscall rl_renderer::(keen::GeometryInstancingBatch*, uint, uint)
 inline uint32_t havok_body_create = 0x0043DBF0;  // Steam 0x0043DBA0; havok_body_create, 1716 bytes: uint __cdecl(physics_create_info*)
+inline uint32_t general_mover__update_pos_and_orient = 0x006B3470;  // Steam 0x006B3860; general_mover::update_pos_and_orient, 92 bytes: void __thiscall general_mover::(vector*, matrix*, bool)
+inline uint32_t world__object_physically_in_original_zone = 0x0052CE00;  // Steam 0x0052CF70; world::object_physically_in_original_zone, 143 bytes: bool __thiscall world::(object*)
 inline uint32_t rl_delete_mesh_recompile_data = 0x00128C10;  // Steam 0x00128CD0; rl_delete_mesh_recompile_data, 161 bytes: void __cdecl(rl_mesh_recompile_data*)
 inline uint32_t rl_start_recompile_mesh_instance = 0x00129010;  // Steam 0x001290D0; rl_start_recompile_mesh_instance, 227 bytes: void __cdecl(rl_destroyable_model_instance*, bool)
+inline uint32_t rl_destroyable_model_instance__claim_sub_instances = 0x0014A480;  // Steam 0x0014A540; rl_destroyable_model_instance::claim_sub_instances, 227 bytes: void __thiscall rl_destroyable_model_instance::(short*, int)
+inline uint32_t rl_destroyable_model_instance__unclaim_sub_instances = 0x0014A320;  // Steam 0x0014A3E0; rl_destroyable_model_instance::unclaim_sub_instances, 346 bytes: void __thiscall rl_destroyable_model_instance::(short*, int)
+inline uint32_t rl_destroyable_model_instance__update_instances = 0x0014A140;  // Steam 0x0014A200; rl_destroyable_model_instance::update_instances, 249 bytes: void __thiscall rl_destroyable_model_instance::(rl_sub_instance_update*, int)
+inline uint32_t rl_destroyable_model_instance__split = 0x0014A570;  // Steam 0x0014A630; rl_destroyable_model_instance::split, 538 bytes: rl_destroyable_model_instance* __thiscall rl_destroyable_model_instance::(rl_split_info*)
+inline uint32_t rl_destroyable_model_instance__set_compiled_cache_data = 0x000BEA70;  // Steam 0x000BEAC0; rl_destroyable_model_instance::set_compiled_cache_data, 77 bytes: rl_mesh_recompile_data* __thiscall rl_destroyable_model_instance::(rl_mesh_recompile_data*, rl_mesh_recompile_parameters*)
+inline uint32_t rl_destroyable_model_instance__compile_cache_data = 0x0010CFC0;  // Steam 0x0010D070; rl_destroyable_model_instance::compile_cache_data, 2861 bytes: rl_mesh_recompile_data* __thiscall rl_destroyable_model_instance::(rl_mesh_recompile_parameters*)
+inline uint32_t keen__Mutex__lock = 0x007FBFB0;  // Steam 0x007FC360; keen::Mutex::lock, 229 bytes: bool __thiscall keen::Mutex::(uint)
+inline uint32_t keen__Mutex__unlock = 0x007ED490;  // Steam 0x007ED850; keen::Mutex::unlock, 11 bytes: void __thiscall keen::Mutex::()
+inline uint32_t tlsf_walk_heap = 0x00001950;  // Steam 0x00001950; tlsf_walk_heap, 77 bytes: void __cdecl(void*, fn*, void*)
+inline uint32_t rl_compound_mesh_instance__calculate_local_aabb = 0x000E3930;  // Steam 0x000E39A0; rl_compound_mesh_instance::calculate_local_aabb, 944 bytes: void __thiscall rl_compound_mesh_instance::()
+inline uint32_t matrix__set_angles = 0x001756E0;  // Steam 0x001757E0; matrix::set, 479 bytes: void __thiscall matrix::(float, float, float)
 inline uint32_t explosion_create = 0x002EC640;  // Steam 0x002EC720; explosion_create, 520 bytes: void __cdecl(explosion_info*, object*, object*, vector*, matrix*, vector*, weapon_info*, bool)
 inline uint32_t havok_body_free = 0x004231A0;  // Steam 0x00423110; havok_body_free, 126 bytes: void __cdecl(uint, bool, bool, bool)
 inline uint32_t havok_body_set_pos_orient_by_handle = 0x00423790;  // Steam 0x00423700; havok_body_set_pos_orient, 145 bytes: void __cdecl(uint, vector*, matrix*)
@@ -290,6 +303,7 @@ inline uint32_t Character_collision_push_away_mass = 0x0222171C;  // Steam 0x022
 inline uint32_t Character_collision_push_away_dim = 0x02265050;  // Steam 0x02266050; float
 inline uint32_t Character_collision_push_away_impulse_factor = 0x02366828;  // Steam 0x0236D2DC; float
 inline uint32_t Character_collision_push_away_rvec_factor = 0x0224174C;  // Steam 0x0224274C; float
+inline uint32_t Init_params = 0x0181FA60;  // Steam 0x01820A60; rl_init_params
 inline uint32_t Explosion_infos = 0x019E5CD8;  // Steam 0x019E6CD8; explosion_info[18960 bytes]
 inline uint32_t Num_explosion_infos = 0x019ED490;  // Steam 0x019EE490; uint
 inline uint32_t obj_zone_vftable = 0x00F15524;  // Steam 0x00F16554; ??_7obj_zone@@6B@
@@ -457,8 +471,21 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::rl_batched_pass__partition_batched_instances, {0x001555C0, 0x00155670}},
     {&rva::rl_renderer__begin_instancing_batch, {0x000C54A0, 0x000C54F0}},
     {&rva::havok_body_create, {0x0043DBF0, 0x0043DBA0}},
+    {&rva::general_mover__update_pos_and_orient, {0x006B3470, 0x006B3860}},
+    {&rva::world__object_physically_in_original_zone, {0x0052CE00, 0x0052CF70}},
     {&rva::rl_delete_mesh_recompile_data, {0x00128C10, 0x00128CD0}},
     {&rva::rl_start_recompile_mesh_instance, {0x00129010, 0x001290D0}},
+    {&rva::rl_destroyable_model_instance__claim_sub_instances, {0x0014A480, 0x0014A540}},
+    {&rva::rl_destroyable_model_instance__unclaim_sub_instances, {0x0014A320, 0x0014A3E0}},
+    {&rva::rl_destroyable_model_instance__update_instances, {0x0014A140, 0x0014A200}},
+    {&rva::rl_destroyable_model_instance__split, {0x0014A570, 0x0014A630}},
+    {&rva::rl_destroyable_model_instance__set_compiled_cache_data, {0x000BEA70, 0x000BEAC0}},
+    {&rva::rl_destroyable_model_instance__compile_cache_data, {0x0010CFC0, 0x0010D070}},
+    {&rva::keen__Mutex__lock, {0x007FBFB0, 0x007FC360}},
+    {&rva::keen__Mutex__unlock, {0x007ED490, 0x007ED850}},
+    {&rva::tlsf_walk_heap, {0x00001950, 0x00001950}},
+    {&rva::rl_compound_mesh_instance__calculate_local_aabb, {0x000E3930, 0x000E39A0}},
+    {&rva::matrix__set_angles, {0x001756E0, 0x001757E0}},
     {&rva::explosion_create, {0x002EC640, 0x002EC720}},
     {&rva::havok_body_free, {0x004231A0, 0x00423110}},
     {&rva::havok_body_set_pos_orient_by_handle, {0x00423790, 0x00423700}},
@@ -614,6 +641,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::Character_collision_push_away_dim, {0x02265050, 0x02266050}},
     {&rva::Character_collision_push_away_impulse_factor, {0x02366828, 0x0236D2DC}},
     {&rva::Character_collision_push_away_rvec_factor, {0x0224174C, 0x0224274C}},
+    {&rva::Init_params, {0x0181FA60, 0x01820A60}},
     {&rva::Explosion_infos, {0x019E5CD8, 0x019E6CD8}},
     {&rva::Num_explosion_infos, {0x019ED490, 0x019EE490}},
     {&rva::obj_zone_vftable, {0x00F15524, 0x00F16554}},
@@ -778,8 +806,21 @@ inline constexpr uint32_t rl_batched_pass__finalize_construction = 421;
 inline constexpr uint32_t rl_batched_pass__partition_batched_instances = 279;
 inline constexpr uint32_t rl_renderer__begin_instancing_batch = 156;
 inline constexpr uint32_t havok_body_create = 1716;
+inline constexpr uint32_t general_mover__update_pos_and_orient = 92;
+inline constexpr uint32_t world__object_physically_in_original_zone = 143;
 inline constexpr uint32_t rl_delete_mesh_recompile_data = 161;
 inline constexpr uint32_t rl_start_recompile_mesh_instance = 227;
+inline constexpr uint32_t rl_destroyable_model_instance__claim_sub_instances = 227;
+inline constexpr uint32_t rl_destroyable_model_instance__unclaim_sub_instances = 346;
+inline constexpr uint32_t rl_destroyable_model_instance__update_instances = 249;
+inline constexpr uint32_t rl_destroyable_model_instance__split = 538;
+inline constexpr uint32_t rl_destroyable_model_instance__set_compiled_cache_data = 77;
+inline constexpr uint32_t rl_destroyable_model_instance__compile_cache_data = 2861;
+inline constexpr uint32_t keen__Mutex__lock = 229;
+inline constexpr uint32_t keen__Mutex__unlock = 11;
+inline constexpr uint32_t tlsf_walk_heap = 77;
+inline constexpr uint32_t rl_compound_mesh_instance__calculate_local_aabb = 944;
+inline constexpr uint32_t matrix__set_angles = 479;
 inline constexpr uint32_t explosion_create = 520;
 inline constexpr uint32_t havok_body_free = 126;
 inline constexpr uint32_t havok_body_set_pos_orient_by_handle = 145;

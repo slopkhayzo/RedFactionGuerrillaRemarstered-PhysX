@@ -14,6 +14,8 @@ struct Config {
 
     bool telemetry = true;
     bool contact_counters = true;     // count contact-point callbacks per frame
+    int draw_stacks = 0;              // > 0: while a test asks (the viewpoints), one draw in N records the game code on
+                                      // its stack (draw_stacks.csv; telemetry/telemetry.cpp)
     bool render_census = false;       // count constant-buffer uploads and occlusion queries (telemetry/render_census.h;
                                       // costs the render thread ~0.2 ms in heavy frames)
     bool cb_redundancy = false;       // diagnostic: detect repeated constant-buffer uploads (costs render-thread time)
@@ -42,6 +44,9 @@ struct Config {
                                       // its debris along, checked (test/restore_building.h)
     int test_view_shots = 0;          // 1: a screenshot a second for 40 s while the camera turns, and the frame
                                       // times; > 1: that many seconds, in bursts (test/view_shots.h)
+    int test_viewpoints = 0;          // replays: after the last frame the view holds at viewpoints around the debris,
+                                      // frame times and screenshots (test/viewpoints.h); 2-4: the same with all
+                                      // debris, the piles or the pieces of their own put out of sight first
     bool test_solver_guard = false;   // at start-up, atom lists Havok's solver setup would loop on go through it,
                                       // checked (experiments/debris_collision.cpp)
     int test_havok_audit = 0;         // 1: Havok's island totals checked against their constraints around every
@@ -124,6 +129,16 @@ struct Config {
     int exp_physx_debris_batch = 1;  // their render instances stay batchable (drawn instanced; 0: one by one)
     // With it: the compiled meshes the game builds for every piece (unused when drawn batched) are given back.
     int exp_physx_debris_drop_meshes = 1;
+    // With it: still pieces of one building lying in one cell are drawn as one compiled instance (a pile), as a
+    // standing building is; a piece PhysX wakes leaves its pile again (physx/debris_offload.cpp, piles).
+    int exp_physx_debris_piles = 0;
+    int exp_physx_debris_pile_cell_m = 16;  // the cells piles are made in (m): larger, fewer piles and draws
+    // A cell's few still pieces (too few for a pile of their own) join their building's pile in a cell next to it
+    // once the first of them has been still this long (s; 0: never), so a cell first gets the chance of its own pile.
+    int exp_physx_debris_pile_next_door_s = 10;
+    // A pile takes pieces up to this many (0: no limit); then its cell starts another. Every change recompiles a
+    // pile's whole mesh, and it draws piece by piece until the new one is made.
+    int exp_physx_debris_pile_max_pieces = 512;
     // Heavy pieces (Character_collision_push_away_mass or more) near the player get Havok stand-ins, so the player
     // stands on rubble; the player's capsule in PhysX pushes only the light ones.
     int exp_physx_solid_debris = 0;
@@ -155,6 +170,7 @@ struct Config {
     bool harness_trace_rng = false;       // diagnostic: log every random draw on the sim thread (rng_trace.csv)
     std::wstring harness_screenshot_frames;  // comma-separated frame numbers to capture (shot_<frame>.png)
     int harness_screenshot_every = 0;     // also capture every N frames (0: off)
+    int harness_shots_after_blow = 0;     // a shot on each of the next N frames after a wide melee blow or a burst
     int harness_leave_level_at_end = 0;   // replay: leave the level after the last frame, then end (tests level end)
     int harness_replay_passes = 1;        // replay: a replay that ends at the main menu plays again, this many times in
                                           // all, in the same process (a second session after a level end)

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <ctime>
 #include <cwctype>
+#include <deque>
 #include <map>
 #include <set>
 #include <string>
@@ -28,6 +29,7 @@
 #include "harness/track.h"
 #include "hooks/hooks.h"
 #include "test/automation.h"
+#include "test/viewpoints.h"
 
 #pragma intrinsic(_ReturnAddress)
 
@@ -734,8 +736,18 @@ void write_replay_result(const char* reason, bool completed) {
 constexpr int kStateWcShutdown = 60;
 bool g_leaving = false;
 double g_leave_t0 = 0, g_left_at = -1;
+bool g_viewing = false;  // Test.Viewpoints: the recording is over, the views run before the level is left
+// Recordings end with the player opening the menu to stop (GS_INGAME_OPTIONS for their last few hundred frames): the
+// views start before the first frame of the last kViewsSearchFrames that the recording says ends outside gameplay, so
+// its input (the menu's key) is not given to the game; or at the end, if the recording stays in gameplay.
+constexpr uint32_t kViewsSearchFrames = 3000;
+// The key that opens the menu comes a frame or more before the first frame that ends outside gameplay (the state
+// changes in the next gameseq_process): in that stretch the frames are read this many ahead.
+constexpr size_t kViewsLookAhead = 16;
+std::deque<rec::Frame> g_ahead;  // read ahead of g_cur (Test.Viewpoints, the recording's last kViewsSearchFrames)
 
-void begin_leaving() {
+// The recording is over: no more input or virtual clock, the track and the result files closed, the result written.
+void stop_replaying(const char* reason = "end of recording") {
     g_phase = Phase::kIdle;
     g_inject = false;
     g_clock_on = false;
@@ -744,12 +756,40 @@ void begin_leaving() {
     g_checkpoints.close();
     g_fingerprints.close();
     rng_guard::set_isolation(false);
-    write_replay_result("end of recording", true);
-    LOG("harness: replay complete (end of recording): %u/%u frames; leaving the level (Harness.LeaveLevelAtEnd)", g_frame,
-        g_header.frame_count);
+    write_replay_result(reason, true);
+}
+
+void leave_level() {
     g_leaving = true;
     g_leave_t0 = session::since_start_ms();
     rfg::fn<void(__cdecl*)(int, bool)>(rfg::rva::gameseq_set_state)(kStateWcShutdown, false);
+}
+
+void begin_leaving() {
+    stop_replaying();
+    LOG("harness: replay complete (end of recording): %u/%u frames; leaving the level (Harness.LeaveLevelAtEnd)", g_frame,
+        g_header.frame_count);
+    leave_level();
+}
+
+// Test.Viewpoints (test/viewpoints.h): after the last frame, before the level is left (or the replay ends).
+void begin_viewing() {
+    stop_replaying("viewpoints before the end of recording");
+    LOG("harness: replay stopped %u frames before the end (%u/%u) for the viewpoints test", g_header.frame_count - g_frame,
+        g_frame, g_header.frame_count);
+    g_viewing = true;
+    viewpoints::begin();
+}
+
+void viewing_tick() {
+    if (!viewpoints::finished()) return;
+    g_viewing = false;
+    if (g_cfg.harness_leave_level_at_end && g_header.start_type == rec::kStartWreckingCrew) {
+        LOG("harness: viewpoints done; leaving the level (Harness.LeaveLevelAtEnd)");
+        leave_level();
+    } else {
+        session::exit_now("replay finished; viewpoints done");
+    }
 }
 
 void leave_tick(int state) {
@@ -1168,10 +1208,25 @@ void frame_begin() {
     }
     g_gov_index = 0;
     if (g_mode == Mode::kReplay) {
+        const bool look_ahead = g_phase == Phase::kActive && viewpoints::wanted() &&
+                                g_frame + kViewsSearchFrames >= g_header.frame_count;
         if (g_phase == Phase::kPending) {
             g_cur = g_transition;
+        } else if (look_ahead) {
+            for (rec::Frame f; g_ahead.size() <= kViewsLookAhead && g_reader.next(f);) g_ahead.push_back(f);
+            if (g_ahead.empty()) finish_replay("the recording ended early (truncated input.rfgrec)", false);
+            g_cur = g_ahead.front();
+            g_ahead.pop_front();
         } else if (!g_reader.next(g_cur)) {
             finish_replay("the recording ended early (truncated input.rfgrec)", false);
+        }
+        if (look_ahead) {
+            bool leaves = g_cur.end_state != GS_GAMEPLAY;
+            for (const rec::Frame& f : g_ahead) leaves = leaves || f.end_state != GS_GAMEPLAY;
+            if (leaves) {  // the views start before the frames that lead out of gameplay are given to the game
+                begin_viewing();
+                return;
+            }
         }
         if (g_cfg.harness_replay_real_time && g_phase == Phase::kActive) pace_frame(g_cur.dt_real);
         g_inject = true;
@@ -1235,8 +1290,20 @@ void after_frametime() {
     g_last_dt = g_cur.dt;
 }
 
+// Harness.ShotsAfterBlow: the frames of the current series left, and the shots taken so far (capped).
+std::atomic<uint32_t> g_series_left{0};
+uint32_t g_series_shots = 0;
+constexpr uint32_t kMaxSeriesShots = 600;
+
 void request_screenshot(uint32_t frame) {
-    if (g_shot_frames.count(frame) || (g_cfg.harness_screenshot_every > 0 && frame % g_cfg.harness_screenshot_every == 0)) {
+    bool series = false;
+    if (g_series_left.load(std::memory_order_relaxed) && g_series_shots < kMaxSeriesShots) {
+        g_series_left.fetch_sub(1, std::memory_order_relaxed);
+        ++g_series_shots;
+        series = true;
+    }
+    if (series || g_shot_frames.count(frame) ||
+        (g_cfg.harness_screenshot_every > 0 && frame % g_cfg.harness_screenshot_every == 0)) {
         wchar_t name[32];
         swprintf_s(name, L"\\shot_%06u.png", frame);
         screenshot::request(session::run_dir() + name);
@@ -1321,7 +1388,8 @@ void replay_frame_end(int state) {
         LOG("harness: replay frame %u/%u, %.1f s game time, first divergence %lld", g_frame, g_header.frame_count,
             g_game_seconds, g_first_divergence);
     if (g_frame >= g_header.frame_count) {
-        if (g_cfg.harness_leave_level_at_end && g_header.start_type == rec::kStartWreckingCrew) begin_leaving();
+        if (viewpoints::wanted()) begin_viewing();
+        else if (g_cfg.harness_leave_level_at_end && g_header.start_type == rec::kStartWreckingCrew) begin_leaving();
         else if (!next_pass(state)) finish_replay("end of recording", true);
     }
 }
@@ -1339,6 +1407,10 @@ void log_player(const char* what, uint32_t n, int state) {
 void frame_end(int state) {
     if (g_leaving) {
         leave_tick(state);
+        return;
+    }
+    if (g_viewing) {
+        viewing_tick();
         return;
     }
     if (g_phase == Phase::kPending) log_player("loading frame", g_pending_frames, state);
@@ -1474,7 +1546,8 @@ bool install(const Config& cfg) {
     ok &= hooks::create(r::create_cells, &d_create_cells, &o_create_cells, "create_cells");
     g_shot_frames = parse_frames(cfg.harness_screenshot_frames);
     g_dump_frames = parse_frames(cfg.harness_dump_objects_frames);
-    if ((!g_shot_frames.empty() || cfg.harness_screenshot_every > 0) && !screenshot::install())
+    if ((!g_shot_frames.empty() || cfg.harness_screenshot_every > 0 || cfg.harness_shots_after_blow > 0) &&
+        !screenshot::install())
         LOG("harness: screenshots unavailable");
     ok &= hooks::create(r::wrecking_crew_match_begin, &d_match_begin, &o_match_begin, "wrecking_crew_match_begin");
     ok &= hooks::create(r::verify_gamesave_start, &d_verify_save, &o_verify_save, "verify_gamesave_start");
@@ -1493,5 +1566,13 @@ bool install(const Config& cfg) {
 }
 
 int32_t replay_frame() { return g_replay_frame.load(std::memory_order_relaxed); }
+
+void shot_series() {
+    if (g_cfg.harness_shots_after_blow <= 0) return;
+    const uint32_t frames = uint32_t(g_cfg.harness_shots_after_blow);
+    uint32_t left = g_series_left.load(std::memory_order_relaxed);
+    while (left < frames && !g_series_left.compare_exchange_weak(left, frames, std::memory_order_relaxed)) {
+    }
+}
 
 }  // namespace harness

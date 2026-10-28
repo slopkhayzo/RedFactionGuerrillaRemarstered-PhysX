@@ -333,7 +333,64 @@ DrawSlot g_draw_slots[kDrawSlots];
 std::atomic<int> g_next_draw_slot{0};
 thread_local DrawSlot* t_draw_slot = nullptr;
 
+// Telemetry.DrawStacks=N: while a test asks for it (the viewpoints), one draw in N on any thread records the return
+// addresses into rfg.exe's code found on its stack (checked to follow a call, as the profiler checks them), innermost
+// first, as GOG build RVAs: which game functions draw (draw_stacks.csv: thread, ms, RVAs; named offline).
+int g_draw_every = 0;
+std::atomic<bool> g_draw_sampling{false};
+uintptr_t g_code_lo = 0, g_code_hi = 0;
+struct DrawStack {
+    uint32_t tid;
+    float t_ms;
+    uint32_t n;
+    uint32_t rva[14];
+};
+SRWLOCK g_draw_stack_lock = SRWLOCK_INIT;
+std::vector<DrawStack> g_draw_stacks;
+constexpr size_t kMaxDrawStacks = 400000;
+thread_local uint32_t t_draws = 0;
+
+bool code_return(uintptr_t v) {
+    if (v < g_code_lo + 6 || v >= g_code_hi) return false;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(v);
+    return p[-5] == 0xE8 || (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) || (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) ||
+           (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10);
+}
+
+void sample_draw_stack() {
+    DrawStack s{};
+    s.tid = GetCurrentThreadId();
+    s.t_ms = float(session::since_start_ms());
+    const uint32_t* sp = reinterpret_cast<const uint32_t*>(_AddressOfReturnAddress());
+    const uint32_t* top = static_cast<const uint32_t*>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
+    for (const uint32_t* p = sp; p < top && p < sp + 2048 && s.n < 14; ++p)
+        if (code_return(*p)) s.rva[s.n++] = rfg::gog_rva(uint32_t(*p - rfg::base()));
+    AcquireSRWLockExclusive(&g_draw_stack_lock);
+    if (g_draw_stacks.size() < kMaxDrawStacks) g_draw_stacks.push_back(s);
+    ReleaseSRWLockExclusive(&g_draw_stack_lock);
+}
+
+void write_draw_stacks(bool) {
+    AcquireSRWLockExclusive(&g_draw_stack_lock);
+    std::vector<DrawStack> all;
+    all.swap(g_draw_stacks);
+    ReleaseSRWLockExclusive(&g_draw_stack_lock);
+    if (all.empty()) return;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, (session::run_dir() + L"\\draw_stacks.csv").c_str(), L"w") || !f) return;
+    fprintf(f, "tid,t_ms,rvas\n");
+    for (const DrawStack& s : all) {
+        fprintf(f, "%lu,%.1f,", static_cast<unsigned long>(s.tid), double(s.t_ms));
+        for (uint32_t i = 0; i < s.n; ++i) fprintf(f, "%s%X", i ? ";" : "", s.rva[i]);
+        fputc('\n', f);
+    }
+    fclose(f);
+    LOG("telemetry: %zu draw stacks written (one draw in %d while the test sampled)", all.size(), g_draw_every);
+}
+
 inline void count_draw() {
+    if (g_draw_every && g_draw_sampling.load(std::memory_order_relaxed) && ++t_draws % uint32_t(g_draw_every) == 0)
+        sample_draw_stack();
     DrawSlot* s = t_draw_slot;
     if (!s) {
         int i = g_next_draw_slot.fetch_add(1, std::memory_order_relaxed);
@@ -892,7 +949,22 @@ int current_state() { return g_state.load(std::memory_order_relaxed); }
 unsigned long sim_thread_id() { return gameloop::sim_thread_id(); }
 unsigned long render_thread_id() { return g_render_tid.load(std::memory_order_relaxed); }
 
+void sample_draw_stacks(bool on) { g_draw_sampling.store(on && g_draw_every > 0, std::memory_order_relaxed); }
+
 bool install(const Config& cfg) {
+    if (cfg.draw_stacks > 0) {
+        g_draw_every = cfg.draw_stacks;
+        auto base = reinterpret_cast<const uint8_t*>(rfg::base());
+        auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base +
+                                                               reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+        auto sec = IMAGE_FIRST_SECTION(nt);
+        for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+            if (memcmp(sec[i].Name, ".text", 5) == 0) {
+                g_code_lo = rfg::base() + sec[i].VirtualAddress;
+                g_code_hi = g_code_lo + sec[i].Misc.VirtualSize;
+            }
+        session::add_flush_handler(&write_draw_stacks);
+    }
     std::string header = "frame,state,t_ms,frame_ms";
     for (const char* n : kTimerNames) header += std::string(",") + n;
     header += ",contacts_added,render_ms,render_frames,game_dt_ms,game_havok_us,havok_steps,rfg_load,recent_history,"

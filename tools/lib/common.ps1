@@ -65,6 +65,17 @@ function Stop-StrayGame {
     }
 }
 
+# Sledge (a mod manager in the GOG folder: its dinput8.dll loads sledge\sledge.dll when the game opens its input
+# devices) rewrites sledge\sledge.log at each start. When its start-up fails it shows a message box, which holds the
+# game before the first frame until the plugin's hang watch ends it (three dev replays on 2026-10-27, each right after
+# a build and deploy, failed in "Failed to create hook: post_event"; the same replays started fine later). Returns the
+# error line of a start since $Since, or $null.
+function Get-SledgeStartError([string]$GameDir, [datetime]$Since) {
+    $log = Join-Path $GameDir 'sledge\sledge.log'
+    if (-not (Test-Path $log) -or (Get-Item $log).LastWriteTime -lt $Since) { return $null }
+    return Get-Content $log | Where-Object { $_ -match 'Unhandled exception|Failed to create hook' } | Select-Object -First 1
+}
+
 # Plugin setting overrides for this run: 'Section.Key=Value' -> environment variable RFGPHYS_SECTION_KEY.
 # Several settings can share one string separated by ';' (queue jobs can pass a parameter only once).
 function Set-PluginOverrides([string[]]$Settings) {

@@ -48,6 +48,8 @@ const rfgphysx::SnapshotHeader* snapshot(bool* fresh = nullptr);
 inline const rfgphysx::BodyPose* poses(const rfgphysx::SnapshotHeader* s) {
     return reinterpret_cast<const rfgphysx::BodyPose*>(s + 1);
 }
+// Each slot's PoseFlags as one byte (slots 0 .. s->slots - 1).
+inline const uint8_t* states(const rfgphysx::SnapshotHeader* s) { return rfgphysx::snapshot_states(s, max_bodies()); }
 
 enum class State : uint8_t { Off = 0, Starting = 1, Ready = 2, Failed = 3, Lost = 4 };
 

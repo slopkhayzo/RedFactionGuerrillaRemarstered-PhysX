@@ -31,6 +31,7 @@
 #include "test/restore_building.h"
 #include "test/vehicle_push.h"
 #include "test/view_shots.h"
+#include "test/viewpoints.h"
 #include "test/visit.h"
 #include "test/zone_cycle.h"
 
@@ -120,6 +121,7 @@ void init() {
     restore_building::install(cfg);
     visit::install(cfg);
     view_shots::install(cfg);
+    viewpoints::install(cfg);
     harness::install(cfg);
     fly_camera::install(cfg);  // never with the harness: both take over the game's input
     hang_watch::start(cfg);

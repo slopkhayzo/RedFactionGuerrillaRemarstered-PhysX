@@ -62,6 +62,7 @@ Config load_config(const std::wstring& ini_path) {
     c.contact_counters = get_int(ini_path, L"Telemetry", L"ContactCounters", 1) != 0;
     // Off by default: hooking ~30,000 constant-buffer uploads per heavy frame costs the render thread ~0.2 ms.
     c.render_census = get_int(ini_path, L"Telemetry", L"RenderCensus", 0) != 0;
+    c.draw_stacks = get_int(ini_path, L"Telemetry", L"DrawStacks", 0);
     c.cb_redundancy = c.render_census && get_int(ini_path, L"Telemetry", L"CbRedundancy", 0) != 0;
     c.render_routing = get_int(ini_path, L"Telemetry", L"RenderRouting", 0) != 0;
     c.profiler = get_int(ini_path, L"Profiler", L"Enabled", 0) != 0;
@@ -82,6 +83,7 @@ Config load_config(const std::wstring& ini_path) {
     c.test_vehicle_push = get_int(ini_path, L"Test", L"VehiclePush", 0) != 0;
     c.test_restore_building = get_int(ini_path, L"Test", L"RestoreBuilding", 0);
     c.test_view_shots = get_int(ini_path, L"Test", L"ViewShots", 0);
+    c.test_viewpoints = get_int(ini_path, L"Test", L"Viewpoints", 0);
     c.test_solver_guard = get_int(ini_path, L"Test", L"SolverGuard", 0) != 0;
     c.test_havok_audit = get_int(ini_path, L"Test", L"HavokAudit", 0);
     c.test_havok_audit_jobs = get_int(ini_path, L"Test", L"HavokAuditJobs", 0) != 0;
@@ -131,6 +133,10 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_debris = get_int(ini_path, L"Experiment", L"PhysXDebris", 0);
     c.exp_physx_debris_batch = get_int(ini_path, L"Experiment", L"PhysXDebrisBatch", 1);
     c.exp_physx_debris_drop_meshes = get_int(ini_path, L"Experiment", L"PhysXDebrisDropMeshes", 1);
+    c.exp_physx_debris_piles = get_int(ini_path, L"Experiment", L"PhysXDebrisPiles", 0);
+    c.exp_physx_debris_pile_cell_m = get_int(ini_path, L"Experiment", L"PhysXDebrisPileCellM", 16);
+    c.exp_physx_debris_pile_next_door_s = get_int(ini_path, L"Experiment", L"PhysXDebrisPileNextDoorS", 10);
+    c.exp_physx_debris_pile_max_pieces = get_int(ini_path, L"Experiment", L"PhysXDebrisPileMaxPieces", 512);
     c.exp_physx_solid_debris = get_int(ini_path, L"Experiment", L"PhysXSolidDebris", 0);
     c.exp_physx_solid_mass_kg = get_int(ini_path, L"Experiment", L"PhysXSolidMassKg", 0);
     c.exp_physx_adopt_delay_ms = get_int(ini_path, L"Experiment", L"PhysXAdoptDelayMs", 2000);    c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
@@ -165,6 +171,7 @@ Config load_config(const std::wstring& ini_path) {
     c.harness_trace_rng = get_int(ini_path, L"Harness", L"TraceRng", 0) != 0;
     c.harness_screenshot_frames = get_string(ini_path, L"Harness", L"ScreenshotFrames", L"");
     c.harness_screenshot_every = get_int(ini_path, L"Harness", L"ScreenshotEvery", 0);
+    c.harness_shots_after_blow = get_int(ini_path, L"Harness", L"ShotsAfterBlow", 0);
     c.harness_leave_level_at_end = get_int(ini_path, L"Harness", L"LeaveLevelAtEnd", 0);
     c.harness_replay_passes = get_int(ini_path, L"Harness", L"ReplayPasses", 1);
     c.harness_replay_real_time = get_int(ini_path, L"Harness", L"ReplayRealTime", 0) != 0;
@@ -185,7 +192,7 @@ std::string describe(const Config& c) {
              "block_save_writes=%d exp_debris_collide=%d (solver buffer %d MB) exp_gpu_occlusion=%d "
              "exp_shadow_min_radius_cm=%d/%d/%d exp_havok_threads=%d%s (min island size %d) exp_keep_debris=%d (debris "
              "pool %d, render instances %d, Havok heap %d MB, zone reserve %d) exp_physx=%d (%d Hz, %d slots, test %d bodies, "
-             "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d) exp_physx_debris=%d fly_camera=%d "
+             "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d) exp_physx_debris=%d (piles %d) fly_camera=%d "
              "(key %d, %d m/s, look speed %d%%, hide HUD %d) harness=%s (recordings '%s', recording '%s', seed %08X, "
              "checkpoint every %d, virtual clock %d, auto start '%s', input script '%s', max frames %d, trace rng %d, "
              "screenshots '%s' every %d, track %d, lock track %d within %d cm)",
@@ -197,7 +204,7 @@ std::string describe(const Config& c) {
              c.exp_havok_min_island_size, c.exp_keep_debris,
              c.exp_debris_pool, c.exp_render_instances, c.exp_havok_heap_mb, c.exp_zone_reserve, c.exp_physx,
              c.exp_physx_rate, c.exp_physx_max_bodies, c.exp_physx_test, c.exp_physx_test_crash_after_s,
-             c.exp_collision_survey, c.exp_physx_world, c.exp_physx_world_check, c.exp_physx_debris,
+             c.exp_collision_survey, c.exp_physx_world, c.exp_physx_world_check, c.exp_physx_debris, c.exp_physx_debris_piles,
              c.fly_camera, c.fly_camera_key, c.fly_camera_speed, c.fly_camera_look_speed, c.fly_camera_hide_hud,
              kModes[c.harness_mode],
              narrow(c.harness_recordings_dir).c_str(), narrow(c.harness_recording).c_str(), c.harness_seed,

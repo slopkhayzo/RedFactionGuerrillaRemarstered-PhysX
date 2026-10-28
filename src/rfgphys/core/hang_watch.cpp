@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -85,6 +87,36 @@ std::vector<Busy> busy_threads() {
     return out;
 }
 
+// The game's visible windows with their text: a message box blocks the thread that opened it (dev replays hung three
+// times on Sledge's "Failed to create hook" box before the first frame). The text is asked for with a time limit:
+// GetWindowText waits for the window's thread, which may be the hung one.
+void window_text(HWND wnd, wchar_t* text, int size) {
+    DWORD_PTR got = 0;
+    text[0] = 0;
+    if (!SendMessageTimeoutW(wnd, WM_GETTEXT, WPARAM(size), LPARAM(text), SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, &got))
+        text[0] = 0;
+    text[size - 1] = 0;
+}
+
+BOOL CALLBACK log_child_text(HWND child, LPARAM) {
+    wchar_t text[512];
+    window_text(child, text, int(std::size(text)));
+    if (text[0]) LOG("hang:     text: %ls", text);
+    return TRUE;
+}
+
+BOOL CALLBACK log_window(HWND wnd, LPARAM) {
+    DWORD pid = 0;
+    const DWORD tid = GetWindowThreadProcessId(wnd, &pid);
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(wnd)) return TRUE;
+    wchar_t cls[64] = L"", title[256];
+    GetClassNameW(wnd, cls, int(std::size(cls)));
+    window_text(wnd, title, int(std::size(title)));
+    LOG("hang:   window '%ls' (class %ls) of thread %lu", title, cls, tid);
+    if (wcscmp(cls, L"#32770") == 0) EnumChildWindows(wnd, &log_child_text, 0);  // a dialog: its message
+    return TRUE;
+}
+
 void report(double stalled_ms, int state, const std::vector<Busy>& busy) {
     std::string list;
     for (const Busy& b : busy) {
@@ -94,11 +126,23 @@ void report(double stalled_ms, int state, const std::vector<Busy>& busy) {
     }
     LOG("hang: no frame has ended for %.0f s (game state %d, frame %llu); busy threads: %s", stalled_ms / 1000.0,
         state, gameloop::frames_ended(), list.empty() ? "none" : list.c_str());
+    EnumWindows(&log_window, 0);
     const DWORD sim = gameloop::sim_thread_id(), render = telemetry::render_thread_id();
     thread_dump::log_thread(sim, "sim");
     thread_dump::log_thread(render, "render");
     for (const Busy& b : busy)
         if (b.tid != sim && b.tid != render) thread_dump::log_thread(b.tid, "busy");
+    // Before the first frame the game's threads are not known yet (a replay twice stalled while the game loaded):
+    // every thread then, idle ones included.
+    if (!sim || !render) {
+        int n = 0;
+        for (const auto& [tid, cpu] : thread_times()) {
+            if (tid == GetCurrentThreadId() || tid == sim || tid == render) continue;
+            if (std::any_of(busy.begin(), busy.end(), [&](const Busy& b) { return b.tid == tid; })) continue;
+            if (++n > 48) break;
+            thread_dump::log_thread(tid, "thread");
+        }
+    }
 }
 
 DWORD WINAPI watch_main(void*) {

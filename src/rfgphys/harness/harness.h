@@ -19,4 +19,8 @@ bool install(const Config& cfg);
 // replaying. Any thread.
 int32_t replay_frame();
 
+// Harness.ShotsAfterBlow=N: a screenshot on each of the next N frames (shot_<frame>.png), asked for when a wide melee
+// blow starts and when a frame shatters 500 pieces or more. Nothing without the setting. Any thread.
+void shot_series();
+
 }  // namespace harness

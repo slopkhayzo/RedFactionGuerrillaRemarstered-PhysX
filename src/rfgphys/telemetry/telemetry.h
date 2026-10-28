@@ -15,5 +15,7 @@ uint32_t current_frame();
 int current_state();
 unsigned long sim_thread_id();
 unsigned long render_thread_id();
+// Telemetry.DrawStacks: tests turn the sampling of draws' stacks on and off (test/viewpoints.cpp).
+void sample_draw_stacks(bool on);
 
 }  // namespace telemetry

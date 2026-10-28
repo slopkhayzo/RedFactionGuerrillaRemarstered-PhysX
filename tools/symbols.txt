@@ -194,8 +194,23 @@ var Character_collision_push_away_dim
 var Character_collision_push_away_impulse_factor
 var Character_collision_push_away_rvec_factor
 fn havok_body_create
+fn general_mover::update_pos_and_orient
+fn world::object_physically_in_original_zone
 fn rl_delete_mesh_recompile_data
 fn rl_start_recompile_mesh_instance
+# piles: frozen pieces of one building drawn as one compiled render instance (Experiment.PhysXDebrisPiles)
+fn rl_destroyable_model_instance::claim_sub_instances
+fn rl_destroyable_model_instance::unclaim_sub_instances
+fn rl_destroyable_model_instance::update_instances
+fn rl_destroyable_model_instance::split
+fn rl_destroyable_model_instance::set_compiled_cache_data
+fn rl_destroyable_model_instance::compile_cache_data
+var Init_params
+fn keen::Mutex::lock
+fn keen::Mutex::unlock
+fn tlsf_walk_heap
+fn rl_compound_mesh_instance::calculate_local_aabb
+fn matrix::set @001756E0 as matrix__set_angles
 fn explosion_create
 var Explosion_infos
 var Num_explosion_infos

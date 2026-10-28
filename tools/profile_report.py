@@ -1,6 +1,6 @@
 """Turn a run folder (telemetry.csv, profile.bin, profile_modules.csv) into report.md.
 
-python tools/profile_report.py runs/<run> [--heavy-ms 8] [--top 30]
+python tools/profile_report.py runs/<run> [--heavy-ms 8] [--top 30] [--from-ms A --to-ms B]
 
 Heavy frames are gameplay frames slower than --heavy-ms (default: twice the median gameplay frame time).
 Function names come from rfg.pdb through research/scripts (procs.tsv in RFGRE_OUT, created when missing).
@@ -174,6 +174,9 @@ def main():
                     help='only this gameplay segment (1-based; -1 = last), e.g. one Wrecking Crew round')
     ap.add_argument('--skip-s', type=float, default=0.0, help='ignore the first seconds of each segment')
     ap.add_argument('--out', default='report.md', help='report file name inside the run folder')
+    ap.add_argument('--from-ms', type=float, default=None,
+                    help='only frames from this session time on (ms, as the log; e.g. a Test.Viewpoints view)')
+    ap.add_argument('--to-ms', type=float, default=None, help='only frames up to this session time (ms)')
     args = ap.parse_args()
     run = args.run
     frames = load_frames(run)
@@ -190,6 +193,12 @@ def main():
         gp = [r for r in seg if fnum(r, 't_ms') >= t0 and fnum(r, 'frame_ms') > 0]
         out += ['Details below: segment %d only (%.1f s).' % (segments.index(seg) + 1,
                                                               (fnum(seg[-1], 't_ms') - fnum(seg[0], 't_ms')) / 1000), '']
+    windowed = args.from_ms is not None or args.to_ms is not None
+    if windowed:
+        lo = args.from_ms if args.from_ms is not None else float('-inf')
+        hi = args.to_ms if args.to_ms is not None else float('inf')
+        gp = [r for r in gp if lo <= fnum(r, 't_ms') <= hi]
+        out += ['Details below: frames from %.1f to %.1f s of the session only.' % (lo / 1000, hi / 1000), '']
     if not gp:
         out.append('No gameplay frames in this run.')
     else:
@@ -236,7 +245,7 @@ def main():
         selected_frames = {int(r['frame']) for r in gp}
 
         hdr, samples = load_samples(run)
-        if args.segment:
+        if args.segment or windowed:
             samples = [s for s in samples if s[1] in selected_frames]
         if samples:
             syms = Symbols()

@@ -1491,6 +1491,8 @@ struct Host {
         ipc::SnapshotHeader* snap = sh.snapshot(sh.back);
         auto* records = reinterpret_cast<ipc::BodyPose*>(snap + 1);
         memcpy(records, poses.data(), size_t(slots_used) * sizeof(ipc::BodyPose));
+        uint8_t* states = ipc::snapshot_states(snap, max_bodies);
+        for (uint32_t s = 0; s < slots_used; ++s) states[s] = uint8_t(poses[s].flags);
         snap->sequence = ++sequence;
         snap->step = step_index;
         snap->sim_time = sim_time;
