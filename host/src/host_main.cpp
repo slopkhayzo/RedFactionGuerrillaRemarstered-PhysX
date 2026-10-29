@@ -7,6 +7,7 @@
 //
 //   rfgphysx_host.exe --map <mapping name> [--log <file>] [--steps-csv <file>]
 #include <PxPhysicsAPI.h>
+#include <cudamanager/PxCudaContext.h>
 #include <gpu/PxGpu.h>
 
 #include <windows.h>
@@ -123,9 +124,14 @@ void log_main_stack(double stuck_ms) {
 }
 
 struct ErrorCallback : PxErrorCallback {
-    int reported = 0;
+    // Warnings (one per cooked hull too oblong for the GPU) have a budget of their own, so that errors after them still
+    // show; the rest are counted (B5b: 45 failed GPU allocations used up the budget, then the host crashed unexplained).
+    std::atomic<int> reported{0}, warned{0}, unlogged{0};
     void reportError(PxErrorCode::Enum code, const char* message, const char* file, int line) override {
-        if (reported++ < 50) logf("PhysX error %d: %s (%s:%d)", int(code), message, file, line);
+        const bool warning = code == PxErrorCode::eDEBUG_INFO || code == PxErrorCode::eDEBUG_WARNING ||
+                             code == PxErrorCode::ePERF_WARNING;
+        if ((warning ? warned : reported)++ < 50) logf("PhysX error %d: %s (%s:%d)", int(code), message, file, line);
+        else unlogged++;
     }
 };
 
@@ -234,6 +240,9 @@ struct Host {
     static constexpr float kPushReach = 1.0f;       // m beyond the pusher's bounds
     static constexpr float kPushLookahead = 4.0f;   // steps of its current speed, also beyond its bounds
     static constexpr float kPushStep = 0.1f;        // m
+    // N*s per contact point and step: a 250 kg piece (a typical concrete one) gets up to about 1.2 m/s a step from
+    // each, enough to be swept aside, too little to be driven through the ground.
+    static constexpr float kPusherMaxImpulse = 300.0f;
     static constexpr float kPlayerThawStep = 0.05f; // m
     std::vector<uint8_t> pusher;
     std::vector<uint32_t> pusher_slots;  // may hold stale entries; pusher[] is the truth
@@ -344,6 +353,10 @@ struct Host {
         return false;
     }
 
+    // A CUDA failure (a pinned allocation PhysX could not get leaves it writing through a null buffer) puts the context
+    // in abort mode and the scene in a corrupt state: from then on it adds no actor and steps nothing (B5b).
+    bool gpu_failed() const { return gpu && cuda && cuda->getCudaContext() && cuda->getCudaContext()->isInAbortMode(); }
+
     // ---- commands ----
 
     void reset() {
@@ -358,6 +371,7 @@ struct Host {
         for (auto& [id, parts] : shapes)
             for (PxShape* shape : parts) shape->release();
         shapes.clear();
+        clear_hull_cache();
         awake_slots.clear();
         std::fill(was_awake.begin(), was_awake.end(), uint8_t(0));
         frozen_slots.clear();
@@ -566,9 +580,18 @@ struct Host {
         a->setLinearVelocity(PxVec3(c.lin_vel.x, c.lin_vel.y, c.lin_vel.z));
         a->setAngularVelocity(PxVec3(c.ang_vel.x, c.ang_vel.y, c.ang_vel.z));
         a->userData = reinterpret_cast<void*>(uintptr_t(c.slot));
+        // No speculative CCD: it grows every moving piece's bounds by how far it moves in a step, and pieces thrown at
+        // 20-50 m/s through a crowd got so many more pairs that steps took 10-25 times as long (B5b: 300-600 ms with
+        // 20,000-30,000 awake, then the GPU ran out of pinned memory). The pieces it was for had found no terrain at all
+        // (the game's collision model table was full), not tunnelled through it (research/docs/07, B5b).
         if (c.flags & ipc::kBodyKinematic) a->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
         user_kinematic[c.slot] = (c.flags & ipc::kBodyKinematic) ? 1 : 0;
         pusher[c.slot] = (c.flags & ipc::kBodyKinematic) && (c.flags & ipc::kBodyPusher) ? 1 : 0;
+        // A pusher's contacts give at most kPusherMaxImpulse each (between a kinematic and a dynamic body PhysX takes
+        // the smaller of their limits): a loose chunk coming down on pieces lying on the ground crushed them between
+        // itself and the static ground without a limit, and the solver shot them out underneath (research/docs/07,
+        // B5a: through the avenue map's 4 m slab, at up to 300 m/s).
+        if (pusher[c.slot]) a->setMaxContactImpulse(kPusherMaxImpulse);
         if (pusher[c.slot] && std::find(pusher_slots.begin(), pusher_slots.end(), c.slot) == pusher_slots.end()) {
             pusher_slots.push_back(c.slot);
             pusher_wakes[c.slot] = pusher_woken[c.slot] = 0;  // a pusher before it went out of the list unlogged
@@ -703,10 +726,22 @@ struct Host {
         for (uint32_t k = 0; k < 5; ++k) stat_overlap_deep[k] += deepest_in[k] > 0.03f ? 1 : 0;
     }
 
+    // addActors adds all or none: it backs out at the first actor it refuses, and once the GPU has failed (its scene
+    // corrupt) it refuses all. A body left out of the scene crashed the next setKinematicTarget on it (null scene +
+    // 0x19EC, B5b), so those go one by one, and what is still out is given up (its slot no longer alive).
+    uint32_t stat_add_refused = 0;
+    float stat_fastest2 = 0;  // the fastest moving piece's speed squared, since the last stats
     void flush_pending() {
         if (pending_add.empty()) return;
-        scene->addActors(pending_add.data(), PxU32(pending_add.size()));
+        if (!scene->addActors(pending_add.data(), PxU32(pending_add.size())))
+            for (PxActor* a : pending_add)
+                if (!a->getScene()) scene->addActor(*a);
+        std::vector<uint32_t> refused;
+        for (PxActor* a : pending_add)
+            if (!a->getScene()) refused.push_back(uint32_t(reinterpret_cast<uintptr_t>(a->userData)));
         pending_add.clear();
+        for (uint32_t s : refused) release_body(s);
+        stat_add_refused += uint32_t(refused.size());
     }
 
     // ---- the static world mirror ----
@@ -770,18 +805,113 @@ struct Host {
             return;
         }
         ++stat_cooked;
-        Group& g = groups[c.group];
+        add_static_piece(c.group, c.key, mesh, PxTransform(centre));
+        mesh->release();  // the shape keeps its reference
+    }
+
+    void add_static_piece(uint32_t group, uint32_t key, PxConvexMesh* mesh, const PxTransform& pose) {
+        Group& g = groups[group];
         if (!g.pieces) {
             g.pieces = physics->createRigidStatic(PxTransform(PxIdentity));
             scene->addActor(*g.pieces);
         }
         PxShape* shape = PxRigidActorExt::createExclusiveShape(*g.pieces, PxConvexMeshGeometry(mesh), *material);
-        mesh->release();
         if (!shape) return;
-        shape->setLocalPose(PxTransform(centre));
-        g.by_key[c.key].push_back(shape);
+        shape->setLocalPose(pose);
+        g.by_key[key].push_back(shape);
         ++g.shape_count;
         count_statics(1);
+    }
+
+    // Static hulls alike are cooked once and shared (research/docs/07, B5b): a building's modules repeat on every
+    // storey and each avenue type stands four times, and the avenue's 390,000 hulls took 33-43 s to cook one by one,
+    // the debris waiting in Havok all that time. In a piece's own frame (StaticConvexPlaced) the points of pieces alike
+    // are the same to the bit. The cache holds a reference of each mesh: the ones no shape uses any more go when it has
+    // doubled since it was last swept, and all of them on a reset.
+    struct CachedHull {
+        std::vector<ipc::Vec3> points;
+        float radius;
+        PxConvexMesh* mesh;  // null: it did not cook
+        PxVec3 centre;
+    };
+    static constexpr size_t kHullCacheSweep = 65536;
+    std::unordered_map<uint64_t, std::vector<CachedHull>> hull_cache;  // by a hash of the points and the radius
+    size_t hull_cache_count = 0, hull_cache_sweep_at = kHullCacheSweep;
+    uint32_t stat_hulls_alike = 0;
+
+    // The cache's mesh (a shape takes a reference of its own) and the centre it was cooked around.
+    PxConvexMesh* cached_hull(const ipc::Vec3* v, uint32_t count, float radius, PxVec3& centre) {
+        uint64_t h = 1469598103934665603ull ^ count;
+        uint32_t word;
+        for (size_t i = 0; i < size_t(count) * 3; ++i) {
+            memcpy(&word, reinterpret_cast<const float*>(v) + i, 4);
+            h = (h ^ word) * 1099511628211ull;
+        }
+        memcpy(&word, &radius, 4);
+        h = (h ^ word) * 1099511628211ull;
+        const size_t bytes = size_t(count) * sizeof(ipc::Vec3);
+        if (auto it = hull_cache.find(h); it != hull_cache.end())
+            for (const CachedHull& e : it->second)
+                if (e.points.size() == count && !memcmp(&e.radius, &radius, 4) && !memcmp(e.points.data(), v, bytes)) {
+                    ++stat_hulls_alike;
+                    centre = e.centre;
+                    return e.mesh;
+                }
+        if (hull_cache_count >= hull_cache_sweep_at) sweep_hull_cache();
+        PxConvexMesh* mesh = cook_hull(v, count, radius, centre);
+        hull_cache[h].push_back({std::vector<ipc::Vec3>(v, v + count), radius, mesh, centre});
+        ++hull_cache_count;
+        return mesh;
+    }
+
+    void sweep_hull_cache() {
+        hull_cache_count = 0;
+        for (auto it = hull_cache.begin(); it != hull_cache.end();) {
+            std::vector<CachedHull>& bucket = it->second;
+            for (size_t i = 0; i < bucket.size();) {
+                CachedHull& e = bucket[i];
+                if (e.mesh && e.mesh->getReferenceCount() > 1) {
+                    ++i;
+                    continue;
+                }
+                if (e.mesh) e.mesh->release();
+                e = std::move(bucket.back());
+                bucket.pop_back();
+            }
+            hull_cache_count += bucket.size();
+            if (bucket.empty()) it = hull_cache.erase(it);
+            else ++it;
+        }
+        hull_cache_sweep_at = std::max(kHullCacheSweep, 2 * hull_cache_count);
+    }
+
+    void clear_hull_cache() {
+        for (auto& [h, bucket] : hull_cache)
+            for (CachedHull& e : bucket)
+                if (e.mesh) e.mesh->release();
+        hull_cache.clear();
+        hull_cache_count = 0;
+        hull_cache_sweep_at = kHullCacheSweep;
+    }
+
+    void static_convex_placed(const ipc::StaticConvexPlaced& c, uint32_t size) {
+        if (c.vertex_count < 3 || sizeof(c) + size_t(c.vertex_count) * sizeof(ipc::Vec3) > size) return;
+        const double t0 = now_ms();
+        PxVec3 centre;
+        PxConvexMesh* mesh = cached_hull(reinterpret_cast<const ipc::Vec3*>(&c + 1), c.vertex_count, c.radius, centre);
+        stat_cook_ms += now_ms() - t0;
+        if (!mesh) {
+            ++stat_cook_failed;
+            return;
+        }
+        ++stat_cooked;
+        const PxQuat rot = PxQuat(c.rot.x, c.rot.y, c.rot.z, c.rot.w).getNormalized();
+        const PxVec3 pos(c.pos.x, c.pos.y, c.pos.z);
+        if (!rot.isFinite() || !pos.isFinite()) {
+            ++stat_cook_failed;
+            return;
+        }
+        add_static_piece(c.group, c.key, mesh, PxTransform(pos + rot.rotate(centre), rot));
     }
 
     void remove_static_keys(const ipc::RemoveStaticKeys& c, uint32_t size) {
@@ -1336,6 +1466,9 @@ struct Host {
             case ipc::Cmd::StaticConvex:
                 static_convex(reinterpret_cast<const ipc::StaticConvex&>(h), h.size);
                 break;
+            case ipc::Cmd::StaticConvexPlaced:
+                static_convex_placed(reinterpret_cast<const ipc::StaticConvexPlaced&>(h), h.size);
+                break;
             case ipc::Cmd::RemoveStatics:
                 remove_statics(reinterpret_cast<const ipc::RemoveStatics&>(h).group);
                 break;
@@ -1362,6 +1495,7 @@ struct Host {
                 if (c.slot < max_bodies && bodies[c.slot].actor &&
                     (bodies[c.slot].actor->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)) {
                     flush_pending();
+                    if (!bodies[c.slot].actor || !bodies[c.slot].actor->getScene()) break;  // refused by the scene
                     const PxTransform pose(PxVec3(c.pos.x, c.pos.y, c.pos.z),
                                            PxQuat(c.rot.x, c.rot.y, c.rot.z, c.rot.w).getNormalized());
                     // A jump is a teleport: swept to its target, a kinematic body would hit everything in between at
@@ -1419,8 +1553,9 @@ struct Host {
                 ++stat_bubbled;
             }
             bool freeze = false;
-            if (d->getLinearVelocity().magnitudeSquared() < kCalmSpeed * kCalmSpeed &&
-                d->getAngularVelocity().magnitudeSquared() < kCalmSpin * kCalmSpin) {
+            const float speed2 = d->getLinearVelocity().magnitudeSquared();
+            stat_fastest2 = std::max(stat_fastest2, speed2);
+            if (speed2 < kCalmSpeed * kCalmSpeed && d->getAngularVelocity().magnitudeSquared() < kCalmSpin * kCalmSpin) {
                 freeze = ++calm[s] >= kFreezeSteps;
             } else {
                 calm[s] = 0;
@@ -1522,12 +1657,32 @@ struct Host {
 
     void log_stats() {
         if (stat_cooked || stat_cook_failed) {
-            logf("static world: %u statics in %zu groups; cooked %u (%u failed, %u hulls without a volume) in %.1f ms",
-                 static_count, groups.size(), stat_cooked, stat_cook_failed, stat_hull_skipped, stat_cook_ms);
-            stat_cooked = stat_cook_failed = stat_hull_skipped = 0;
+            logf("static world: %u statics in %zu groups; cooked %u (%u of them alike others, cooked once; %u failed, "
+                 "%u hulls without a volume) in %.1f ms; %zu hulls cached", static_count, groups.size(), stat_cooked,
+                 stat_hulls_alike, stat_cook_failed, stat_hull_skipped, stat_cook_ms, hull_cache_count);
+            stat_cooked = stat_cook_failed = stat_hull_skipped = stat_hulls_alike = 0;
             stat_cook_ms = 0;
         }
+        if (stat_add_refused || g_errors.unlogged) {
+            logf("bodies the scene refused (given up) %u; PhysX errors past the log's budget %d", stat_add_refused,
+                 g_errors.unlogged.exchange(0));
+            stat_add_refused = 0;
+        }
         if (!stat_steps) return;
+        // What PhysX needed in its last step: contact pairs and, on the GPU, the solver's pinned temp buffer (it grew
+        // past 1.9 GB and failed with 20,000 bodies in B5b's first whole-avenue stress cycle) and its counts.
+        PxSimulationStatistics ss;
+        scene->getSimulationStatistics(ss);
+        const PxGpuDynamicsMemoryConfigStatistics& gs = ss.gpuDynamicsMemoryConfigStatistics;
+        logf("PhysX's last step: %u contact pairs (%u touching), %u new, %u lost; %u active constraints, %u partitions; GPU "
+             "temp buffer %.1f MB, rigid contacts %u, patches %u, found/lost pairs %u; GPU heap %.0f MB (solver %.0f, "
+             "narrowphase %.0f, broadphase %.0f); the fastest piece since the last report %.1f m/s",
+             ss.nbDiscreteContactPairsTotal, ss.nbDiscreteContactPairsWithContacts, ss.nbNewPairs, ss.nbLostPairs,
+             ss.nbActiveConstraints, ss.nbPartitions, double(gs.tempBufferCapacity) / 1048576.0, gs.rigidContactCount,
+             gs.rigidPatchCount, gs.foundLostPairs, double(ss.gpuMemHeap) / 1048576.0,
+             double(ss.gpuMemHeapSolver) / 1048576.0, double(ss.gpuMemHeapNarrowPhase) / 1048576.0,
+             double(ss.gpuMemHeapBroadPhase) / 1048576.0, double(std::sqrt(stat_fastest2)));
+        stat_fastest2 = 0;
         logf("%u steps: step %.2f ms mean, %.2f max; work %.2f ms mean; %u bodies, %u awake, %u frozen (+%u (%u going "
              "nowhere), -%u; woken by removed statics %u (%u whole bodies), by the cascade %u, by %zu pushers %u); %u "
              "impulses; %u commands; frame command latency %.2f ms",
@@ -1699,6 +1854,11 @@ int wmain(int argc, wchar_t** argv) {
                 return 2;
             }
             host.step();
+            if (host.gpu_failed()) {
+                host.log_stats();
+                host.fail("the GPU failed (out of pinned memory?): PhysX's scene cannot go on");
+                return 3;
+            }
             next_step += period_ms;
             if (now_ms() - next_step > 3 * period_ms) next_step = now_ms() + period_ms;  // fell behind: no catch-up burst
         } else {

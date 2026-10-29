@@ -60,6 +60,8 @@ struct Config {
     bool test_havok_jobs_on_sim_thread = false;  // with HavokThreads: every job of the multithreaded step on the sim
                                                  // thread (the multithreaded pipeline in one fixed order, no races)
     std::wstring test_visit;          // x,z,tx,tz: the player goes to (x, z) facing (tx, tz) (test/visit.h)
+    int test_stream_report = 0;       // > 0: that many seconds into gameplay, the failed stream containers and the
+                                      // building types' ones are logged (test/stream_report.h)
     std::wstring test_inspect_frames; // replay frames (comma-separated) at which what the camera looks at is logged
                                       // (physx/debris_offload.cpp)
     bool auto_load_save = false;      // main menu -> Load Game -> most recent save, without input
@@ -149,6 +151,9 @@ struct Config {
     int exp_physx_solid_mass_kg = 0;  // with it: pieces this heavy or more are solid (0: the game's push-away mass)
     // A new piece stays in Havok this long (game ms) before it goes to PhysX: what it hits and lies on the game feels.
     int exp_physx_adopt_delay_ms = 2000;
+    // World-only pieces (RFG_WORLD_ONLY: every small one in Wrecking Crew) do not wait: in Havok they went through
+    // buildings meanwhile, the avenue map's ground among them (research/docs/07, B5a).
+    bool exp_physx_world_only_at_once = true;
 
     // Fly camera for screenshots (dev/fly_camera.h; development, off in the release settings).
     bool fly_camera = false;

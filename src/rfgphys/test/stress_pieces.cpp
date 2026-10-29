@@ -17,6 +17,8 @@
 #include "harness/screenshot.h"
 #include "physx/bridge.h"
 #include "physx/debris_offload.h"
+#include "physx/world_mirror.h"
+#include "test/memory_census.h"
 #include "test/viewpoints.h"
 
 namespace stress_pieces {
@@ -65,6 +67,7 @@ constexpr int kHavokDebrisGate = 2500;
 constexpr double kRoundGapS = 3.0, kSettleMinS = 8.0, kSettleMaxS = 45.0;
 constexpr double kViewS = 4.0, kMeasureFromS = 1.0, kShotAtS = 3.5;
 constexpr double kRestoreMinS = 2.0, kRestoreWaitS = 10.0;
+constexpr double kWorldWaitS = 120.0;  // the most the first cycle waits for the host's static world
 constexpr double kHoldS = 10.0, kHoldMeasureFromS = 4.0;
 constexpr double kEndRoomS = 75.0;
 // Stops: before the slots could not take one more cycle (with kSlotMargin to spare), Havok's heap past kHeapStop,
@@ -104,6 +107,7 @@ const uint8_t* g_info = nullptr;       // the vehicle bomb
 std::vector<Point> g_queue;
 size_t g_queue_at = 0;
 int g_cycle = 0, g_round = 0, g_small_cycles = 0;
+uint32_t g_restore_scans = 0;  // world_mirror::flushed_scans() when the buildings were restored
 int g_movers_base = 0;  // general movers at the cycle's start: the props, not debris
 size_t g_next = 0;      // the next building of the round
 double g_phase_at = 0, g_last_blast_at = 0, g_cycle_at = 0;
@@ -168,6 +172,19 @@ bool havok_heap(double& used_mb, double& total_mb) {
     used_mb = used / 1048576.0;
     total_mb = double(end - start) / 1048576.0;
     return true;
+}
+
+// The memory census (test/memory_census.h), with Havok's heap named in it.
+void census(const char* when) {
+    uintptr_t lo = 0, hi = 0;
+    if (const uint8_t* a = rfg::global<const uint8_t*>(r::s_largeBlockAllocator)) {
+        const uint8_t* fixed = a + kHeapFixedServer;
+        if (*reinterpret_cast<const uint8_t* const*>(a + kHeapServer) == fixed) {
+            lo = *reinterpret_cast<const uintptr_t*>(fixed + kServerStart);
+            hi = *reinterpret_cast<const uintptr_t*>(fixed + kServerEnd);
+        }
+    }
+    memory_census::log(when, lo, hi);
 }
 
 // The address space (MB): free and its largest block; in use, by kind: private memory committed and only reserved,
@@ -394,6 +411,9 @@ void log_cycle(double t) {
         static_cast<unsigned long long>(c.unpiled - g_before.unpiled),
         static_cast<unsigned long long>(c.recycled - g_before.recycled), c.candidates,
         task(0) + task(1) + task(2) + task(3), task(0), task(1), task(2), task(3));
+    char when[32];
+    snprintf(when, sizeof(when), "cycle %d", g_cycle);
+    census(when);
 }
 
 const char* stop_reason(double t) {
@@ -425,6 +445,7 @@ void restore_all(double t) {
     if (refused) LOG("stress: cycle %d: world::restore_object refused %u buildings; left out", g_cycle, refused);
     g_phase = kRestore;
     g_phase_at = t;
+    g_restore_scans = world_mirror::flushed_scans();
 }
 
 void stop(const char* why, double t) {
@@ -468,10 +489,17 @@ void on_frame(int game_state) {
     switch (g_phase) {
     case kWait: {
         if (t < g_start_s) return;
+        // Not before the host has applied the static world: the avenue's takes it 35-45 s to cook, and blown up before
+        // that, the rubble piled up in Havok (recycled as the zone's handles ran out) and came over inside the statics
+        // of the buildings as they stood (research/docs/07, B5b).
+        const bool world = world_mirror::flushed_scans() == UINT32_MAX || world_mirror::ready();
+        if (!world && t < g_start_s + kWorldWaitS) return;
         const debris_offload::Census c = debris_offload::census();
         uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
         if (!player) return;
         g_phase = kDone;
+        if (!world) LOG("stress: the host has not applied the static world %.0f s into gameplay; starting all the same", t);
+        else if (t >= g_start_s + 1.0) LOG("stress: the host has the static world %.1f s into gameplay", t);
         if (!c.slots) {
             LOG("stress: debris does not go to PhysX (Experiment.PhysX, PhysXDebris): nothing to measure");
             return;
@@ -497,6 +525,7 @@ void on_frame(int game_state) {
             "private %.0f MB committed and %.0f reserved, mapped %.0f, images %.0f); target %u pieces", c.live,
             c.slots, general_movers(), render_instances_free(), used, total, heap ? "" : " (unreadable: not watched)",
             va.free, va.largest, va.committed, va.reserved, va.mapped, va.images, g_target);
+        census("at the start");
         start_cycle(t);
         return;
     }
@@ -567,6 +596,13 @@ void on_frame(int game_state) {
             ++(standing(obj) && double(subs_left(obj)) >= 0.9 * double(b.subs) ? back : away);
         }
         if (away && in < kRestoreWaitS) return;
+        // and the host has them as statics again: a scan since the restore sent, the host through its commands. Blown
+        // up while it still cooked them (34,000 statics took it seconds), the new pieces came over inside the old
+        // statics, and thousands were pushed out underneath, through the ground (research/docs/07, B5b).
+        const uint32_t scans = world_mirror::flushed_scans();
+        const bool mirrored =
+            scans == UINT32_MAX || (scans != g_restore_scans && pxbridge::ring_used() < (64u << 10));
+        if (!mirrored && in < kRestoreWaitS) return;
         if (away) {
             for (Building& b : g_buildings) {
                 const uint8_t* obj = b.out ? nullptr : object_from_handle(b.handle);

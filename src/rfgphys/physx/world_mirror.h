@@ -16,6 +16,11 @@ namespace world_mirror {
 
 bool install(const Config& cfg);
 bool ready();  // the level's static world is in the host (first export sent), so debris can be handed over
+// Complete scans (every body looked at) whose commands are all in the ring (UINT32_MAX without a mirror). Once it has
+// moved on since a change to the level's buildings, and the host has read the ring, the host's statics match them:
+// Test.StressPieces waits for that after it restores the buildings (research/docs/07, B5b: blown up again while the
+// host still cooked them, the new pieces came over inside the old statics and were pushed out underneath).
+uint32_t flushed_scans();
 // Experiment.PhysXWorldCheck: the check once more, where the player is in 3 s (tests, after zones streamed).
 void check_again();
 

@@ -66,10 +66,7 @@ struct Walker {
     explicit Walker(Sink& s) : sink(s) {}
 
     void emit_convex(const float (*local)[3], int n, float radius, const Transform& t, uint32_t key) {
-        float world[256][3];
-        if (n > 256) n = 256;
-        for (int i = 0; i < n; ++i) t.apply(local[i], world[i]);
-        sink.convex(world, n, radius, key);
+        sink.convex_placed(local, n > 256 ? 256 : n, radius, t, key);
     }
 
     void ring(float (*out)[3], int& n, const float* a, const float* b, float r, int segments) {
@@ -204,6 +201,13 @@ Transform Transform::operator*(const Transform& l) const {
         r.pos[i] = rot[i][0] * l.pos[0] + rot[i][1] * l.pos[1] + rot[i][2] * l.pos[2] + pos[i];
     }
     return r;
+}
+
+void Sink::convex_placed(const float (*local)[3], int count, float radius, const Transform& t, uint32_t key) {
+    float world[256][3];
+    if (count > 256) count = 256;
+    for (int i = 0; i < count; ++i) t.apply(local[i], world[i]);
+    convex(world, count, radius, key);
 }
 
 uint8_t type_of(const uint8_t* shape) { return shape[8]; }

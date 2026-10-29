@@ -472,9 +472,22 @@ void __fastcall d_world_system_init(void* w, void* edx) {
 // all it takes. rl_fp_kdtree's maximum is the sum of several classes' maxima, the destroyable ones among them.
 constexpr uint32_t kFactoryObjectsMax = 0x20, kFactoryObjectData = 0x28;
 int g_render_instances = 0;  // Experiment.RenderInstances
+// Explosion effects come from the same factory: vfx_effect::init takes a vfx_particle_system_filter_instance (0xD0
+// bytes) from its class's pool of 500 for each filter its emitters use, and with none left it goes on with null and
+// crashes on it (vfx_effect::init+0x3C9; 2026-10-28, Test.StressPieces: four vehicle bombs a frame). 4,000 cost
+// about 0.9 MB of the factory's block. rl_class_factory_info::ms_num_exhausted_factories counts the times any of
+// these classes ran out; the log reports it.
+constexpr int32_t kVfxFilterInstances = 4000;
 
 void(__cdecl* o_factory_init)();
 void __cdecl d_factory_init() {
+    int32_t& filters =
+        rfg::global<int32_t>(r::vfx_particle_system_filter_instance__ms_class_factory_info + kFactoryObjectsMax);
+    if (filters < kVfxFilterInstances) {
+        LOG("experiment KeepDebris: explosion effect filter instances %d -> %d (the game crashes when they run out)",
+            filters, kVfxFilterInstances);
+        filters = kVfxFilterInstances;
+    }
     int32_t& inst = rfg::global<int32_t>(r::rl_destroyable_model_instance__ms_class_factory_info + kFactoryObjectsMax);
     int32_t& shared = rfg::global<int32_t>(r::rl_destroyable_model_instance_shared_base__ms_class_factory_info + kFactoryObjectsMax);
     int32_t& kdtree = rfg::global<int32_t>(r::rl_fp_kdtree__ms_class_factory_info + kFactoryObjectsMax);
@@ -534,6 +547,51 @@ void __fastcall d_mempool_init(uint8_t* pool, void* edx, void* buffer, uint32_t 
         LOG("experiment HavokHeapMB: Havok heap %u MB at %p (game: %u MB)", size >> 20, buffer, kGameHavokHeap >> 20);
     }
     o_mempool_init(pool, edx, buffer, size, name, align, flags);
+}
+
+// How much of the heap is used: the block is committed whole, so what it does not need is address space the game
+// lacks (Test.StressPieces used 52-56 MB of 384). hkLargeBlockAllocator (s_largeBlockAllocator): m_fixedBlockServer
+// (+0x9C; its m_start +4, m_end +8: the whole heap, when m_server +0xB0 is that one) and m_sumAllocatedSize (+0xD8),
+// the bytes in use. Each new 32 MB step and the session's peak go to the log.
+constexpr uint32_t kHeapFixedServer = 0x9C, kServerStart = 0x04, kServerEnd = 0x08, kHeapServer = 0xB0,
+                   kHeapInUse = 0xD8;
+uint32_t g_heap_peak = 0, g_heap_step_logged = 0;
+
+bool havok_heap_use(uint32_t& used, uint32_t& total) {
+    const uint8_t* a = rfg::global<const uint8_t*>(r::s_largeBlockAllocator);
+    if (!a) return false;
+    const uint8_t* fixed = a + kHeapFixedServer;
+    if (*reinterpret_cast<const uint8_t* const*>(a + kHeapServer) != fixed) return false;
+    const uintptr_t start = *reinterpret_cast<const uintptr_t*>(fixed + kServerStart);
+    const uintptr_t end = *reinterpret_cast<const uintptr_t*>(fixed + kServerEnd);
+    used = *reinterpret_cast<const uint32_t*>(a + kHeapInUse);
+    if (end <= start || used > end - start) return false;
+    total = uint32_t(end - start);
+    return true;
+}
+
+void watch_heap(int) {
+    uint32_t used = 0, total = 0;
+    if (!havok_heap_use(used, total) || used <= g_heap_peak) return;
+    g_heap_peak = used;
+    const uint32_t step = used >> 25;
+    if (step > g_heap_step_logged) {
+        g_heap_step_logged = step;
+        LOG("Havok's heap: %u MB in use passed (of %u MB)", step << 5, total >> 20);
+    }
+}
+
+void log_heap_peak(bool) {
+    uint32_t used = 0, total = 0;
+    if (havok_heap_use(used, total))
+        LOG("Havok's heap: at most %.1f MB in use this session (of %u MB; %.1f MB now)", g_heap_peak / 1048576.0,
+            total >> 20, used / 1048576.0);
+}
+
+void log_exhausted_factories(bool) {
+    if (const int32_t n = rfg::global<int32_t>(r::rl_class_factory_info__ms_num_exhausted_factories))
+        LOG("experiment KeepDebris: the game's render and effect classes ran out of objects %d times this session "
+            "(rl_class_factory_info::ms_num_exhausted_factories)", n);
 }
 
 // ---- restored objects ----------------------------------------------------------------------------------------------
@@ -665,16 +723,18 @@ bool install_keep_debris(const Config& cfg) {
                        "havok_memory_listener::allocationFailure"))
         return false;
     session::add_frame_callback(&update_budget);
+    session::add_frame_callback(&watch_heap);
+    session::add_flush_handler(&log_heap_peak);
     if (cfg.exp_havok_heap_mb > int(kGameHavokHeap >> 20)) {
         g_havok_heap_bytes = uint32_t(cfg.exp_havok_heap_mb > 1024 ? 1024 : cfg.exp_havok_heap_mb) << 20;
         if (!hooks::create(r::mempool_init_alloc, &d_mempool_init_alloc, &o_mempool_init_alloc, "mempool_init_alloc") ||
             !hooks::create(r::mempool__init, &d_mempool_init, &o_mempool_init, "mempool::init"))
             return false;
     }
-    if (cfg.exp_render_instances > 0) {
+    if (cfg.exp_render_instances > 0)
         g_render_instances = cfg.exp_render_instances > 65000 ? 65000 : cfg.exp_render_instances;
-        if (!setup_render_instances()) return false;
-    }
+    if (!setup_render_instances()) return false;  // the effect filters always; the instances when asked
+    session::add_flush_handler(&log_exhausted_factories);
     if (cfg.exp_debris_pool > int(kGameDebrisPool)) {
         g_pool_capacity = uint32_t(cfg.exp_debris_pool) > kMaxDebrisPool ? kMaxDebrisPool : uint32_t(cfg.exp_debris_pool);
         if (!setup_pool()) return false;

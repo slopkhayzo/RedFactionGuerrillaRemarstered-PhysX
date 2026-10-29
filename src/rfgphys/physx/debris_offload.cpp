@@ -36,6 +36,11 @@ constexpr int kGameplay = 1;               // GS_GAMEPLAY
 constexpr uint32_t kAdoptPerFrame = 400;   // pieces taken over per frame at most (the rest the next frame)
 constexpr float kFloorY = -400.0f;         // pieces below this are given up
 uint64_t g_fell = 0;                        // pieces given up there (they fell through the world)
+// Where pieces go down: the first ones to sink below kLowY (under the ground of the maps without a chasm) are logged
+// with their positions over that step, which shows where the world has a hole or an edge (07 B5a).
+constexpr float kLowY = -20.0f;
+constexpr uint32_t kLowLogged = 16;
+uint32_t g_low_slots[kLowLogged], g_low_logged = 0;
 
 // general_mover / object fields (01 §10.10, research/docs/06 §13).
 constexpr uint32_t kObjFlags = 0x54, kObjHavokHandle = 0x4C, kObjAttach = 0x40;  // child_constraint, host_constraint, attach_info
@@ -115,7 +120,7 @@ struct Piece {
     uint8_t physical_material = 0, effect_material = 0;  // its Havok body's properties 3 and 4, for its stand-in
     float box_c[3] = {}, box_size[3] = {};  // bounds of its parts in its own frame: centre, full extents
     float radius = 0;         // of those bounds around its origin
-    uint32_t srid = 0;        // the chunk reference its general_mover held (0: none), given back with the piece
+    uint32_t srid = 0;        // the chunk container its general_mover held a reference on (0: none): see g_srid_pieces
     uint32_t chunk_uid = kNoChunk;  // its building's chunk
     uint32_t original = kNoObject;  // the object it broke off (its general_mover's original_object)
 };
@@ -303,6 +308,12 @@ std::vector<uint32_t> g_stand_ins_to_free;  // Havok handles, freed at the end o
 // game's debris does (d_destream_zone), and a chunk unloading under a piece anyway takes the piece with it first
 // (d_chunk_unload).
 std::unordered_map<uint32_t, uint32_t> g_chunk_pieces;  // chunk uid -> live pieces drawn from it
+// A stream2 container counts its references in a short. Each piece kept its general_mover's reference, and a building
+// type with 32,700 pieces in PhysX overflowed it (research/docs/07, B5b): the count went negative, the next release
+// unloaded the chunk under its pieces (all given up) and Havok, still stepping bodies with the chunk's shapes, crashed.
+// The pieces of one container keep one reference between them, the first one's; the others give theirs back at once.
+std::unordered_map<uint32_t, uint32_t> g_srid_pieces;  // container -> live pieces sharing our one reference on it
+uint32_t g_srid_peak = 0;                              // the most pieces one reference held at once, this session
 std::vector<uint32_t> g_refs_to_release;
 uint64_t g_refs_taken = 0, g_refs_missing = 0, g_refs_released = 0;
 bool g_stream_owner_checked = false;
@@ -328,7 +339,13 @@ void give_up(uint32_t slot, bool tell_host) {
     // Sim thread, Havok not stepping (end of frame, the handshake, the level's end): the stand-in body (freed at the
     // end of the frame) holds a reference of its own.
     if (p.shape) rfg::fn<void(__thiscall*)(const void*)>(r::hkReferencedObject__removeReference)(p.shape);
-    if (p.srid) g_refs_to_release.push_back(p.srid);
+    if (p.srid) {
+        const auto held = g_srid_pieces.find(p.srid);
+        if (held == g_srid_pieces.end() || --held->second == 0) {  // the last of its container's pieces
+            if (held != g_srid_pieces.end()) g_srid_pieces.erase(held);
+            g_refs_to_release.push_back(p.srid);
+        }
+    }
     const auto chunk = g_chunk_pieces.find(p.chunk_uid);
     if (chunk != g_chunk_pieces.end() && --chunk->second == 0) g_chunk_pieces.erase(chunk);
     p = Piece{};
@@ -428,6 +445,15 @@ constexpr uint32_t kAtRestMs = 250;
 constexpr uint32_t kGentleAfterMs = 300;
 constexpr float kCalmSpeed = 0.15f, kCalmSpin = 0.5f;  // m/s, rad/s
 uint32_t g_adopt_delay_ms = 0;             // Experiment.PhysXAdoptDelayMs
+// World-only pieces (layer 44, RFG_WORLD_ONLY: every small piece in Wrecking Crew, about half in single player) go
+// over at once (Experiment.PhysXWorldOnlyAtOnce), gentle. While they waited they went through the avenue map's ground,
+// a building like any other: born above it, they came over under it within a second (B5a: 135-305 pieces of 16,500-
+// 22,000 a stress cycle, then lost to the world), though DebrisCollide's layer table lets them meet buildings; made
+// ultra-lite meanwhile they did the same. In the game they meet nothing but the terrain and characters, so what the wait
+// is for (pieces breaking and weighing on what they hit) never concerned them; in PhysX they meet everything.
+constexpr uint32_t kLayerWorldOnly = 44;
+bool g_world_only_at_once = false;
+uint64_t g_world_only_went = 0;
 uint32_t g_waiting = 0;                    // pieces waiting at the last pass
 uint32_t g_waiting_peak = 0;               // for the level-end log
 uint32_t g_went_at_rest = 0, g_went_moving = 0;  // for the level-end log
@@ -574,13 +600,18 @@ void adopt() {
             if (calm && !wt.calm) wt.calm_since_ms = now_ms;
             wt.calm = calm;
             const bool left_zone = !g_adopt_now.empty() && g_adopt_now.count(obj_handle);  // goes over now
-            if (!left_zone && now_ms - wt.since_ms < wait_ms) {
+            // a world-only piece (it may become one while it waits, settling into its class) goes now, gentle: it may
+            // lie in what it broke off (PhysX shot one such through the ground)
+            const bool world_only = g_world_only_at_once &&
+                                    (*reinterpret_cast<const uint32_t*>(body + kBodyFilterInfo) & 0x7F) == kLayerWorldOnly;
+            if (!left_zone && !world_only && now_ms - wt.since_ms < wait_ms) {
                 g_waiting_list.emplace_back(obj_handle, inst);
                 ++waiting;
                 continue;
             }
             at_rest = calm && now_ms - wt.calm_since_ms >= kAtRestMs;
-            waited = now_ms - wt.since_ms >= kGentleAfterMs;
+            waited = world_only || now_ms - wt.since_ms >= kGentleAfterMs;
+            if (world_only) ++g_world_only_went;
         }
         Parts parts;
         if (!walk_guarded(hs::body_shape(body), parts) || parts.has_triangles || parts.parts.empty()) continue;
@@ -641,6 +672,11 @@ void adopt() {
         p.inst = inst;
         p.fresh = 1;
         p.srid = holds ? srid : 0;
+        if (p.srid) {
+            uint32_t& sharing = g_srid_pieces[p.srid];
+            if (sharing++) g_refs_to_release.push_back(p.srid);  // the container is held already
+            g_srid_peak = std::max(g_srid_peak, sharing);
+        }
         p.chunk_uid = chunk_uid;
         p.original = original;
         if (chunk_uid != kNoChunk) ++g_chunk_pieces[chunk_uid];
@@ -805,6 +841,13 @@ void move_piece(uint32_t i, uint8_t state, const ipc::BodyPose& b, float alpha, 
         q[0] = b.rot.x, q[1] = b.rot.y, q[2] = b.rot.z, q[3] = b.rot.w;
     }
     p.settle = awake ? 1 : 0;
+    if (b.pos.y < kLowY && b.prev_pos.y >= kLowY && g_low_logged < kLowLogged &&
+        std::find(g_low_slots, g_low_slots + g_low_logged, i) == g_low_slots + g_low_logged) {
+        g_low_slots[g_low_logged++] = i;
+        LOG("debris offload: piece %u went below %.0f m at (%.1f, %.1f, %.1f), from (%.1f, %.1f, %.1f) a step before", i,
+            double(kLowY), double(b.pos.x), double(b.pos.y), double(b.pos.z), double(b.prev_pos.x),
+            double(b.prev_pos.y), double(b.prev_pos.z));
+    }
     if (pos[1] < kFloorY) {
         give_up(i, true);
         ++g_fell;
@@ -2458,7 +2501,8 @@ void log_layer_table() {
     } kLayers[] = {{2, "world"}, {3, "mover"}, {4, "item"}, {5, "ragdoll"}, {6, "player"}, {7, "npc"},
                    {9, "vehicle"}, {12, "walker"}, {14, "walker hull"}, {15, "flyer"}, {16, "projectile"},
                    {19, "object collector"}, {22, "no collision"}, {25, "ray default"}, {36, "keyframed"},
-                   {38, "physical object"}, {40, "rfg normal"}, {41, "rfg normal fast"}, {42, "rfg lite"},
+                   {38, "physical object"}, {39, "rfg destroyable"}, {40, "rfg normal"}, {41, "rfg normal fast"},
+                   {42, "rfg lite"},
                    {43, "rfg ultra lite"}, {44, "rfg world only"}, {45, "ray rfg destroyable"}, {46, "rfg stress"},
                    {48, "camera"}, {49, "human hit detect"}, {57, "ray vehicle wheel"}, {58, "effect rigid body"},
                    {61, "invisible barrier"}};
@@ -2493,6 +2537,8 @@ bool g_task_registered = false;
 // then shattering creates no pieces. Like the game's load governor with the debris it keeps, the pieces farthest
 // from the player go first: below kPoolReserve free instances, up to kRecyclePerFrame of the farthest are given up
 // each frame until kPoolReserve + kPoolHysteresis are free. In the render task, since it releases render instances.
+// Only loose pieces: a piece in a pile draws through its pile's instance, so giving it up frees none (piles hold most
+// far pieces, which went before the loose ones that hold the instances).
 constexpr int32_t kPoolReserve = 2000, kPoolHysteresis = 1000;
 constexpr uint32_t kRecyclePerFrame = 200;
 bool g_recycling = false;
@@ -2522,7 +2568,7 @@ void recycle_far_pieces() {
     static std::vector<std::pair<float, uint32_t>> distant;
     distant.clear();
     for (uint32_t i = 0; i < slots; ++i) {
-        if (!g_pieces[i].inst || i == g_player_slot) continue;
+        if (!g_pieces[i].inst || g_pieces[i].pile != kNoPile || i == g_player_slot) continue;
         const ipc::Vec3& p = poses[i].pos;
         const float dx = p.x - pp[0], dy = p.y - pp[1], dz = p.z - pp[2];
         distant.emplace_back(-(dx * dx + dy * dy + dz * dz), i);  // farthest first
@@ -2761,6 +2807,14 @@ void size_instance(uint8_t* inst) {
 // update ask for a new compile after every change, through it). So before every change the piles make,
 // the pending compile of the instance changed is cancelled here, its request named by m_recompile_parameters_p
 // (+0x154) as long as the request still names the instance (+0).
+// The game's own changes have the same hole (2026-10-28, Test.StressPieces in Wrecking Crew, 2 of 3 runs): when a
+// building breaks, rfg_mover::create_subpieces swaps a dlod's merged sub-instance for its pieces (claim,
+// set_sub_instance_is_active: more vertices, the pieces' inner faces), in the handshake while the compiler waits at a
+// stop, and asks for a compile; the shatter bursts had emptied the pool, the building's compile went on with its old
+// counts, and its vertices ran into the index buffer allocated right after them (the TLSF header of the next block:
+// d_compile_cache's tlsf_free crashed on it). d_start_recompile cancels in that case too.
+// The valid flag is only read at a stop where the compiler was paused, so clearing it is enough only for changes made
+// in the handshake (the game's and the piles' are); a change made elsewhere would need the compiler paused first.
 constexpr uint32_t kInstRecompileParams = 0x154, kParamsValid = 8;
 void cancel_compile(uint8_t* inst) {
     uint8_t* params = *reinterpret_cast<uint8_t* const*>(inst + kInstRecompileParams);
@@ -3398,14 +3452,34 @@ void on_frame(int game_state) {
     g_stats.adopt_ms += float(session::ticks_to_ms(session::qpc() - t0));
 }
 
-// rl_start_recompile_mesh_instance(rl_destroyable_model_instance*, bool): no compiled meshes for the pieces.
+// The game's pool of compile requests: s_params_pool, a pool_list of 4,096 rl_mesh_recompile_parameters (+8 their
+// number, +0xC the free ones). Every change to an instance's sub-instances (claim, unclaim, update, split,
+// set_sub_instance_is_active) deletes its mesh and asks for a new compile here, and the new request clears the valid
+// flag of the instance's pending one, which then aborts at its next stop. With no request free the game does nothing
+// at all, and the pending compile goes on with the instance as it was when it counted (see cancel_compile). Shatter
+// bursts empty the pool: every new piece asks for a compile, and requests come back only once the compiler is through
+// them. Counted: requests made with the pool empty, and the fewest free.
+constexpr uint32_t kPoolSize = 8, kPoolFree = 0xC;
+uint32_t g_requests_pool_empty = 0;
+int32_t g_pool_free_min = INT32_MAX;
+
+// rl_start_recompile_mesh_instance(rl_destroyable_model_instance*, bool): no compiled meshes for the pieces; with the
+// pool empty, the instance's pending compile is cancelled as a new request would.
 void __cdecl d_start_recompile(const void* inst, bool in_handshake) {
-    AcquireSRWLockShared(&g_piece_set_lock);
-    const bool piece = g_piece_set.count(inst) != 0;
-    ReleaseSRWLockShared(&g_piece_set_lock);
-    if (piece) {
-        ++g_recompiles_skipped;
-        return;
+    if (g_drop_meshes) {
+        AcquireSRWLockShared(&g_piece_set_lock);
+        const bool piece = g_piece_set.count(inst) != 0;
+        ReleaseSRWLockShared(&g_piece_set_lock);
+        if (piece) {
+            ++g_recompiles_skipped;
+            return;
+        }
+    }
+    const int32_t free_requests = rfg::global<int32_t>(r::s_params_pool + kPoolFree);
+    g_pool_free_min = std::min(g_pool_free_min, free_requests);
+    if (free_requests <= 0) {
+        ++g_requests_pool_empty;
+        cancel_compile(static_cast<uint8_t*>(const_cast<void*>(inst)));
     }
     o_start_recompile(inst, in_handshake);
 }
@@ -3571,6 +3645,7 @@ void __cdecl d_chunk_unload(uint8_t* chunk, bool delete_mesh) {
             for (uint32_t s = 0; s < g_slots; ++s) {
                 Piece& p = g_pieces[s];
                 if (!p.inst || p.chunk_uid != uid) continue;
+                if (p.srid) g_srid_pieces.erase(p.srid);  // our reference goes with the container
                 p.srid = 0;
                 give_up(s, true);
                 ++n;
@@ -3607,6 +3682,7 @@ void on_exit(bool) {
     LOG("debris offload: %llu pieces taken over (%llu fell through the world); %u explosions sent to the host (%u went "
         "off at a stand-in); the game's explosion kicks: %u, %.2f m/s mean, %.2f max", g_total_adopted, g_fell,
         g_expl_forwarded, g_expl_at_stand_ins, g_kick_n, g_kick_n ? g_kick_sum / g_kick_n : 0.0, g_kick_max);
+    if (g_world_only_went) LOG("debris offload: %llu world-only pieces went over at once", g_world_only_went);
     log_zone_crossings();
     if (g_adopted_faded)
         LOG("debris offload: %llu pieces went over faded by distance (not fully visible)", g_adopted_faded);
@@ -3619,14 +3695,19 @@ void on_exit(bool) {
     if (g_drop_meshes)
         LOG("debris offload: %u compiled meshes of pieces given back, %u recompiles skipped", g_meshes_dropped,
             g_recompiles_skipped);
+    if (o_start_recompile && g_pool_free_min != INT32_MAX)
+        LOG("debris offload: mesh compile requests: at least %d of the game's %d free at any time; %u asked with none "
+            "free (the game drops those; the instance's pending compile was cancelled here)", g_pool_free_min,
+            rfg::global<int32_t>(r::s_params_pool + kPoolSize), g_requests_pool_empty);
     if (g_recycled_total)
         LOG("debris offload: %llu pieces far from the player given up for render instances", g_recycled_total);
     if (g_restored_pieces)
         LOG("debris offload: %llu pieces went with the restored objects they broke off", g_restored_pieces);
     LOG("debris offload: chunk references taken over from the movers: %llu (%llu pieces came without one), %llu given "
-        "back; %u zones streamed out, %llu pieces went with them; %u chunks unloaded under pieces (%llu pieces)",
-        g_refs_taken, g_refs_missing, g_refs_released, g_zones_out, g_zone_pieces_released, g_chunks_out_under_pieces,
-        g_chunk_pieces_released);
+        "back; at most %u pieces shared one chunk's reference; %u zones streamed out, %llu pieces went with them; %u "
+        "chunks unloaded under pieces (%llu pieces)",
+        g_refs_taken, g_refs_missing, g_refs_released, g_srid_peak, g_zones_out, g_zone_pieces_released,
+        g_chunks_out_under_pieces, g_chunk_pieces_released);
     LOG("debris offload: Havok stand-ins: %u created (%u boxes, the rest the pieces' own shapes), %u at most at once, %u "
         "failed; wanted (piece-frames) near the player %u, ahead of projectiles %u, on the line of fire %u; blows "
         "passed on to pieces: %u melee, %u bullets", g_stand_ins_created, g_stand_ins_boxes, g_stand_ins_peak,
@@ -3846,6 +3927,7 @@ void __cdecl d_level_shutdown() {
         const size_t refs = g_refs_to_release.size();
         release_chunk_refs();
         g_chunk_pieces.clear();
+        g_srid_pieces.clear();
         g_restored.clear();
         if (n) LOG("debris offload: level end, %u render instances released, %zu chunk references given back", n, refs);
         log_masses("level end");
@@ -3913,9 +3995,12 @@ bool install(const Config& cfg) {
     g_on = true;
     g_batch = cfg.exp_physx_debris_batch != 0;
     g_drop_meshes = g_batch && cfg.exp_physx_debris_drop_meshes != 0;
-    if (g_drop_meshes && !hooks::create(r::rl_start_recompile_mesh_instance, &d_start_recompile, &o_start_recompile,
-                                        "rl_start_recompile_mesh_instance"))
+    if (!hooks::create(r::rl_start_recompile_mesh_instance, &d_start_recompile, &o_start_recompile,
+                       "rl_start_recompile_mesh_instance")) {
+        LOG("debris offload: WARNING rl_start_recompile_mesh_instance not hooked: a mesh compile can outlive a change "
+            "to its instance when the game's request pool is empty (heap corruption in big shatter bursts)");
         g_drop_meshes = false;
+    }
     if (g_batch && !hooks::create(r::rl_destroyable_model_instance__set_compiled_cache_data, &d_set_compiled,
                                   &o_set_compiled, "set_compiled_cache_data"))
         LOG("debris offload: WARNING set_compiled_cache_data not hooked: pieces that get a compiled mesh later are drawn "
@@ -3933,6 +4018,8 @@ bool install(const Config& cfg) {
     if (g_adopt_delay_ms)
         LOG("debris offload: new pieces stay in Havok for %u ms before they go to PhysX (less with more than %u "
             "waiting)", g_adopt_delay_ms, kMaxWaiting);
+    g_world_only_at_once = cfg.exp_physx_world_only_at_once;
+    if (g_adopt_delay_ms && g_world_only_at_once) LOG("debris offload: world-only pieces go to PhysX at once");
     g_diag = cfg.telemetry;
     g_probe = cfg.test_stand_in_probe;
     g_piles_on = cfg.exp_physx_debris_piles != 0;

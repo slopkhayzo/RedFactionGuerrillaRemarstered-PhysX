@@ -131,6 +131,8 @@ var rl_destroyable_model_instance_shared_base::ms_class_factory_info
 var rl_fp_kdtree::ms_class_factory_info
 var rl_scene_renderer::ms_visible_renderable_instances_max
 var rl_scene::ms_renderable_instances_max
+var vfx_particle_system_filter_instance::ms_class_factory_info
+var rl_class_factory_info::ms_num_exhausted_factories
 fn factory_init
 fn mempool::init
 fn mempool_init_alloc
@@ -163,6 +165,8 @@ var Permanent_mempool
 # X1 world mirror check: Havok raycasts against the static level, to compare with the PhysX mirror
 fn havok_raycast_against_static_level_only
 fn havok_raycast_against_destroyable_geometry
+# the collision model table (havok_cm_manager_add takes at most 0x7FFF; past that a model gets index 0 or none)
+var Num_collision_models
 # patch sites (the functions they are in) and data the plugin reads directly
 fn MyCharacterListener::processConstraintsCallback
 fn rl_batched_pass::rl_batched_pass
@@ -199,6 +203,7 @@ fn general_mover::update_pos_and_orient
 fn world::object_physically_in_original_zone
 fn rl_delete_mesh_recompile_data
 fn rl_start_recompile_mesh_instance
+var s_params_pool
 # piles: frozen pieces of one building drawn as one compiled render instance (Experiment.PhysXDebrisPiles)
 fn rl_destroyable_model_instance::claim_sub_instances
 fn rl_destroyable_model_instance::unclaim_sub_instances
@@ -276,6 +281,17 @@ fn stream2_release
 fn chunk_base_unload_internal
 fn chunk_get_base_uid
 var Stream_thread_id
+# buildings of 10,000+ pieces (experiments/big_buildings.cpp): sub-instances handed back in batches through a
+# scratch block; the sim thread's scratch pool
+fn rl_destroyable_model_instance::release_sub_instances_internal
+fn sim_scratch_system_init
+fn memory_scratch_thread_init
+var RFG_sim_scratch_pool
+# the stream containers, for Test.StreamReport (test/stream_report.cpp): a container that failed to load has its
+# error flag set and an error text
+fn stream2_get_first_container
+fn stream2_get_next_container
+fn stream2_get_status
 
 # multithreaded Havok (experiments/havok_mt.h): the world's simulation type, Havok's job queue, worker thread setup,
 # and the game callbacks that run inside collision jobs

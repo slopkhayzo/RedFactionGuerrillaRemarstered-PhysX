@@ -35,14 +35,17 @@ add_library(rfgphys SHARED
     src/rfgphys/telemetry/render_timeline.cpp
     src/rfgphys/telemetry/profiler.cpp
     src/rfgphys/test/automation.cpp
+    src/rfgphys/test/memory_census.cpp
     src/rfgphys/test/restore_building.cpp
     src/rfgphys/test/stress_pieces.cpp
     src/rfgphys/test/vehicle_push.cpp
+    src/rfgphys/test/stream_report.cpp
     src/rfgphys/test/view_shots.cpp
     src/rfgphys/test/viewpoints.cpp
     src/rfgphys/test/visit.cpp
     src/rfgphys/test/zone_cycle.cpp
     src/rfgphys/experiments/debris_collision.cpp
+    src/rfgphys/experiments/big_buildings.cpp
     src/rfgphys/experiments/render_tweaks.cpp
     src/rfgphys/experiments/havok_audit.cpp
     src/rfgphys/experiments/havok_mt.cpp

@@ -23,7 +23,7 @@
 namespace rfgphysx {
 
 constexpr uint32_t kMagic = 0x58505246;  // "FRPX"
-constexpr uint32_t kVersion = 8;  // 8: a state byte per slot after the poses (snapshot_states)
+constexpr uint32_t kVersion = 9;  // 9: StaticConvexPlaced; 8: a state byte per slot after the poses (snapshot_states)
 constexpr uint32_t kMaxRays = 4096;  // per RaycastBatch
 
 enum class HostState : uint32_t {
@@ -119,6 +119,7 @@ enum class Cmd : uint16_t {
     KinematicTarget,   // KinematicTarget: where a kinematic body is by the next step
     Impulse,           // Impulse: a push on one body at a point (a hammer blow, a bullet)
     MeleeSweep,        // MeleeSweep: a melee blow on every body in a swept sphere
+    StaticConvexPlaced,  // StaticConvexPlaced + vertex_count Vec3: a static convex piece in its own frame, placed
 };
 
 struct CmdHeader {
@@ -275,6 +276,20 @@ struct StaticConvex {
     uint32_t vertex_count;  // at least 3, at most 255
     uint32_t key;
     float radius;           // as ShapePart's
+};
+
+// StaticConvex with the points in the piece's own frame (world = rot * local + pos). Pieces alike come with the same
+// points to the bit wherever they stand, so the host cooks them once (research/docs/07, B5b: a building's modules
+// repeat on every storey and each avenue type stands four times; 390,000 hulls cooked one by one took 33-43 s).
+struct StaticConvexPlaced {
+    CmdHeader h;
+    uint32_t group;
+    uint32_t vertex_count;  // at least 3, at most 255
+    uint32_t key;
+    float radius;           // as ShapePart's
+    Vec3 pos;
+    Quat rot;
+    uint32_t pad;
 };
 
 struct RemoveStaticKeys {

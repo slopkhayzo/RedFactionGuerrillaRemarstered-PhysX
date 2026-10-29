@@ -33,6 +33,8 @@ public:
     // container), for pieces that can later disappear.
     virtual void triangle(const float a[3], const float b[3], const float c[3]) = 0;
     virtual void convex(const float (*vertices)[3], int count, float radius, uint32_t key) = 0;
+    // The same piece in its shape's own frame, placed at `t`: this one turns it into world space for convex().
+    virtual void convex_placed(const float (*local)[3], int count, float radius, const Transform& t, uint32_t key);
     virtual void height_field(const uint8_t* shape, const Transform& t) = 0;
     virtual void unsupported(uint8_t type) = 0;
 };

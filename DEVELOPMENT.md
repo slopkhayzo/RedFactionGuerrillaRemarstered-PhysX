@@ -91,6 +91,33 @@ player's view at rest, runs the viewpoints with `Test.Viewpoints=1`, and ends an
 than in a real map and in more piles (each restored building is a new one, and piles never mix buildings), but it loads
 the address space, the slots and the draws the same way.
 
+At the start and after each cycle the stress test also takes a memory census (test/memory_census.cpp), each compared
+with the one before:
+- `memory ...: private memory committed` lines: the allocations (VirtualAlloc reservations) that grew most, and the new
+  ones by size.
+- `memory ...: heaps`: the heaps' totals (HeapSummary). For the big or growing heaps (at most three), their busy blocks
+  by size (HeapWalk, with the heap locked; a test only).
+- `memory ...: D3D11 alive`: the game's buffers (vertex/index by usage, constant, other) and 2D textures, counted while
+  they live (a private-data object of ours rides on each).
+
+Every session also logs the most of Havok's heap it used (`Havok's heap: at most ... MB in use`; the block is
+committed whole, so what it does not use is address space the game lacks), and each 32 MB step on the way.
+
+`Test.StreamReport=S` (test/stream_report.cpp) logs, S seconds into gameplay, what the streaming did with a map's asm
+containers: each failed container with its error, every chunk container (`.rfgchunkx`) and `ns_base` with its state
+and, for those still waiting, which of their primitives are not loaded, and each building mover (`rfg_mover`) with its
+container and whether its chunk is loaded. A chunk container is virtual: it loads nothing itself and waits for good
+on a primitive that no real container loads (research/docs/07, B5a), and nothing else says so. While a level loads
+it also logs the containers' states when they change, and each container that fails as it fails, with the files it
+did not get, the memory it needed and its allocator's state (a map whose `ns_base` outgrew the game's 209.8 MB
+`level_memmgr` failed that way and crashed on its first gameplay frame, research/docs/07 B5b).
+
+A map can also run out of collision models without any container failing: the game keeps every loaded chunk's piece
+shapes, the terrain's and the rest in one table of 32,767 (`havok_cm_manager_add`), and the models past it get index 0
+or none, silently. The world mirror's first export logs how full the table is (`the game's collision model table holds
+N of 32,767`, with `FULL` when it is). On the 12-type avenue it was: the terrain loaded after our chunks had no
+collision at all, and the last types' pieces had another shape's (research/docs/07 B5b).
+
 `Test.ViewShots=1` (campaign, with `-AutoLoadSave`, 60 s of gameplay) is for comparing settings on screen: from 10 s in,
 a screenshot a second for 40 s (`view_NN.png`), the camera turned about 36 degrees every 4 s, and the frame times of
 those 40 s in a histogram (`view shots: ... frames`). `Test.ViewShots=N` (N > 1) runs N seconds, in bursts of four shots
@@ -192,6 +219,11 @@ those copies in a 76 MB heap, where the largest piles had found no room and drew
 `buffer heap` lines (every 10 s and at the level's end) walk that heap and count compiles made, cancelled and failed,
 and the piles still without a mesh. `Telemetry.DrawStacks=N` samples the stack of one draw in N during the viewpoints
 (`draw_stacks.csv`: thread, time, return addresses as RVAs).
+The game has 4,096 mesh compile requests. Shatter bursts use them all up (every new piece asks for one), and then a
+change to a building no longer cancels its running compile, which writes past its buffers into the heap. With debris
+offload on, the plugin cancels it itself; the level's end logs `mesh compile requests: at least N ... free; M asked
+with none free`. Explosion effects had a game limit of 500 particle filter instances, and the game crashed when they
+ran out; KeepDebris raises it to 4,000 and logs how often any render or effect class ran out of objects.
 
 A Wrecking Crew match without anyone at the keyboard: `Harness.Mode=record;Harness.AutoStart=wc` with
 `Harness.AutoStartOptions=<hex>` (the match setup, as `options_hex` in a recording's manifest) and

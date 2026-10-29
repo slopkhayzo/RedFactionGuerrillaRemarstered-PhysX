@@ -92,6 +92,7 @@ Config load_config(const std::wstring& ini_path) {
     c.test_havok_audit_jobs = get_int(ini_path, L"Test", L"HavokAuditJobs", 0) != 0;
     c.test_havok_jobs_on_sim_thread = get_int(ini_path, L"Test", L"HavokJobsOnSimThread", 0) != 0;
     c.test_visit = get_string(ini_path, L"Test", L"Visit", L"");
+    c.test_stream_report = get_int(ini_path, L"Test", L"StreamReport", 0);
     c.test_inspect_frames = get_string(ini_path, L"Test", L"InspectFrames", L"");
     c.auto_load_save = get_int(ini_path, L"Test", L"AutoLoadSave", 0) != 0;
     c.block_save_writes = get_int(ini_path, L"Test", L"BlockSaveWrites", 0) != 0;
@@ -142,7 +143,9 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_debris_pile_max_pieces = get_int(ini_path, L"Experiment", L"PhysXDebrisPileMaxPieces", 512);
     c.exp_physx_solid_debris = get_int(ini_path, L"Experiment", L"PhysXSolidDebris", 0);
     c.exp_physx_solid_mass_kg = get_int(ini_path, L"Experiment", L"PhysXSolidMassKg", 0);
-    c.exp_physx_adopt_delay_ms = get_int(ini_path, L"Experiment", L"PhysXAdoptDelayMs", 2000);    c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
+    c.exp_physx_adopt_delay_ms = get_int(ini_path, L"Experiment", L"PhysXAdoptDelayMs", 2000);
+    c.exp_physx_world_only_at_once = get_int(ini_path, L"Experiment", L"PhysXWorldOnlyAtOnce", 1) != 0;
+    c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
     c.fly_camera_key = get_int(ini_path, L"FlyCamera", L"Key", VK_F10);
     if (c.fly_camera_key < 1 || c.fly_camera_key > 0xFE) c.fly_camera_key = VK_F10;
     c.fly_camera_speed = get_int(ini_path, L"FlyCamera", L"Speed", 10);

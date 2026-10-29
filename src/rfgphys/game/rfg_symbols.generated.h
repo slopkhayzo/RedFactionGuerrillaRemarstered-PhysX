@@ -193,6 +193,12 @@ inline uint32_t world__get_world_zone_by_pos = 0x00523A20;  // Steam 0x00523BA0;
 inline uint32_t stream2_release = 0x000B0250;  // Steam 0x000B02A0; stream2_release, 104 bytes: void __cdecl(uint)
 inline uint32_t chunk_base_unload_internal = 0x005285D0;  // Steam 0x00528750; chunk_base_unload_internal, 99 bytes: void __cdecl(c_chunk_base*, bool)
 inline uint32_t chunk_get_base_uid = 0x005215C0;  // Steam 0x00521740; chunk_get_base_uid, 58 bytes: uint __cdecl(c_chunk_base*)
+inline uint32_t rl_destroyable_model_instance__release_sub_instances_internal = 0x000E4170;  // Steam 0x000E41F0; rl_destroyable_model_instance::release_sub_instances_internal, 677 bytes: void __thiscall rl_destroyable_model_instance::(rl_sub_instance*, int)
+inline uint32_t sim_scratch_system_init = 0x001D2320;  // Steam 0x001D2400; sim_scratch_system_init, 54 bytes: void __cdecl()
+inline uint32_t memory_scratch_thread_init = 0x0018A970;  // Steam 0x0018AA70; memory_scratch_thread_init, 46 bytes: void __cdecl(mempool_base*)
+inline uint32_t stream2_get_first_container = 0x000A9F70;  // Steam 0x000A9FB0; stream2_get_first_container, 6 bytes: stream2_container* __cdecl()
+inline uint32_t stream2_get_next_container = 0x000A9F80;  // Steam 0x000A9FC0; stream2_get_next_container, 22 bytes: stream2_container* __cdecl(stream2_container*)
+inline uint32_t stream2_get_status = 0x000AC200;  // Steam 0x000AC250; stream2_get_status, 69 bytes: enum stream2_status_val __cdecl(uint)
 inline uint32_t havok_system_init = 0x00439A70;  // Steam 0x00439A20; havok_system_init, 6601 bytes: void __cdecl()
 inline uint32_t hkpWorld__hkpWorld = 0x009E6E80;  // Steam 0x009E7220; hkpWorld::hkpWorld, 4988 bytes: void __thiscall hkpWorld::(hkpWorldCinfo*, uint)
 inline uint32_t hkpWorld___hkpWorld = 0x009E5C00;  // Steam 0x009E5FA0; hkpWorld::~hkpWorld, 2290 bytes: void __thiscall hkpWorld::()
@@ -285,6 +291,8 @@ inline uint32_t rl_destroyable_model_instance_shared_base__ms_class_factory_info
 inline uint32_t rl_fp_kdtree__ms_class_factory_info = 0x01113AF8;  // Steam 0x01114AF8; rl_class_factory_info
 inline uint32_t rl_scene_renderer__ms_visible_renderable_instances_max = 0x010F945C;  // Steam 0x010FA45C; int
 inline uint32_t rl_scene__ms_renderable_instances_max = 0x010F9454;  // Steam 0x010FA454; int
+inline uint32_t vfx_particle_system_filter_instance__ms_class_factory_info = 0x012F00F4;  // Steam 0x012F10F4; rl_class_factory_info
+inline uint32_t rl_class_factory_info__ms_num_exhausted_factories = 0x0177AD00;  // Steam 0x0177BD00; int
 inline uint32_t Havok_mempool = 0x01958FC8;  // Steam 0x01959FC8; mempool
 inline uint32_t s_largeBlockAllocator = 0x0278128C;  // Steam 0x0278228C; hkMemoryAllocator*
 inline uint32_t obj_class_instantiator__hash_size = 0x01293538;  // Steam 0x01294538; int
@@ -293,6 +301,7 @@ inline uint32_t obj_class_instantiator__max_objects = 0x02C23E98;  // Steam 0x02
 inline uint32_t obj_class_instantiator__class_index = 0x02C19240;  // Steam 0x02C1A240; int[3072 bytes]
 inline uint32_t obj_class_instantiator__num_registered_classes = 0x02C2E120;  // Steam 0x02C2F120; int
 inline uint32_t Permanent_mempool = 0x01963B20;  // Steam 0x01964B20; rfg_split_mempool
+inline uint32_t Num_collision_models = 0x0125EDDC;  // Steam 0x0125FDDC; int
 inline uint32_t Hk_rigid_bodies = 0x0236D980;  // Steam 0x0236E980; hkpRigidBody*[4194304 bytes]
 inline uint32_t Unbatched_renderable_buffer = 0x0176DBF8;  // Steam 0x0176EBF8; rl_renderable_instance*[16384 bytes]
 inline uint32_t Batched_instance_buffer = 0x01708A40;  // Steam 0x01709A40; rl_batched_instance[393216 bytes]
@@ -304,6 +313,7 @@ inline uint32_t Character_collision_push_away_mass = 0x0222171C;  // Steam 0x022
 inline uint32_t Character_collision_push_away_dim = 0x02265050;  // Steam 0x02266050; float
 inline uint32_t Character_collision_push_away_impulse_factor = 0x02366828;  // Steam 0x0236D2DC; float
 inline uint32_t Character_collision_push_away_rvec_factor = 0x0224174C;  // Steam 0x0224274C; float
+inline uint32_t s_params_pool = 0x01113E44;  // Steam 0x01114E44; pool_list<rl_mesh_recompile_parameters *>
 inline uint32_t Init_params = 0x0181FA60;  // Steam 0x01820A60; rl_init_params
 inline uint32_t Explosion_infos = 0x019E5CD8;  // Steam 0x019E6CD8; explosion_info[18960 bytes]
 inline uint32_t Num_explosion_infos = 0x019ED490;  // Steam 0x019EE490; uint
@@ -313,6 +323,7 @@ inline uint32_t Havok_memory = 0x027812A0;  // Steam 0x027822A0; hkMemorySystem*
 inline uint32_t Havok_mem_largest_runtime_block = 0x0278129C;  // Steam 0x0278229C; uint
 inline uint32_t hkpSimpleConstraintContactMgr_vftable = 0x00F61BFC;  // Steam 0x00F62C2C; ??_7hkpSimpleConstraintContactMgr@@6B@
 inline uint32_t Stream_thread_id = 0x016C2B4C;  // Steam 0x016C3B4C; uint
+inline uint32_t RFG_sim_scratch_pool = 0x01963C88;  // Steam 0x01964C88; mempool
 inline uint32_t hkThreadNumber = 0x037AB6B8;  // Steam 0x037AC6B8; hkThreadLocalData<int>
 inline uint32_t hkSingleton_hkReferencedObjectLock___s_instance = 0x03625158;  // Steam 0x03626158; hkReferencedObjectLock*
 inline uint32_t Cached_input_states = 0x018D2720;  // Steam 0x018D3720; cached_input_state[2184 bytes]
@@ -533,6 +544,12 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::stream2_release, {0x000B0250, 0x000B02A0}},
     {&rva::chunk_base_unload_internal, {0x005285D0, 0x00528750}},
     {&rva::chunk_get_base_uid, {0x005215C0, 0x00521740}},
+    {&rva::rl_destroyable_model_instance__release_sub_instances_internal, {0x000E4170, 0x000E41F0}},
+    {&rva::sim_scratch_system_init, {0x001D2320, 0x001D2400}},
+    {&rva::memory_scratch_thread_init, {0x0018A970, 0x0018AA70}},
+    {&rva::stream2_get_first_container, {0x000A9F70, 0x000A9FB0}},
+    {&rva::stream2_get_next_container, {0x000A9F80, 0x000A9FC0}},
+    {&rva::stream2_get_status, {0x000AC200, 0x000AC250}},
     {&rva::havok_system_init, {0x00439A70, 0x00439A20}},
     {&rva::hkpWorld__hkpWorld, {0x009E6E80, 0x009E7220}},
     {&rva::hkpWorld___hkpWorld, {0x009E5C00, 0x009E5FA0}},
@@ -624,6 +641,8 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::rl_fp_kdtree__ms_class_factory_info, {0x01113AF8, 0x01114AF8}},
     {&rva::rl_scene_renderer__ms_visible_renderable_instances_max, {0x010F945C, 0x010FA45C}},
     {&rva::rl_scene__ms_renderable_instances_max, {0x010F9454, 0x010FA454}},
+    {&rva::vfx_particle_system_filter_instance__ms_class_factory_info, {0x012F00F4, 0x012F10F4}},
+    {&rva::rl_class_factory_info__ms_num_exhausted_factories, {0x0177AD00, 0x0177BD00}},
     {&rva::Havok_mempool, {0x01958FC8, 0x01959FC8}},
     {&rva::s_largeBlockAllocator, {0x0278128C, 0x0278228C}},
     {&rva::obj_class_instantiator__hash_size, {0x01293538, 0x01294538}},
@@ -632,6 +651,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::obj_class_instantiator__class_index, {0x02C19240, 0x02C1A240}},
     {&rva::obj_class_instantiator__num_registered_classes, {0x02C2E120, 0x02C2F120}},
     {&rva::Permanent_mempool, {0x01963B20, 0x01964B20}},
+    {&rva::Num_collision_models, {0x0125EDDC, 0x0125FDDC}},
     {&rva::Hk_rigid_bodies, {0x0236D980, 0x0236E980}},
     {&rva::Unbatched_renderable_buffer, {0x0176DBF8, 0x0176EBF8}},
     {&rva::Batched_instance_buffer, {0x01708A40, 0x01709A40}},
@@ -643,6 +663,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::Character_collision_push_away_dim, {0x02265050, 0x02266050}},
     {&rva::Character_collision_push_away_impulse_factor, {0x02366828, 0x0236D2DC}},
     {&rva::Character_collision_push_away_rvec_factor, {0x0224174C, 0x0224274C}},
+    {&rva::s_params_pool, {0x01113E44, 0x01114E44}},
     {&rva::Init_params, {0x0181FA60, 0x01820A60}},
     {&rva::Explosion_infos, {0x019E5CD8, 0x019E6CD8}},
     {&rva::Num_explosion_infos, {0x019ED490, 0x019EE490}},
@@ -652,6 +673,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::Havok_mem_largest_runtime_block, {0x0278129C, 0x0278229C}},
     {&rva::hkpSimpleConstraintContactMgr_vftable, {0x00F61BFC, 0x00F62C2C}},
     {&rva::Stream_thread_id, {0x016C2B4C, 0x016C3B4C}},
+    {&rva::RFG_sim_scratch_pool, {0x01963C88, 0x01964C88}},
     {&rva::hkThreadNumber, {0x037AB6B8, 0x037AC6B8}},
     {&rva::hkSingleton_hkReferencedObjectLock___s_instance, {0x03625158, 0x03626158}},
     {&rva::Cached_input_states, {0x018D2720, 0x018D3720}},
@@ -869,6 +891,12 @@ inline constexpr uint32_t world__get_world_zone_by_pos = 96;
 inline constexpr uint32_t stream2_release = 104;
 inline constexpr uint32_t chunk_base_unload_internal = 99;
 inline constexpr uint32_t chunk_get_base_uid = 58;
+inline constexpr uint32_t rl_destroyable_model_instance__release_sub_instances_internal = 677;
+inline constexpr uint32_t sim_scratch_system_init = 54;
+inline constexpr uint32_t memory_scratch_thread_init = 46;
+inline constexpr uint32_t stream2_get_first_container = 6;
+inline constexpr uint32_t stream2_get_next_container = 22;
+inline constexpr uint32_t stream2_get_status = 69;
 inline constexpr uint32_t havok_system_init = 6601;
 inline constexpr uint32_t hkpWorld__hkpWorld = 4988;
 inline constexpr uint32_t hkpWorld___hkpWorld = 2290;

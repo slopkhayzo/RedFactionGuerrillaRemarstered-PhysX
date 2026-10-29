@@ -96,6 +96,8 @@ std::wstring g_bundle_dir;
 rec::Writer g_writer;
 rec::TextFile g_checkpoints;
 std::vector<uint32_t> g_markers;
+std::string g_wc_setup;  // the Wrecking Crew setup in words, made at the start: the manifest written at exit cannot ask
+                         // the game (its weapon tables are freed by then: an Alt+F4 crashed in wc_weapon_name)
 bool g_stop_requested = false;
 bool g_f10_down = false, g_f11_down = false;
 bool g_flushing = false;  // inside a session flush handler: never call session::exit_now from there
@@ -581,7 +583,8 @@ bool start_recording_wc() {
     memcpy(&map, options + kWcOptionsMap, 4);
     memcpy(&mode, options + kWcOptionsMode, 4);
     strncpy_s(g_header.wc_map_file, wc_map_name(map).c_str(), _TRUNCATE);
-    LOG("harness: Wrecking Crew match begins: %s", describe_wc(options).c_str());
+    g_wc_setup = describe_wc(options);
+    LOG("harness: Wrecking Crew match begins: %s", g_wc_setup.c_str());
     return open_bundle("wc-" + file_stem(g_header.wc_map_file) + "-" + wc_mode_name(mode));
 }
 
@@ -632,7 +635,7 @@ void write_manifest(const char* end_reason) {
         }
         m.printf("  \"start\": {\"type\": \"wrecking_crew\", \"map_file\": \"%s\", \"setup\": \"%s\", "
                  "\"options_hex\": \"%s\", \"character_index\": [%d, %d, %d, %d]},\n",
-                 json_escape(g_header.wc_map_file).c_str(), json_escape(describe_wc(g_header.wc_options)).c_str(),
+                 json_escape(g_header.wc_map_file).c_str(), json_escape(g_wc_setup).c_str(),
                  hex.c_str(), g_header.wc_character_index[0], g_header.wc_character_index[1],
                  g_header.wc_character_index[2], g_header.wc_character_index[3]);
     } else if (g_header.start_type == rec::kStartNewGame) {

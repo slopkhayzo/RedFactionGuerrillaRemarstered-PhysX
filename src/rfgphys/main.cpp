@@ -15,6 +15,7 @@
 #include "experiments/havok_audit.h"
 #include "experiments/havok_mt.h"
 #include "experiments/keep_debris.h"
+#include "experiments/big_buildings.h"
 #include "experiments/render_tweaks.h"
 #include "game/rfg.h"
 #include "harness/harness.h"
@@ -28,9 +29,11 @@
 #include "telemetry/profiler.h"
 #include "telemetry/telemetry.h"
 #include "test/automation.h"
+#include "test/memory_census.h"
 #include "test/restore_building.h"
 #include "test/stress_pieces.h"
 #include "test/vehicle_push.h"
+#include "test/stream_report.h"
 #include "test/view_shots.h"
 #include "test/viewpoints.h"
 #include "test/visit.h"
@@ -106,6 +109,7 @@ void init() {
     automation::install(cfg);
     experiments::install_debris_collision(cfg);
     experiments::install_render_tweaks(cfg);
+    experiments::install_big_buildings(cfg);
     experiments::install_havok_mt(cfg);
     experiments::install_havok_audit(cfg);
     experiments::install_keep_debris(cfg);
@@ -121,8 +125,10 @@ void init() {
     vehicle_push::install(cfg);
     restore_building::install(cfg);
     stress_pieces::install(cfg);
+    memory_census::install(cfg);  // its D3D11 counters with the stress test
     visit::install(cfg);
     view_shots::install(cfg);
+    stream_report::install(cfg);
     viewpoints::install(cfg);
     harness::install(cfg);
     fly_camera::install(cfg);  // never with the harness: both take over the game's input

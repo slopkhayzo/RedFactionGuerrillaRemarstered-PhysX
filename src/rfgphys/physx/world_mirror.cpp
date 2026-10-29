@@ -78,6 +78,7 @@ double g_next_change_log = 0;
 uint32_t g_log_added = 0, g_log_changed = 0, g_log_removed = 0, g_log_reused = 0;
 uint64_t g_reused_total = 0;
 bool g_initial_done = false;                      // the first full export has been queued
+uint32_t g_complete_scans = 0, g_flushed_scans = 0;  // scans that looked at every body; those all in the ring
 bool g_host_has_world = false;                    // and the host has applied it
 double g_export_done_ms = 0;
 uint32_t g_unsupported[hs::kTypeCount + 1] = {};
@@ -137,6 +138,19 @@ ipc::Quat quat_of(const float m[3][3]) {
     return q;
 }
 
+// A rotation (orthonormal, not mirrored) to within float rounding: no scale or shear for quat_of to lose.
+bool rigid(const float m[3][3]) {
+    for (int a = 0; a < 3; ++a)
+        for (int b = a; b < 3; ++b) {
+            const float d = m[0][a] * m[0][b] + m[1][a] * m[1][b] + m[2][a] * m[2][b];
+            if (std::fabs(d - (a == b ? 1.0f : 0.0f)) > 1e-4f) return false;
+        }
+    const float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+                      m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                      m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    return det > 0.0f;
+}
+
 // Turns one Havok body into StaticMesh, StaticConvex and StaticHeightField records. With `only`, just the convex
 // pieces under those keys (pieces added back to a building).
 struct Export : hs::Sink {
@@ -191,6 +205,24 @@ struct Export : hs::Sink {
         c.radius = radius;
         auto buf = record(ipc::Cmd::StaticConvex, c, size_t(n) * sizeof(ipc::Vec3));
         memcpy(buf.data() + sizeof(c), v, size_t(n) * sizeof(ipc::Vec3));
+        queue(std::move(buf));
+        if (keys_out) keys_out->push_back(key);
+    }
+
+    // In the piece's own frame, so that the host cooks pieces alike once; scaled or mirrored ones in world space.
+    void convex_placed(const float (*local)[3], int n, float radius, const hs::Transform& t, uint32_t key) override {
+        if (!rigid(t.rot)) return hs::Sink::convex_placed(local, n, radius, t, key);
+        if (n < 3 || (only && !only->count(key))) return;
+        if (n > 255) n = 255;
+        ipc::StaticConvexPlaced c{};
+        c.group = group;
+        c.vertex_count = uint32_t(n);
+        c.key = key;
+        c.radius = radius;
+        c.pos = {t.pos[0], t.pos[1], t.pos[2]};
+        c.rot = quat_of(t.rot);
+        auto buf = record(ipc::Cmd::StaticConvexPlaced, c, size_t(n) * sizeof(ipc::Vec3));
+        memcpy(buf.data() + sizeof(c), local, size_t(n) * sizeof(ipc::Vec3));
         queue(std::move(buf));
         if (keys_out) keys_out->push_back(key);
     }
@@ -367,6 +399,7 @@ void scan() {
     const float ms = float(session::ticks_to_ms(session::qpc() - t0));
     g_stats.scan_ms += ms;
     g_stats.changes += added + changed + removed;
+    if (budget_left) ++g_complete_scans;  // every body looked at: what changed is in the outbox
     if (!g_initial_done && budget_left) {
         g_initial_done = true;
         g_export_done_ms = session::since_start_ms();
@@ -376,6 +409,14 @@ void scan() {
             double(g_outbox_bytes) / (1024.0 * 1024.0), unsupported ? "; leaf shapes left out:" : "");
         for (int t = 0; t <= hs::kTypeCount; ++t)
             if (g_unsupported[t]) LOG("  %s: %u", hs::type_name(uint8_t(t)), g_unsupported[t]);
+        // The game's collision models (every distinct piece shape of every loaded chunk, the terrain's, ...) share one
+        // table of 0x7FFF; havok_cm_manager_add gives the ones past it model 0 or none. The B5b avenue (34,897 models
+        // in its chunks) filled it: the terrain, loaded after, had no collision, and the last types' pieces took model
+        // 0's shape (research/docs/07, B5b).
+        const int models = *static_cast<const int*>(rfg::addr(rfg::rva::Num_collision_models));
+        LOG("world mirror: the game's collision model table holds %d of 32,767%s", models,
+            models >= 0x7FFF ? ": FULL, the models loaded after it filled have no shape of their own (the terrain's, "
+                               "a building type's pieces)" : "");
     } else if (g_initial_done) {
         g_log_added += added;
         g_log_changed += changed;
@@ -572,6 +613,7 @@ void on_frame(int game_state) {
         scan();
     }
     flush_outbox();
+    if (g_outbox.empty()) g_flushed_scans = g_complete_scans;
     if (g_check) {
         if (g_check_state == Check::Idle && g_initial_done && g_outbox.empty()) {
             g_check_state = Check::Waiting;
@@ -612,6 +654,8 @@ bool ready() {
 void check_again() {
     if (g_check && g_check_state == Check::Done) g_check_state = Check::Idle;
 }
+
+uint32_t flushed_scans() { return g_on ? g_flushed_scans : UINT32_MAX; }
 
 FrameStats take_frame() {
     FrameStats f = g_stats;
