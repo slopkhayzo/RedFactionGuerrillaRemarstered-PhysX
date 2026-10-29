@@ -1,7 +1,7 @@
 # rfgphys: GPU physics for Red Faction Guerrilla Re-Mars-tered
 
 <div align="center">
-  <a href="https://discord.gg/nBBw3Cyde">
+  <a href="https://discord.gg/EmmwryzskU">
         <img src="https://img.shields.io/discord/1324804381610213407?color=blue&labelColor=555555&label=&logo=discord&style=for-the-badge"
             alt="Chat on Discord"></a>
 </div>
