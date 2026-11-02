@@ -16,6 +16,9 @@ the game (a 32-bit program) keeps drawing it.
 - Debris is never removed: buildings you bring down stay as rubble.
 - Debris collides with debris and breaks it up, explosions throw piles around, and you can stand on heavy rubble while
   lighter pieces get pushed aside.
+- Loose parts of buildings (the top of a building shot out from under itself, the sections it breaks into) are PhysX
+  bodies too: they tip and roll, crack into sections along their weakest links, crush what they land on, and break by
+  what they are made of.
 - The game's own physics (Havok) runs on several CPU cores, and heavy scenes get two rendering tweaks.
 - Works in the campaign and in Wrecking Crew; never applied in multiplayer.
 
@@ -41,7 +44,7 @@ limitations.
   address has a Steam value too. At start-up the plugin recognizes the build by its debug-symbols ID and uses that
   build's addresses; with any other build it stays inactive.
 - At start-up it launches `scripts\rfgphysx\rfgphysx_host.exe`, a 64-bit process running NVIDIA PhysX 5.12 with GPU
-  rigid-body dynamics (on the CPU without a suitable GPU), at 60 steps per second. It is a separate process because the
+  rigid-body dynamics (on the CPU without a suitable GPU), at 45 steps per second. It is a separate process because the
   game is 32-bit and PhysX 5 is 64-bit only. The two share memory (a command ring and pose snapshots), and the host
   runs in a job object, so it ends with the game.
 - The game's static world (terrain and buildings) is mirrored into PhysX. Debris pieces are handed over two seconds
@@ -49,8 +52,12 @@ limitations.
   on, as the game's own debris does): their Havok bodies and game objects go, their render instances stay and follow
   the poses PhysX computes. Pieces at rest, or only rocking in place, are frozen until something touches them, and
   explosions are passed on. Collision hulls are grown by Havok's convex radius, as the game's own shapes are.
-- Vehicles, walkers and loose chunks of buildings stay in Havok; each of their bodies has a kinematic copy in PhysX
-  that pushes the pieces out of its way (a piece pressed through the ground is put back on top).
+- Vehicles and walkers stay in Havok; each of their bodies has a kinematic copy in PhysX that pushes the pieces out of
+  its way (a piece pressed through the ground is put back on top).
+- Loose chunks of buildings are dynamic bodies in PhysX, with their Havok bodies keyframed to follow them, so the game
+  still draws them and the player stands on them. A part that carries more than its strength breaks off in PhysX, and
+  the game breaks the same subpiece through its own destruction, so the two never disagree about what is left. A hit
+  also cracks a chunk along its weakest links, and breaks what it lands on.
 - Where the game needs to see the pieces, they get Havok stand-ins with their own collision shapes: near the player
   (heavy pieces are solid, so the player stands on rubble; melee blows and bullets that hit a piece push it), ahead of
   rockets and other projectiles, which then strike the pile, and along the player's line of fire. A melee blow wider

@@ -79,8 +79,14 @@ Table g_created, g_destroyed, g_faded, g_fade_refused, g_create_failed;
 bool (*g_fade_filter)(uint8_t*, uint32_t) = nullptr;
 std::atomic<uint32_t> g_failed_shards{0};
 bool g_installed = false;
-std::atomic<uint32_t> g_frame_movers_created{0}, g_frame_destroyed{0}, g_frame_island{0};
+std::atomic<uint32_t> g_frame_movers_created{0}, g_frame_destroyed{0}, g_frame_island{0}, g_chunks_made{0};
 thread_local uint32_t t_outer_caller = 0;
+struct Destroyed {
+    uint32_t handle, caller;
+};
+constexpr uint32_t kDestroyedKept = 4096;
+Destroyed g_last_destroyed[kDestroyedKept];
+std::atomic<uint32_t> g_last_destroyed_at{0};
 
 inline uint32_t rva_of(uintptr_t p) { return uint32_t(p - rfg::base()); }
 inline bool within(uint32_t rva, uint32_t fn, uint32_t size) { return rva - fn < size; }
@@ -111,7 +117,10 @@ uint8_t* __fastcall d_create(void* world, void* edx, uint32_t cls, void* props, 
     if (obj) {
         const int32_t type = int8_t(obj[0x7E]);
         g_created.add(rva_of(caller), outer, type);
-        if (type == OT_MOVER) g_frame_movers_created.fetch_add(1, std::memory_order_relaxed);
+        if (type == OT_MOVER) {
+            g_frame_movers_created.fetch_add(1, std::memory_order_relaxed);
+            if (obj[0x7F] == 1) g_chunks_made.fetch_add(1, std::memory_order_relaxed);  // OT_SUB_MOVER_RFG
+        }
     } else {
         g_create_failed.add(rva_of(caller), outer, -1);
         if (within(rva_of(caller), rfg::rva::rfg_dyn_create_shard, rfg::size::rfg_dyn_create_shard))
@@ -143,9 +152,11 @@ bool __fastcall d_destroy(void* world, void* edx, uint8_t* obj, bool flag) {
     if (within(caller, rfg::rva::world__destroy_object_by_handle, rfg::size::world__destroy_object_by_handle)) {
         outer = t_outer_caller;
     }
+    const uint32_t handle = valid ? *reinterpret_cast<uint32_t*>(obj + 0x6C) : 0xFFFFFFFFu;
     const bool done = o_destroy(world, edx, obj, flag);
     if (done && valid) {
         g_destroyed.add(caller, outer, type);
+        g_last_destroyed[g_last_destroyed_at.fetch_add(1, std::memory_order_relaxed) % kDestroyedKept] = {handle, outer ? outer : caller};
         g_frame_destroyed.fetch_add(1, std::memory_order_relaxed);
         if (within(caller, rfg::rva::havok_memory_watch_dog_free_memory, rfg::size::havok_memory_watch_dog_free_memory) ||
             within(caller, rfg::rva::watch_dog_remove_objects_from_island,
@@ -192,6 +203,17 @@ bool install() {
 void set_fade_filter(bool (*allow)(uint8_t*, uint32_t)) { g_fade_filter = allow; }
 
 uint32_t take_failed_shards() { return g_failed_shards.exchange(0, std::memory_order_relaxed); }
+
+uint32_t destroyer_of(uint32_t handle) {
+    const uint32_t at = g_last_destroyed_at.load(std::memory_order_relaxed);
+    for (uint32_t i = 0; i < kDestroyedKept && i < at; ++i) {
+        const Destroyed& d = g_last_destroyed[(at - 1 - i) % kDestroyedKept];
+        if (d.handle == handle) return rfg::gog_rva(d.caller);
+    }
+    return 0;
+}
+
+uint32_t take_chunks_made() { return g_chunks_made.exchange(0, std::memory_order_relaxed); }
 
 FrameCounts take_frame_counts() {
     return {g_frame_movers_created.exchange(0, std::memory_order_relaxed),

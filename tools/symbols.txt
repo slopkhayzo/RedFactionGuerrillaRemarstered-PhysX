@@ -122,6 +122,7 @@ fn object_pool_server<general_mover>::init
 fn rfgl_emergency_cleanup
 fn do_debris_cleanup
 fn delete_object_outside_bpo
+fn object_mover::check_for_movement_delete
 var general_moverpool
 var rfg_moverpool
 var object_debrispool
@@ -167,6 +168,25 @@ fn havok_raycast_against_static_level_only
 fn havok_raycast_against_destroyable_geometry
 # the collision model table (havok_cm_manager_add takes at most 0x7FFF; past that a model gets index 0 or none)
 var Num_collision_models
+# loose chunks in PhysX (research/docs/08): their Havok bodies keyframed to PhysX, their destruction contacts held back
+fn havok_body_set_motion_type
+fn havok_body_apply_hard_keyframe
+fn havok_body_get_mass @00418150
+fn rfg_dyn_add_pre_collide_contact
+# their impacts from PhysX, as destruction contacts of the game (C2); the slice test reads the chunk's velocity
+fn rfg_dyn_multi_add_pre_collide_contact
+# cracks: links broken through the game's own event (research/docs/08 §17)
+fn rfg_dyn_add_pre_collide_link_broken
+fn stress_evaluation_do_frame
+fn rfg_get_physical_material_by_index
+var Num_rfg_physical_materials
+fn convert_point_direction_from_world_to_local
+fn havok_body_get_linear_velocity @00423830 as havok_body_get_linear_velocity_by_handle
+# Test.ChunkFall: the step's destruction events as the game applies them (rfg_dyn_do_collide_post, above), its
+# slices (the frame of the last one)
+var RFG_dyn_collisions
+var Num_rfg_dyn_collisions
+var RFG_uber_heavy_destruction_slice_framecount
 # patch sites (the functions they are in) and data the plugin reads directly
 fn MyCharacterListener::processConstraintsCallback
 fn rl_batched_pass::rl_batched_pass

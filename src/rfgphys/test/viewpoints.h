@@ -16,8 +16,8 @@ bool wanted();
 // The harness: the replay is over, the view is the test's.
 void begin();
 bool finished();
-// Other tests (simulation thread; Test.StressPieces): the view drawn holds at `pos` looking at `target`, the HUD
-// hidden, until release_view().
+// Other tests (simulation thread; Test.StressPieces, Test.ChunkFall): the view drawn holds at `pos` looking at
+// `target`, the HUD hidden, until release_view().
 void hold_view(const float pos[3], const float target[3]);
 void release_view();
 

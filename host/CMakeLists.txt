@@ -12,7 +12,13 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")  # matches PhysX's /MT libraries
-set(PHYSX_INSTALL "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/physx-build/release-gpu/install")
+# PhysX's profile configuration has its profiler zones: the host then sums and logs them (tools/build_host.ps1 -PhysXProfile).
+option(RFGPHYS_PHYSX_PROFILE "Link PhysX's profile configuration and log its profiler zones" OFF)
+if(RFGPHYS_PHYSX_PROFILE)
+    set(PHYSX_INSTALL "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/physx-build/profile-gpu/install")
+else()
+    set(PHYSX_INSTALL "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/physx-build/release-gpu/install")
+endif()
 if(NOT EXISTS "${PHYSX_INSTALL}/lib/PhysX_static_64.lib")
     message(FATAL_ERROR "PhysX not built: run tools/build_physx.cmd (through the shared queue)")
 endif()
@@ -49,6 +55,9 @@ target_compile_definitions(rfgphysx_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UN
 target_compile_options(rfgphysx_host PRIVATE /W4 /permissive- /utf-8 /Zi)
 target_link_options(rfgphysx_host PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF)
 target_link_libraries(rfgphysx_host PRIVATE physx_sdk dbghelp)
+if(RFGPHYS_PHYSX_PROFILE)
+    target_compile_definitions(rfgphysx_host PRIVATE RFGPHYS_HOST_ZONES=1)
+endif()
 add_dependencies(rfgphysx_host physx_gpu_dll)
 # Version resource (../src/shared/version.rc.in).
 set(RC_DESCRIPTION "rfgphys PhysX host - debris physics for Red Faction Guerrilla Re-Mars-tered")

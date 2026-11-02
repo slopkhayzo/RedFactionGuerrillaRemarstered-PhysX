@@ -40,6 +40,8 @@ struct Config {
     bool test_stand_in_probe = false; // every 2 s: a ray through a piece's stand-in and a blow on it, checked
                                       // (physx/debris_offload.cpp)
     bool test_vehicle_push = false;   // a vehicle moved through rubble in PhysX, checked (test/vehicle_push.h)
+    int test_chunk_fall = 0;          // one building's collapse filmed, the loose chunks logged (test/chunk_fall.h)
+    bool test_chunk_fall_no_stress = false;  // and with the game's stress evaluation off
     int test_restore_building = 0;    // > 0: that many times, a building blown up and restored by the game takes
                                       // its debris along, checked (test/restore_building.h)
     int test_stress_pieces = 0;       // > 0: the buildings near the player blown up and restored over and over, their
@@ -119,6 +121,10 @@ struct Config {
     // PhysX host process (physx/bridge.h): 0 off, 1 GPU (CPU when CUDA is unavailable), 2 CPU.
     int exp_physx = 0;
     int exp_physx_rate = 60;            // fixed steps per second
+    // Bodies freeze, thaw, come and go every so many steps: a step in which none does sorts the broad phase once
+    // instead of twice (research/docs/08 §14). 1: every step.
+    int exp_physx_change_every = 3;
+    int exp_physx_cpu_threads = 0;      // PhysX's CPU threads in the host; 0: 4 with GPU dynamics, 6 without
     int exp_physx_max_bodies = 65536;   // body slots (shared memory: 192 bytes per slot)
     // X0 test scene (physx/test_scene.h): bodies dropped once gameplay starts, and the seconds after which the host
     // is told to crash (0: never).
@@ -154,6 +160,34 @@ struct Config {
     // World-only pieces (RFG_WORLD_ONLY: every small one in Wrecking Crew) do not wait: in Havok they went through
     // buildings meanwhile, the avenue map's ground among them (research/docs/07, B5a).
     bool exp_physx_world_only_at_once = true;
+    // Loose building chunks are simulated in PhysX, their Havok bodies keyframed to it (research/docs/08, C1); off: they
+    // stay in Havok with kinematic pushers in PhysX.
+    bool exp_physx_chunks = false;
+    // Their impacts there become the game's destruction contacts at this share of their energy (C2; 100: as Havok's).
+    // What a part breaking off takes from a driven chunk's kinetic energy (research/docs/08 §12), J per kg of the part:
+    // how far a block crushes before it stops. 0: no part breaks on impact.
+    int exp_physx_chunk_crush_j_per_kg = 250;
+    // chunk_trace.csv in the run's folder: how each loose chunk came and went; 1: also each one, each frame and host step.
+    int exp_physx_chunk_trace = 0;
+    // How strong a driven chunk's parts are (research/docs/08 §12): a part carrying more kN than this breaks off, so a
+    // big block coming down keeps going, crushing from the bottom up, instead of stopping dead; a small chunk's weight
+    // is well under it. 0: no part breaks on impact.
+    int exp_physx_chunk_break_kn = 50;
+    // How much of the energy a driven chunk loses as its parts break goes to cracking it (research/docs/08 §17), in percent:
+    // a chunk that has banked enough to break the links across a section near the hit splits there. 0: no cracks.
+    int exp_physx_chunk_crack_percent = 3;
+    // A part's strength and the energy it takes follow its material in the game's table, against normal concrete: glass goes
+    // first, steel holds. Off: every part alike.
+    bool exp_physx_chunk_materials = true;
+    // What a building loses where a driven chunk breaks against it, in percent of the mass the chunk loses there. 0: only what
+    // the game's own contact breaks.
+    int exp_physx_chunk_stump_percent = 100;
+    // A driven chunk snaps under its own weight where the load past a section would bend it this far before the links across
+    // it take more than that gives (milliradians, research/docs/08 §17). More: sooner. 0: it does not snap.
+    int exp_physx_chunk_snap_mrad = 20;
+    int exp_physx_chunk_rest_strength = 6;  // times its strength when hit, a part under a load lying still
+    bool exp_physx_chunk_crush_at_contact = true;  // what crushing takes comes off where the parts broke, so it can tip the chunk
+    bool exp_physx_chunk_wake_ahead = true;        // a chunk wakes only the rubble ahead of it and on it, not all round it
 
     // Fly camera for screenshots (dev/fly_camera.h; development, off in the release settings).
     bool fly_camera = false;

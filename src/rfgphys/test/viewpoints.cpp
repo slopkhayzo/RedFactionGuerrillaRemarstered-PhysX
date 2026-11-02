@@ -184,7 +184,7 @@ void on_frame(int game_state) {
 }  // namespace
 
 bool install(const Config& cfg) {
-    const bool stress = cfg.test_stress_pieces > 0;
+    const bool stress = cfg.test_stress_pieces > 0 || cfg.test_chunk_fall;  // tests that hold the view themselves
     if (!cfg.test_viewpoints && !stress) return true;
     if (cfg.harness_mode != 2 && !stress) {
         LOG("viewpoints: only in replays (Harness.Mode=replay) and with Test.StressPieces");

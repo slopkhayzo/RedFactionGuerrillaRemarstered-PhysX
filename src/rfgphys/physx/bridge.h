@@ -23,8 +23,8 @@ bool add_static_box(const rfgphysx::Vec3& pos, const rfgphysx::Quat& rot, const 
 bool shape_box(uint32_t shape, const rfgphysx::Vec3& half_extents);
 bool shape_convex(uint32_t shape, const rfgphysx::Vec3* vertices, uint32_t count);
 bool create_body(uint32_t slot, uint32_t shape, const rfgphysx::Vec3& pos, const rfgphysx::Quat& rot,
-                 const rfgphysx::Vec3& lin_vel, const rfgphysx::Vec3& ang_vel, float density, uint32_t flags = 0);
-bool destroy_body(uint32_t slot);
+                 const rfgphysx::Vec3& lin_vel, const rfgphysx::Vec3& ang_vel, float density, uint32_t flags = 0, float break_force_kn = 0.0f);
+bool destroy_body(uint32_t slot, bool quiet = false);
 bool explosion(const rfgphysx::Vec3& center, float radius, float impulse, float up);
 bool test_crash();
 // A complete record built by the caller (header type and size filled in), for modules with their own commands.
@@ -38,8 +38,16 @@ uint32_t query_done();
 const float* query_results();
 const uint32_t* query_hit_kinds();  // per ray: PhysX geometry type + 1 of what it hit (0: nothing)
 uint32_t host_statics();  // static actors in the host's scene
+// The loose chunks' impacts the host reported since the last call, at most `max` (simulation thread).
+uint32_t take_events(rfgphysx::ContactEvent* out, uint32_t max);
 uint32_t max_bodies();
 float step_hz();
+// The number of the last Frame record sent. A snapshot's last_frame past the number when a command was sent: the host
+// has applied that command, and the snapshot shows it.
+uint32_t frame();
+// How long the host's steps take now, ms: its period, or longer when it cannot keep up. Moving things go from the last
+// pose to the newest over this.
+float step_period_ms();
 uint64_t host_cpu_100ns();  // CPU time (kernel + user, 100 ns units) the host process has used; 0 without one
 void set_test_flags(uint32_t flags);  // rfgphysx::TestFlags, for tests (Test.StressPieces)
 

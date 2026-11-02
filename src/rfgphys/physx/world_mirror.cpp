@@ -68,6 +68,7 @@ struct Mirrored {
     bool seen;
     std::vector<uint32_t> keys;    // destroyables: the piece keys mirrored, sorted
     uint32_t uid;                  // hkpEntity::m_uid of the body mirrored
+    uint32_t object = 0xFFFFFFFFu; // its game object's handle (object_of_group)
 };
 std::unordered_map<const uint8_t*, Mirrored> g_bodies;  // Havok entity -> its mirror
 uint32_t g_next_group = 1;
@@ -107,8 +108,9 @@ void remove_group(uint32_t group) {
 }
 
 void remove_keys(uint32_t group, const std::vector<uint32_t>& keys) {
-    for (size_t i = 0; i < keys.size(); i += 4096) {
-        const uint32_t n = uint32_t(std::min<size_t>(4096, keys.size() - i));
+    // Taking a shape off a static takes the host about 0.1 ms, so not many in one command: it steps between commands.
+    for (size_t i = 0; i < keys.size(); i += 1024) {
+        const uint32_t n = uint32_t(std::min<size_t>(1024, keys.size() - i));
         ipc::RemoveStaticKeys c{};
         c.group = group;
         c.count = n;
@@ -380,6 +382,8 @@ void scan() {
             }
         } else if (budget_left) {
             auto& m = g_bodies.emplace(e, Mirrored{g_next_group++, sig, true, {}, uid}).first->second;
+            if (const uint8_t* obj = rfg::fn<uint8_t*(__cdecl*)(const uint8_t*)>(rfg::rva::object_from_world_obj)(e))
+                m.object = *reinterpret_cast<const uint32_t*>(obj + 0x6C);  // object::handle
             export_body(e, m);
             ++added;
         } else {
@@ -656,6 +660,27 @@ void check_again() {
 }
 
 uint32_t flushed_scans() { return g_on ? g_flushed_scans : UINT32_MAX; }
+
+bool catch_up() {
+    if (!g_on) return true;
+    if (!pxbridge::ready()) return false;
+    const uint32_t complete = g_complete_scans;
+    scan();
+    flush_outbox();
+    if (!g_outbox.empty()) return false;
+    g_flushed_scans = g_complete_scans;
+    return g_complete_scans != complete;
+}
+
+uint8_t* object_of_group(uint32_t group) {
+    for (const auto& [e, m] : g_bodies) {
+        if (m.group != group) continue;
+        if (m.object == 0xFFFFFFFFu) return nullptr;
+        return rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(rfg::rva::world__object_from_handle)(
+            rfg::addr(rfg::rva::World), nullptr, m.object);  // null once the object is gone
+    }
+    return nullptr;
+}
 
 FrameStats take_frame() {
     FrameStats f = g_stats;

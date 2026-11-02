@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstring>
 #include <new>
 #include <string>
@@ -19,6 +20,7 @@ namespace ipc = rfgphysx;
 constexpr uint32_t kRingSize = 4u << 20;         // a burst of 50,000 body creations fits
 constexpr uint32_t kControlBytes = 4096;
 constexpr uint32_t kQueryBytes = 64u << 10;       // kMaxRays distances
+constexpr uint32_t kEventCount = 4096;            // ContactEvent records (256 KB): loose chunks' impacts
 constexpr DWORD kStallMs = 3000;                  // a Ready host whose heartbeat stops this long is ended
 // The heartbeat comes from a thread of its own in the host: it says the process lives. Progress is a new snapshot
 // (a finished step); cooking a big static world (the open world: 2,000+ bodies) can hold the steps back for seconds.
@@ -39,6 +41,9 @@ bool g_fresh = false;
 uint32_t g_last_heartbeat = 0;
 DWORD g_heartbeat_tick = 0, g_start_tick = 0;
 DWORD g_step_tick = 0;  // when the last fresh snapshot (a finished step) was taken
+int64_t g_period_qpc = 0;       // the last fresh snapshot's publish time
+uint64_t g_period_sequence = 0;  // and its sequence
+float g_period_ms = 0;          // the time a step takes, smoothed
 FrameStats g_stats{};
 
 ipc::SnapshotHeader* snapshot_at(uint32_t index) {
@@ -141,6 +146,13 @@ void take_snapshot() {
         const ipc::SnapshotHeader* s = snapshot_at(g_front);
         g_step_tick = GetTickCount();
         if (s->sequence) {
+            if (g_period_qpc && s->sequence > g_period_sequence) {
+                const float each = float(session::ticks_to_ms(s->publish_qpc - g_period_qpc)) /
+                                   float(s->sequence - g_period_sequence);
+                g_period_ms = g_period_ms > 0.0f ? g_period_ms + (each - g_period_ms) * 0.2f : each;
+            }
+            g_period_qpc = s->publish_qpc;
+            g_period_sequence = s->sequence;
             g_snapshot = s;
             g_fresh = true;
             ++g_stats.snapshots;
@@ -184,7 +196,7 @@ bool install(const Config& cfg) {
                                          : cfg.exp_physx_max_bodies > 262144 ? 262144
                                                                              : cfg.exp_physx_max_bodies);
     const uint32_t stride = ipc::snapshot_stride(max_bodies);
-    const uint32_t total = kControlBytes + kRingSize + kQueryBytes + 3 * stride;
+    const uint32_t total = kControlBytes + kRingSize + kQueryBytes + 3 * stride + kEventCount * uint32_t(sizeof(ipc::ContactEvent));
     wchar_t name[96];
     swprintf_s(name, L"Local\\rfgphysx-%lu-%lu", GetCurrentProcessId(), GetTickCount());
     g_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, total, name);
@@ -202,10 +214,17 @@ bool install(const Config& cfg) {
     g_ctl->query_offset = kControlBytes + kRingSize;
     g_ctl->snapshot_offset = kControlBytes + kRingSize + kQueryBytes;
     g_ctl->snapshot_stride = stride;
+    g_ctl->event_offset = kControlBytes + kRingSize + kQueryBytes + 3 * stride;
+    g_ctl->event_count = kEventCount;
     g_ctl->max_bodies = max_bodies;
     g_ctl->game_pid = GetCurrentProcessId();
     g_ctl->backend = cfg.exp_physx == 2 ? ipc::kBackendCpu : ipc::kBackendGpu;
     g_ctl->step_hz = float(cfg.exp_physx_rate < 10 ? 10 : cfg.exp_physx_rate > 240 ? 240 : cfg.exp_physx_rate);
+    g_ctl->change_every = uint32_t(std::clamp(cfg.exp_physx_change_every, 1, 8));
+    g_ctl->cpu_threads = uint32_t(std::clamp(cfg.exp_physx_cpu_threads, 0, 16));
+    g_ctl->chunk_rest_strength = float(std::clamp(cfg.exp_physx_chunk_rest_strength, 1, 100));
+    g_ctl->chunk_crush_at_contact = cfg.exp_physx_chunk_crush_at_contact ? 1u : 0u;
+    g_ctl->chunk_wake_ahead = cfg.exp_physx_chunk_wake_ahead ? 1u : 0u;
     g_ctl->snapshot_latest.store(1, std::memory_order_relaxed);
     g_ring = g_base + kControlBytes;
 
@@ -248,6 +267,7 @@ bool active() { return g_state == State::Starting || g_state == State::Ready; }
 bool ready() { return g_state == State::Ready; }
 uint32_t max_bodies() { return g_ctl ? g_ctl->max_bodies : 0; }
 float step_hz() { return g_ctl ? g_ctl->step_hz : 60.0f; }
+uint32_t frame() { return g_frame; }
 
 void set_test_flags(uint32_t flags) {
     if (g_ctl) g_ctl->test_flags.store(flags, std::memory_order_relaxed);
@@ -299,7 +319,7 @@ bool shape_convex(uint32_t shape, const ipc::Vec3* vertices, uint32_t count) {
 }
 
 bool create_body(uint32_t slot, uint32_t shape, const ipc::Vec3& pos, const ipc::Quat& rot, const ipc::Vec3& lin_vel,
-                 const ipc::Vec3& ang_vel, float density, uint32_t flags) {
+                 const ipc::Vec3& ang_vel, float density, uint32_t flags, float break_force_kn) {
     ipc::CreateBody c{};
     c.slot = slot;
     c.shape = shape;
@@ -309,12 +329,15 @@ bool create_body(uint32_t slot, uint32_t shape, const ipc::Vec3& pos, const ipc:
     c.ang_vel = ang_vel;
     c.density = density;
     c.flags = flags;
+    c.break_force_kn = break_force_kn;
+    c.made_qpc = session::qpc();
     return send(ipc::Cmd::CreateBody, c);
 }
 
-bool destroy_body(uint32_t slot) {
+bool destroy_body(uint32_t slot, bool quiet) {
     ipc::DestroyBody c{};
     c.slot = slot;
+    c.quiet = quiet ? 1u : 0u;
     return send(ipc::Cmd::DestroyBody, c);
 }
 
@@ -367,6 +390,19 @@ const uint32_t* query_hit_kinds() {
     return g_ctl ? reinterpret_cast<const uint32_t*>(g_base + g_ctl->query_offset + ipc::kMaxRays * sizeof(float)) : nullptr;
 }
 uint32_t host_statics() { return g_ctl ? g_ctl->statics.load(std::memory_order_relaxed) : 0; }
+
+uint32_t take_events(ipc::ContactEvent* out, uint32_t max) {
+    if (!g_ctl || !g_ctl->event_count) return 0;
+    const uint32_t head = g_ctl->event_head.load(std::memory_order_acquire);
+    uint32_t tail = g_ctl->event_tail.load(std::memory_order_relaxed);
+    const auto* ring = reinterpret_cast<const ipc::ContactEvent*>(g_base + g_ctl->event_offset);
+    uint32_t n = 0;
+    for (; tail != head && n < max; ++tail, ++n) out[n] = ring[tail & (g_ctl->event_count - 1)];
+    g_ctl->event_tail.store(tail, std::memory_order_release);
+    return n;
+}
+
+float step_period_ms() { return std::clamp(g_period_ms, 1000.0f / step_hz(), 250.0f); }
 
 const ipc::SnapshotHeader* snapshot(bool* fresh) {
     if (fresh) *fresh = g_fresh;

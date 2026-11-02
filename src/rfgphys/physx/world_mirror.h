@@ -21,6 +21,13 @@ bool ready();  // the level's static world is in the host (first export sent), s
 // Test.StressPieces waits for that after it restores the buildings (research/docs/07, B5b: blown up again while the
 // host still cooked them, the new pieces came over inside the old statics and were pushed out underneath).
 uint32_t flushed_scans();
+// Everything that left the buildings so far is on its way to the host, ahead of whatever is sent after this; false:
+// not yet (the export's budget, a full ring). A new loose chunk's parts must leave the static world before they
+// come back as a body: research/docs/08, C3.
+bool catch_up();
+// The game object a static group of the host stands for (a building, the ground), or null if it is gone: for the loose
+// chunks' impacts on the static world (research/docs/08, C2). Simulation thread.
+uint8_t* object_of_group(uint32_t group);
 // Experiment.PhysXWorldCheck: the check once more, where the player is in 3 s (tests, after zones streamed).
 void check_again();
 

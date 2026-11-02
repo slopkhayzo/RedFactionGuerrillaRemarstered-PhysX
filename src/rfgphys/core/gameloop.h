@@ -15,6 +15,8 @@ void add_end(void (*fn)(int game_state));
 // (optional) returns the rate to pass instead: 0 keeps the game's real-time behaviour (and its frame limiter),
 // r > 0 makes the frame exactly (float)(1.0 / r) seconds long. `after` runs right after frametime_calculate.
 void set_frametime_control(float (*fixed_rate)(), void (*after)());
+// Runs right after frametime_calculate too, on the sim thread, with Frametime set: what Havok's step of this frame takes.
+void add_after_frametime(void (*fn)());
 
 unsigned long sim_thread_id();
 bool on_sim_thread();

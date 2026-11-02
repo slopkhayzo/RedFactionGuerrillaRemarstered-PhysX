@@ -93,6 +93,7 @@ inline uint32_t object_pool_server_general_mover___init = 0x00648FC0;  // Steam 
 inline uint32_t rfgl_emergency_cleanup = 0x00325210;  // Steam 0x00325290; rfgl_emergency_cleanup, 87 bytes: void __cdecl()
 inline uint32_t do_debris_cleanup = 0x007CCF30;  // Steam 0x007CD300; do_debris_cleanup, 504 bytes: void __cdecl(vehicle*, enum clear_debris_states)
 inline uint32_t delete_object_outside_bpo = 0x0041C170;  // Steam 0x0041C0D0; delete_object_outside_bpo, 157 bytes: void __cdecl(object*)
+inline uint32_t object_mover__check_for_movement_delete = 0x00613300;  // Steam 0x00613690; object_mover::check_for_movement_delete, 42 bytes: void __thiscall object_mover::()
 inline uint32_t factory_init = 0x000F3080;  // Steam 0x000F3120; factory_init, 176 bytes: void __cdecl()
 inline uint32_t mempool__init = 0x0018A7B0;  // Steam 0x0018A8B0; mempool::init, 44 bytes: void __thiscall mempool::(void*, uint, rchar*, uint, uchar)
 inline uint32_t mempool_init_alloc = 0x001D84C0;  // Steam 0x001D8590; mempool_init_alloc, 22 bytes: uchar* __cdecl(int)
@@ -114,6 +115,16 @@ inline uint32_t world__system_init = 0x0053B990;  // Steam 0x0053BB00; world::sy
 inline uint32_t alloc_general_mover = 0x0065E470;  // Steam 0x0065E830; alloc_general_mover, 13 bytes: object* __cdecl()
 inline uint32_t havok_raycast_against_static_level_only = 0x004374B0;  // Steam 0x00437440; havok_raycast_against_static_level_only, 22 bytes: bool __cdecl(raycast_input*, raycast_output*)
 inline uint32_t havok_raycast_against_destroyable_geometry = 0x004374F0;  // Steam 0x00437480; havok_raycast_against_destroyable_geometry, 22 bytes: bool __cdecl(raycast_input*, raycast_output*)
+inline uint32_t havok_body_set_motion_type = 0x00417B40;  // Steam 0x00417A90; havok_body_set_motion_type, 57 bytes: void __cdecl(uint, uint)
+inline uint32_t havok_body_apply_hard_keyframe = 0x00417A50;  // Steam 0x004179A0; havok_body_apply_hard_keyframe, 226 bytes: void __cdecl(uint, matrix*, vector*, float)
+inline uint32_t havok_body_get_mass = 0x00418150;  // Steam 0x004180A0; havok_body_get_mass, 56 bytes: float __cdecl(hkpRigidBody*)
+inline uint32_t rfg_dyn_add_pre_collide_contact = 0x0032DD30;  // Steam 0x0032DDB0; rfg_dyn_add_pre_collide_contact, 1306 bytes: bool __cdecl(hkpContactPointAddedEvent*, object*, object*)
+inline uint32_t rfg_dyn_multi_add_pre_collide_contact = 0x0032DB20;  // Steam 0x0032DBA0; rfg_dyn_multi_add_pre_collide_contact, 435 bytes: bool __cdecl(object*, object*, uint, vector*, vector*, vector*, vector*, uint, uint, bool)
+inline uint32_t rfg_dyn_add_pre_collide_link_broken = 0x00313B30;  // Steam 0x00313BB0; rfg_dyn_add_pre_collide_link_broken, 499 bytes: bool __cdecl(rfg_mover*, uint, uint*, uchar, bool)
+inline uint32_t stress_evaluation_do_frame = 0x00337B30;  // Steam 0x00337BB0; stress_evaluation_do_frame, 96 bytes: void __cdecl()
+inline uint32_t rfg_get_physical_material_by_index = 0x00315D90;  // Steam 0x00315E10; rfg_get_physical_material_by_index, 35 bytes: rfg_physical_material* __cdecl(uchar)
+inline uint32_t convert_point_direction_from_world_to_local = 0x00544740;  // Steam 0x005448B0; convert_point_direction_from_world_to_local, 72 bytes: void __cdecl(vector*, vector*, vector*, vector*, vector*, matrix*)
+inline uint32_t havok_body_get_linear_velocity_by_handle = 0x00423830;  // Steam 0x004237A0; havok_body_get_linear_velocity, 59 bytes: void __cdecl(uint, vector*)
 inline uint32_t MyCharacterListener__processConstraintsCallback = 0x0042C670;  // Steam 0x0042C600; MyCharacterListener::processConstraintsCallback, 1536 bytes: void __thiscall MyCharacterListener::(hkpCharacterProxy*, hkArray<hkpRootCdPoint,hkContainerHeapAllocator>*, hkSimplexSolverInput*)
 inline uint32_t rl_batched_pass__rl_batched_pass = 0x00136CE0;  // Steam 0x00136DA0; rl_batched_pass::rl_batched_pass, 113 bytes: void __thiscall rl_batched_pass::()
 inline uint32_t rl_batched_pass__add_unbatched_renderable_instance = 0x000DF860;  // Steam 0x000DF8D0; rl_batched_pass::add_unbatched_renderable_instance, 59 bytes: bool __thiscall rl_batched_pass::(rl_renderable_instance*)
@@ -302,6 +313,10 @@ inline uint32_t obj_class_instantiator__class_index = 0x02C19240;  // Steam 0x02
 inline uint32_t obj_class_instantiator__num_registered_classes = 0x02C2E120;  // Steam 0x02C2F120; int
 inline uint32_t Permanent_mempool = 0x01963B20;  // Steam 0x01964B20; rfg_split_mempool
 inline uint32_t Num_collision_models = 0x0125EDDC;  // Steam 0x0125FDDC; int
+inline uint32_t Num_rfg_physical_materials = 0x01AF72B4;  // Steam 0x01AF82B4; int
+inline uint32_t RFG_dyn_collisions = 0x01CC12F8;  // Steam 0x01CC22F8; rfg_collision_event[278528 bytes]
+inline uint32_t Num_rfg_dyn_collisions = 0x01AF7268;  // Steam 0x01AF8268; int
+inline uint32_t RFG_uber_heavy_destruction_slice_framecount = 0x0124F31C;  // Steam 0x0125031C; int
 inline uint32_t Hk_rigid_bodies = 0x0236D980;  // Steam 0x0236E980; hkpRigidBody*[4194304 bytes]
 inline uint32_t Unbatched_renderable_buffer = 0x0176DBF8;  // Steam 0x0176EBF8; rl_renderable_instance*[16384 bytes]
 inline uint32_t Batched_instance_buffer = 0x01708A40;  // Steam 0x01709A40; rl_batched_instance[393216 bytes]
@@ -444,6 +459,7 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::rfgl_emergency_cleanup, {0x00325210, 0x00325290}},
     {&rva::do_debris_cleanup, {0x007CCF30, 0x007CD300}},
     {&rva::delete_object_outside_bpo, {0x0041C170, 0x0041C0D0}},
+    {&rva::object_mover__check_for_movement_delete, {0x00613300, 0x00613690}},
     {&rva::factory_init, {0x000F3080, 0x000F3120}},
     {&rva::mempool__init, {0x0018A7B0, 0x0018A8B0}},
     {&rva::mempool_init_alloc, {0x001D84C0, 0x001D8590}},
@@ -465,6 +481,16 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::alloc_general_mover, {0x0065E470, 0x0065E830}},
     {&rva::havok_raycast_against_static_level_only, {0x004374B0, 0x00437440}},
     {&rva::havok_raycast_against_destroyable_geometry, {0x004374F0, 0x00437480}},
+    {&rva::havok_body_set_motion_type, {0x00417B40, 0x00417A90}},
+    {&rva::havok_body_apply_hard_keyframe, {0x00417A50, 0x004179A0}},
+    {&rva::havok_body_get_mass, {0x00418150, 0x004180A0}},
+    {&rva::rfg_dyn_add_pre_collide_contact, {0x0032DD30, 0x0032DDB0}},
+    {&rva::rfg_dyn_multi_add_pre_collide_contact, {0x0032DB20, 0x0032DBA0}},
+    {&rva::rfg_dyn_add_pre_collide_link_broken, {0x00313B30, 0x00313BB0}},
+    {&rva::stress_evaluation_do_frame, {0x00337B30, 0x00337BB0}},
+    {&rva::rfg_get_physical_material_by_index, {0x00315D90, 0x00315E10}},
+    {&rva::convert_point_direction_from_world_to_local, {0x00544740, 0x005448B0}},
+    {&rva::havok_body_get_linear_velocity_by_handle, {0x00423830, 0x004237A0}},
     {&rva::MyCharacterListener__processConstraintsCallback, {0x0042C670, 0x0042C600}},
     {&rva::rl_batched_pass__rl_batched_pass, {0x00136CE0, 0x00136DA0}},
     {&rva::rl_batched_pass__add_unbatched_renderable_instance, {0x000DF860, 0x000DF8D0}},
@@ -652,6 +678,10 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::obj_class_instantiator__num_registered_classes, {0x02C2E120, 0x02C2F120}},
     {&rva::Permanent_mempool, {0x01963B20, 0x01964B20}},
     {&rva::Num_collision_models, {0x0125EDDC, 0x0125FDDC}},
+    {&rva::Num_rfg_physical_materials, {0x01AF72B4, 0x01AF82B4}},
+    {&rva::RFG_dyn_collisions, {0x01CC12F8, 0x01CC22F8}},
+    {&rva::Num_rfg_dyn_collisions, {0x01AF7268, 0x01AF8268}},
+    {&rva::RFG_uber_heavy_destruction_slice_framecount, {0x0124F31C, 0x0125031C}},
     {&rva::Hk_rigid_bodies, {0x0236D980, 0x0236E980}},
     {&rva::Unbatched_renderable_buffer, {0x0176DBF8, 0x0176EBF8}},
     {&rva::Batched_instance_buffer, {0x01708A40, 0x01709A40}},
@@ -791,6 +821,7 @@ inline constexpr uint32_t object_pool_server_general_mover___init = 273;
 inline constexpr uint32_t rfgl_emergency_cleanup = 87;
 inline constexpr uint32_t do_debris_cleanup = 504;
 inline constexpr uint32_t delete_object_outside_bpo = 157;
+inline constexpr uint32_t object_mover__check_for_movement_delete = 42;
 inline constexpr uint32_t factory_init = 176;
 inline constexpr uint32_t mempool__init = 44;
 inline constexpr uint32_t mempool_init_alloc = 22;
@@ -812,6 +843,16 @@ inline constexpr uint32_t world__system_init = 1122;
 inline constexpr uint32_t alloc_general_mover = 13;
 inline constexpr uint32_t havok_raycast_against_static_level_only = 22;
 inline constexpr uint32_t havok_raycast_against_destroyable_geometry = 22;
+inline constexpr uint32_t havok_body_set_motion_type = 57;
+inline constexpr uint32_t havok_body_apply_hard_keyframe = 226;
+inline constexpr uint32_t havok_body_get_mass = 56;
+inline constexpr uint32_t rfg_dyn_add_pre_collide_contact = 1306;
+inline constexpr uint32_t rfg_dyn_multi_add_pre_collide_contact = 435;
+inline constexpr uint32_t rfg_dyn_add_pre_collide_link_broken = 499;
+inline constexpr uint32_t stress_evaluation_do_frame = 96;
+inline constexpr uint32_t rfg_get_physical_material_by_index = 35;
+inline constexpr uint32_t convert_point_direction_from_world_to_local = 72;
+inline constexpr uint32_t havok_body_get_linear_velocity_by_handle = 59;
 inline constexpr uint32_t MyCharacterListener__processConstraintsCallback = 1536;
 inline constexpr uint32_t rl_batched_pass__rl_batched_pass = 113;
 inline constexpr uint32_t rl_batched_pass__add_unbatched_renderable_instance = 59;

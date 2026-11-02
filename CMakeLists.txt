@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(rfgphys VERSION 0.4.0 LANGUAGES C CXX)
+project(rfgphys VERSION 0.5.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "rfg.exe is 32-bit: configure with -A Win32")
@@ -39,6 +39,7 @@ add_library(rfgphys SHARED
     src/rfgphys/test/restore_building.cpp
     src/rfgphys/test/stress_pieces.cpp
     src/rfgphys/test/vehicle_push.cpp
+    src/rfgphys/test/chunk_fall.cpp
     src/rfgphys/test/stream_report.cpp
     src/rfgphys/test/view_shots.cpp
     src/rfgphys/test/viewpoints.cpp

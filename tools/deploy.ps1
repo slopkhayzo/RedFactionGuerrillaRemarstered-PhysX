@@ -6,6 +6,7 @@ param(
     [string]$GameDir = 'D:\Program Files\Games\GOG\Red Faction Guerrilla Re-Mars-tered',
     [string]$Config = 'RelWithDebInfo',
     [switch]$ResetIni,     # rewrite scripts\rfgphys.ini with defaults
+    [switch]$ProfileHost,  # the host of tools\build_host.ps1 -PhysXProfile (logs PhysX's profiler zones); deploy again without it to go back
     [switch]$LoaderLog     # make Ultimate ASI Loader write its log (dinput8.log or winmm.log) next to the game
 )
 
@@ -54,7 +55,7 @@ Copy-Item $asi $scripts -Force
 if (Test-Path $pdb) { Copy-Item $pdb $scripts -Force }
 
 # The PhysX host (64-bit, tools\build_host.ps1) and PhysX's GPU module go into scripts\rfgphysx.
-$hostDir = Join-Path $root 'build-host\Release'
+$hostDir = Join-Path $root $(if ($ProfileHost) { 'build-host-profile\Release' } else { 'build-host\Release' })
 $hostFiles = @('rfgphysx_host.exe', 'rfgphysx_host.pdb', 'PhysXGpu_64.dll')
 if (Test-Path (Join-Path $hostDir 'rfgphysx_host.exe')) {
     $pxDir = Join-Path $scripts 'rfgphysx'

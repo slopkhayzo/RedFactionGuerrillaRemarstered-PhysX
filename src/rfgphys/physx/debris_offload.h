@@ -56,6 +56,32 @@ struct Census {
     double task_ms[4];
 };
 Census census();
+// Experiment.PhysXChunks (research/docs/08; Test.ChunkFall, simulation thread): the loose chunks the host simulates
+// now, their parts and mass, the fastest of them (PhysX's last step), how far a chunk's Havok body was from where it
+// was sent at most since the last call, and the loose chunks within reach left in Havok at the last scan; the chunks
+// driven since the level's start.
+struct ChunkStats {
+    uint32_t driven, parts;
+    float mass_kg, fastest, follow_max;
+    uint32_t in_havok, made, too_large;
+    uint32_t impacts, impacts_weak;  // since the level's start: passed to the game's destruction, too weak for it
+    float energy_max_kj;
+    uint32_t crushed, parts_removed;  // since the level's start: subpieces broken off by impacts, parts taken off bodies
+    float crushed_t;
+    uint32_t pieces_at_once;          // since the start: pieces that broke off them and went over at once
+    float largest_t[6];               // the heaviest of them now
+    uint32_t cracks, snaps;           // since the level's start
+    float stump_t;                    // of buildings, crushed under them
+};
+ChunkStats chunk_stats();
+// chunk_trace.csv and the host's chunk_steps.csv from now on: each loose chunk, each frame and step (Test.ChunkFall).
+void trace_chunks_from_now_on();
+// Test.ChunkFall: t of a building still in its own shape, and what these buildings are made of, in the log. And breaks up to
+// `room` of a building's subpieces with their centres in a world box, handing them to the game's destruction as if crushed;
+// how many: 0 when none are left in it.
+float standing_t(uint32_t object_handle);
+void log_materials_of(uint8_t* const* objects, size_t n);
+uint32_t crush_in_box(uint32_t object_handle, const float lo[3], const float hi[3], uint32_t room);
 
 // Simulation thread: these objects were restored (destroyed and streamed in again): the pieces that broke off them go
 // at the next sim/render handshake. And how many live pieces broke off one (tests).

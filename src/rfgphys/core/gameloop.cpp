@@ -18,6 +18,7 @@ std::vector<void (*)()> g_begin;
 std::vector<void (*)(int)> g_end;
 float (*g_fixed_rate)() = nullptr;
 void (*g_after_frametime)() = nullptr;
+std::vector<void (*)()> g_after_frametime_fns;
 std::atomic<unsigned long> g_sim_tid{0};
 std::atomic<unsigned long long> g_frames{0};
 std::atomic<int> g_last_state{-1};
@@ -46,6 +47,7 @@ void __cdecl frametime_call(bool quantize, float quantum, float fixed_rate) {
     if (g_fixed_rate) fixed_rate = g_fixed_rate();
     rfg::fn<void(__cdecl*)(bool, float, float)>(rfg::rva::frametime_calculate)(quantize, quantum, fixed_rate);
     if (g_after_frametime) g_after_frametime();
+    for (auto fn : g_after_frametime_fns) fn();
 }
 
 bool patch_frametime_call() {
@@ -75,6 +77,8 @@ bool install() {
 
 void add_begin(void (*fn)()) { g_begin.push_back(fn); }
 void add_end(void (*fn)(int)) { g_end.push_back(fn); }
+
+void add_after_frametime(void (*fn)()) { g_after_frametime_fns.push_back(fn); }
 
 void set_frametime_control(float (*fixed_rate)(), void (*after)()) {
     g_fixed_rate = fixed_rate;

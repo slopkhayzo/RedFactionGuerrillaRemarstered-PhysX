@@ -8,6 +8,8 @@ rem toolset (14.44) that Visual Studio 2026 installs; the host, built with v145,
 rem %1: GPU architectures with compiled kernels (default 75,86,89,120: GTX 16 / RTX 20, RTX 30, RTX 40, RTX 50, the
 rem release set); %2: the architecture of the PTX that newer GPUs JIT (default 120); "sdk" = the SDK's own list (70 to
 rem 120), much slower to build. A GPU older than every listed one gets no GPU PhysX (the host then uses CPU PhysX).
+rem %3: PhysX's configuration: release (default), or profile, with PhysX's profiler zones, for measuring the host
+rem (tools\build_host.ps1 -PhysXProfile); it builds into its own folder.
 rem CPU-heavy and long (CUDA kernels): run it through the shared queue. Re-running rebuilds only what changed;
 rem other architectures rebuild the GPU module.
 setlocal
@@ -15,6 +17,8 @@ set "ARCHS=%~1"
 if "%ARCHS%"=="" set "ARCHS=75,86,89,120"
 set "PTX=%~2"
 if "%PTX%"=="" set "PTX=120"
+set "CONFIG=%~3"
+if "%CONFIG%"=="" set "CONFIG=release"
 for /f "tokens=1 delims=," %%a in ("%ARCHS%") do set "BASE=%%a"
 set "VS=C:\Program Files\Microsoft Visual Studio\18\Community"
 set "CUDA=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
@@ -31,18 +35,18 @@ if not exist "third_party\physx-sdk\physx\CMakeLists.txt" (
     echo PhysX source missing: git submodule update --init third_party/physx-sdk
     exit /b 1
 )
-rem Our one change to PhysX (third_party\physx-sdk-rfgphys.patch), applied to a fresh checkout of the submodule.
+rem Our changes to PhysX (third_party\physx-sdk-rfgphys.patch), applied to a fresh checkout of the submodule.
 git -C third_party\physx-sdk apply --reverse --check ..\physx-sdk-rfgphys.patch >nul 2>&1
 if errorlevel 1 (
     git -C third_party\physx-sdk apply ..\physx-sdk-rfgphys.patch || exit /b 1
     echo applied third_party\physx-sdk-rfgphys.patch
 )
-set "OUT=%CD%\third_party\physx-build\release-gpu"
+set "OUT=%CD%\third_party\physx-build\%CONFIG%-gpu"
 set "ARCHDEFS=-DPX_GPU_SASS_ARCHS=%ARCHS% -DPX_GPU_PTX_ARCH=%PTX% -DCMAKE_CUDA_ARCHITECTURES=%BASE%"
 if "%ARCHS%"=="sdk" set "ARCHDEFS=-UPX_GPU_SASS_ARCHS -UPX_GPU_PTX_ARCH -DCMAKE_CUDA_ARCHITECTURES=70"
 echo PhysX GPU architectures: %ARCHS% (PTX %PTX%)
 rem Configured every time, so that other architectures take effect.
-"%CMAKE%" -S third_party\physx-sdk\physx -B "%OUT%" -G Ninja -DCMAKE_BUILD_TYPE=release ^
+"%CMAKE%" -S third_party\physx-sdk\physx -B "%OUT%" -G Ninja -DCMAKE_BUILD_TYPE=%CONFIG% ^
     -DPX_GENERATE_GPU_PROJECTS=ON -DPX_GENERATE_STATIC_LIBRARIES=ON -DPX_GENERATE_GPU_STATIC_LIBRARIES=OFF ^
     -DCMAKE_CUDA_COMPILER="%CUDA%\bin\nvcc.exe" -DCUDAToolkit_ROOT="%CUDA%" %ARCHDEFS% ^
     -DNV_USE_STATIC_WINCRT=ON -DNV_USE_DEBUG_WINCRT=OFF ^

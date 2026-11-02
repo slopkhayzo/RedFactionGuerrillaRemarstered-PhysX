@@ -25,4 +25,11 @@ struct FrameCounts {
 };
 FrameCounts take_frame_counts();
 
+// Loose chunks (rfg movers) created since the last call.
+uint32_t take_chunks_made();
+
+// The function that last destroyed the object with this handle, if that was among the last 4,096 objects destroyed (its GOG
+// RVA, the caller's when it went through the by-handle forwarder), else 0.
+uint32_t destroyer_of(uint32_t handle);
+
 }  // namespace census

@@ -9,6 +9,9 @@ What it does
   thousands of pieces keep a high frame rate.
 - Debris pieces collide with each other and pile up, explosions throw piles around, and you can stand on heavy
   rubble while lighter pieces get pushed aside.
+- Loose parts of buildings, such as the top of a building shot out from under itself and the sections it breaks into,
+  are simulated in PhysX as well. They land on the rubble and on each other, tip and roll, crack into sections along
+  their weakest links, crush what they land on, and break by what they are made of: glass first, steel last.
 - Rubble at rest is drawn the way a standing building is: the pieces of one building lying close together become one
   mesh, and a piece knocked loose leaves it again. A levelled map keeps its frame rate, even seen from high above.
 - Vehicles and walkers push rubble out of their way, rockets strike piles, and the sledgehammer and bullets knock
@@ -74,6 +77,11 @@ Known limitations
 - A few percent of the pieces can fall through the ground just after an area loads, and disappear.
 - Vehicles and walkers push the pieces but do not feel them: they plough through piles instead of riding over them.
 - Where fresh debris lands in a pile, the pile can bubble for a moment, pieces rising and settling again.
+- In the heaviest moments, with tens of thousands of pieces moving at once, the debris moves in slow motion for a
+  while instead of the frame rate dropping.
+- PhysX keeps up to 65,536 pieces; past that the farthest from you are removed. PhysXMaxBodies in the settings raises
+  it, at the cost of graphics memory.
+- A building standing next to a collapse can come loose whole a while later: that is the game's own structural stress.
 - Very large piles need a fast CPU and graphics card. Tested on an NVIDIA RTX 4090 with an 8-core CPU.
 
 License

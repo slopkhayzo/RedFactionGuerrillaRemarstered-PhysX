@@ -15,3 +15,246 @@ index 31f8aee..eaba7d7 100644
  	GENERATE_ARCH_CODE_LIST(SASS "80,86,89,90,100,120" PTX "120")
  ELSE()
  	# Volta is the minimum compute arch required because NGC supports V100
+diff --git a/physx/source/gpusimulationcontroller/include/PxgBodySimManager.h b/physx/source/gpusimulationcontroller/include/PxgBodySimManager.h
+index 2993ffa..2813ad1 100644
+--- a/physx/source/gpusimulationcontroller/include/PxgBodySimManager.h
++++ b/physx/source/gpusimulationcontroller/include/PxgBodySimManager.h
+@@ -100,6 +100,7 @@ namespace physx
+ 			mTotalStaticRBContacts(0),
+ 			mTotalStaticRBJoints(0),
+ 			mMaxStaticRBContacts(0),
++			mMaxStaticRBContactsStale(false),
+ 			mMaxStaticRBJoints(0),
+ 			mExternalAccelerations(NULL)
+ 		{
+@@ -235,6 +236,13 @@ namespace physx
+ 		PxU32													mMaxStaticRBContacts;
+ 		PxU32													mMaxStaticRBJoints;
+ 
++		// Modified for rfgphys (not part of NVIDIA's release): mMaxStaticRBContacts follows the present instead of only
++		// ever growing. The GPU solver's static kernels, and their buffers, are sized bodies * (this / static partitions)
++		// each step, so one big compound that once touched thousands of static or kinematic shapes slowed every body
++		// for the rest of the session. Called once a step, before the first use.
++		void													refreshMaxStaticRBContacts();
++		bool													mMaxStaticRBContactsStale;
++
+ 		PxsExternalAccelerationProvider*						mExternalAccelerations;
+ 	};
+ 
+diff --git a/physx/source/gpusimulationcontroller/src/PxgBodySimManager.cpp b/physx/source/gpusimulationcontroller/src/PxgBodySimManager.cpp
+index 382e364..9d25039 100644
+--- a/physx/source/gpusimulationcontroller/src/PxgBodySimManager.cpp
++++ b/physx/source/gpusimulationcontroller/src/PxgBodySimManager.cpp
+@@ -255,7 +255,21 @@ bool PxgBodySimManager::addStaticRBContactManager(PxU32 uniqueIndex, const PxNod
+ bool PxgBodySimManager::removeStaticRBContactManager(PxU32 uniqueIndex, const PxNodeIndex nodeIndex)
+ {
+ 	PX_ASSERT(!nodeIndex.isArticulation());
+-	return remove(uniqueIndex, mStaticConstraints[nodeIndex.index()].mStaticContacts, mTotalStaticRBContacts);
++	PxArray<PxgStaticConstraint>& contacts = mStaticConstraints[nodeIndex.index()].mStaticContacts;
++	if(contacts.size() == mMaxStaticRBContacts)  // rfgphys: see refreshMaxStaticRBContacts
++		mMaxStaticRBContactsStale = true;
++	return remove(uniqueIndex, contacts, mTotalStaticRBContacts);
++}
++
++void PxgBodySimManager::refreshMaxStaticRBContacts()
++{
++	if(!mMaxStaticRBContactsStale)
++		return;
++	mMaxStaticRBContactsStale = false;
++	PxU32 most = 0;
++	for(PxU32 i = 0, n = mStaticConstraints.size(); i < n; ++i)
++		most = PxMax(most, mStaticConstraints[i].mStaticContacts.size());
++	mMaxStaticRBContacts = most;
+ }
+ 
+ bool PxgBodySimManager::addStaticRBJoint(PxU32 uniqueIndex, const PxNodeIndex nodeIndex)
+diff --git a/physx/source/gpusolver/include/PxgConstraintPartition.h b/physx/source/gpusolver/include/PxgConstraintPartition.h
+index 0527cd1..19ca465 100644
+--- a/physx/source/gpusolver/include/PxgConstraintPartition.h
++++ b/physx/source/gpusolver/include/PxgConstraintPartition.h
+@@ -10,6 +10,9 @@
+ 
+ #include "CmPinnableArray.h"
+ #include "foundation/PxUserAllocated.h"
++#include "foundation/PxAllocator.h"
++#include "foundation/PxArray.h"
++#include "foundation/PxMemory.h"
+ #include "PxgSolverConstraintDesc.h"
+ #include "PxsSimpleIslandManager.h"
+ #include "PxgDynamicsConfiguration.h"
+@@ -153,13 +156,55 @@ struct NodeEntries
+ 	NodeEntryStorage	mEdges[PXG_BATCH_SIZE];
+ };
+ 
++// rfgphys: what a slab keeps for each node, in pages made when first written. Past the first few slabs only the bodies with
++// the most contacts are in a slab, and yet each took 132 bytes for every node of the scene: 30 MB a slab at 224,000 nodes,
++// with nearly 200 slabs. A new slab cost 130 ms, and whenever the node count doubled all of them were made again: a step of
++// 25 s at 112,000 bodies.
++template <typename T>
++class PartitionNodePages
++{
++	static const PxU32 sPageBits = 6, sPageSize = 1u << sPageBits, sPageMask = sPageSize - 1;
++	PxArray<T*> mPages;
++
++	PX_NOINLINE T* addPage(T*& page)
++	{
++		page = PX_ALLOCATE(T, sPageSize, "PartitionNodePages");
++		PxMemZero(page, sizeof(T) * sPageSize);
++		return page;
++	}
++
++	PX_NOCOPY(PartitionNodePages)
++public:
++	PartitionNodePages() {}
++	~PartitionNodePages()
++	{
++		for (PxU32 i = 0; i < mPages.size(); ++i)
++			PX_FREE(mPages[i]);
++	}
++	void resize(PxU32 nodeCount) { mPages.resize((nodeCount + sPageMask) >> sPageBits); }
++	// To write: makes its page, if it is the first in it.
++	PX_FORCE_INLINE T& operator[](PxU32 index)
++	{
++		T*& page = mPages[index >> sPageBits];
++		return (page ? page : addPage(page))[index & sPageMask];
++	}
++	// Its page is there: its bit in the bitmap is set.
++	PX_FORCE_INLINE const T& operator[](PxU32 index) const { return mPages[index >> sPageBits][index & sPageMask]; }
++	// Makes no page: 0 if there is none.
++	PX_FORCE_INLINE T read(PxU32 index) const
++	{
++		const T* page = mPages[index >> sPageBits];
++		return page ? page[index & sPageMask] : T(0);
++	}
++};
++
+ struct PartitionSlab : public PxUserAllocated
+ {
+ 	Partition mPartitions[PXG_BATCH_SIZE];				//! Each slab has 32 partitions
+ 
+-	PxArray<PxU32> mNodeBitmap;			//! Each slab 1 integer per-node, recording the presence of the node in any of the slabs
++	PartitionNodePages<PxU32> mNodeBitmap;			//! Each slab 1 integer per-node, recording the presence of the node in any of the slabs
+ 
+-	PxArray<NodeEntries> mNodeEntries;
++	PartitionNodePages<NodeEntries> mNodeEntries;
+ 
+ 	PartitionSlab()	{}
+ };
+diff --git a/physx/source/gpusolver/include/PxgSolverCore.h b/physx/source/gpusolver/include/PxgSolverCore.h
+index aa62e03..8b113aa 100644
+--- a/physx/source/gpusolver/include/PxgSolverCore.h
++++ b/physx/source/gpusolver/include/PxgSolverCore.h
+@@ -166,6 +166,8 @@ namespace physx
+ 
+ 	public:
+ 
++		PX_FORCE_INLINE PxU32			getNbPrevExceededForceElements() const { return mNbPrevExceededForceElements; }  // rfgphys
++
+ 		PxgSolverCore(PxgCudaKernelWranglerManager* gpuKernelWrangler, PxCudaContextManager* cudaContextManager,
+ 			PxgGpuContext* dynamicContext, PxgAllocatorDesc& allocDesc);
+ 
+diff --git a/physx/source/gpusolver/src/PxgConstraintPartition.cpp b/physx/source/gpusolver/src/PxgConstraintPartition.cpp
+index 9d931d9..6719be1 100644
+--- a/physx/source/gpusolver/src/PxgConstraintPartition.cpp
++++ b/physx/source/gpusolver/src/PxgConstraintPartition.cpp
+@@ -925,10 +925,10 @@ void PxgIncrementalPartition::addEdge_Stage2(IG::GPUExternalData& islandSimGpuDa
+ 			PxU32 map = 0; // This map encodes in which of the 32 partitions of this slab either of the rigids/articulations is already present
+ 
+ 			if (!hasInfiniteMass0)
+-				map = slab->mNodeBitmap[index1];
++				map = slab->mNodeBitmap.read(index1);
+ 
+ 			if (!hasInfiniteMass1)
+-				map |= slab->mNodeBitmap[index2];
++				map |= slab->mNodeBitmap.read(index2);
+ 
+ 			if (map != 0xFFFFFFFF)
+ 			{
+@@ -1439,7 +1439,7 @@ namespace
+ 							// so we can still use them to find the prev & next edges.
+ 							if(!hasInfiniteMass0)
+ 							{
+-								const PxU32 slabMask0 = slab->mNodeBitmap[node0Index];
++								const PxU32 slabMask0 = slab->mNodeBitmap.read(node0Index);
+ 
+ 								// PT: TODO: refactor
+ 
+@@ -1461,7 +1461,7 @@ namespace
+ 
+ 							if(!hasInfiniteMass1)
+ 							{
+-								const PxU32 slabMask1 = slab->mNodeBitmap[node1Index];
++								const PxU32 slabMask1 = slab->mNodeBitmap.read(node1Index);
+ 
+ 								if(slabMask1)
+ 								{
+@@ -2785,7 +2785,7 @@ void PxgIncrementalPartition::pullForwardConstraints(PxU32 nodeIndex)
+ 		while (currId < PXG_BATCH_SIZE)
+ 		{
+ 			PxU32 mask = ~((1u << currId) - 1u);
+-			PxU32 bitMask = ((slab->mNodeBitmap[nodeIndex]) & mask);
++			PxU32 bitMask = (slab->mNodeBitmap.read(nodeIndex) & mask);
+ 
+ 			currId = PXG_BATCH_SIZE;
+ 			if (bitMask != 0)
+@@ -2810,10 +2810,10 @@ void PxgIncrementalPartition::pullForwardConstraints(PxU32 nodeIndex)
+ 					PartitionSlab* writeSlab = mPartitionSlabs[i];
+ 					PxU32 map = 0;
+ 					if (!replaceEdge->hasInfiniteMass0())
+-						map = writeSlab->mNodeBitmap[node0Index];
++						map = writeSlab->mNodeBitmap.read(node0Index);
+ 
+ 					if (!replaceEdge->hasInfiniteMass1())
+-						map |= writeSlab->mNodeBitmap[node1Index];
++						map |= writeSlab->mNodeBitmap.read(node1Index);
+ 
+ 					if (map != 0xFFFFFFFF)
+ 					{
+diff --git a/physx/source/gpusolver/src/PxgContext.cpp b/physx/source/gpusolver/src/PxgContext.cpp
+index 44a5d3b..cc73b4f 100644
+--- a/physx/source/gpusolver/src/PxgContext.cpp
++++ b/physx/source/gpusolver/src/PxgContext.cpp
+@@ -843,6 +843,20 @@ namespace physx
+ 
+ 		PxU32 nbThresholdElems = 0;
+ 		mGpuSolverCore->syncDmaBack(nbThresholdElems);
++		// rfgphys: what would have run past the stream as it was sized (the reserve above), and what still does.
++		{
++			static PxU32 overruns = 0;
++			if(nbThresholdElems > PxNextPowerOfTwo(mNumContactManagers) && overruns < 32)
++			{
++				++overruns;
++				PxGetFoundation().error(PxErrorCode::eDEBUG_WARNING, PX_FL, "rfgphys: %u force threshold elements, %u contact managers: past the stream as it was sized", nbThresholdElems, mNumContactManagers);
++			}
++			if(nbThresholdElems > mForceChangedThresholdStream.capacity())
++			{
++				PxGetFoundation().error(PxErrorCode::eDEBUG_WARNING, PX_FL, "rfgphys: %u force threshold elements past the stream's %u", nbThresholdElems, mForceChangedThresholdStream.capacity());
++				nbThresholdElems = mForceChangedThresholdStream.capacity();
++			}
++		}
+ 		// Solver friction patches are final only after syncDmaBack.
+ 		getNarrowphaseCore()->drawFrictionAnchors();
+ 		mForceChangedThresholdStream.forceSize_Unsafe(nbThresholdElems); 
+@@ -1850,8 +1864,10 @@ namespace physx
+ 		mNumConstraintBatches = mIncrementalPartition.getNbConstraintBatches() + mIncrementalPartition.getNbContactBatches();
+ 
+ 		PxgBodySimManager& bodyManager = getSimulationController()->getBodySimManager();
++		bodyManager.refreshMaxStaticRBContacts();  // rfgphys
+ 		const PxU32 maxStaticRigidJoints = bodyManager.mMaxStaticRBJoints;
+ 		const PxU32 maxStaticRigidContacts = bodyManager.mMaxStaticRBContacts;
++		PX_PROFILE_VALUE(PxI32(maxStaticRigidContacts), "most static contacts on a body", 0);  // rfgphys
+ 		const PxU32 nbRigidBatches = (mBodyCount + PXG_BATCH_SIZE - 1) / PXG_BATCH_SIZE;
+ 		const PxU32 totalStaticRigidContacts = bodyManager.mTotalStaticRBContacts;
+ 		const PxU32 totalStaticRigidJoints = bodyManager.mTotalStaticRBJoints;
+@@ -2392,7 +2408,10 @@ void PxgGpuContext::updatePostPartitioning(PxBaseTask* lostTouchTask, PxvNphaseI
+ 		mThresholdStream.reserve(PxNextPowerOfTwo(mNumContactManagers));
+ 
+ 		mForceChangedThresholdStream.forceSize_Unsafe(0);
+-		if(!mForceChangedThresholdStream.reserve(PxNextPowerOfTwo(mNumContactManagers)))
++		// rfgphys: DMA_CHANGED_ELEMS writes here what is over its force threshold now or was in the last step, unchecked; the GPU's own
++		// buffer has room for both. Sized for the present alone, it was overrun when a body's many pairs went between two steps, and
++		// checkForceThresholdContactEvents then read a garbage ShapeInteraction.
++		if(!mForceChangedThresholdStream.reserve(PxNextPowerOfTwo(mNumContactManagers + 2 * mGpuSolverCore->getNbPrevExceededForceElements())))
+ 		{
+ 			PxGetFoundation().error(PxErrorCode::eOUT_OF_MEMORY, PX_FL, "PxgGpuContext: failed to allocate pinned threshold stream.");
+ 			getNarrowphaseCore()->mCudaContext->setAbortMode(true);

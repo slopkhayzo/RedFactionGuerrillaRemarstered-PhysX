@@ -32,6 +32,7 @@
 #include "test/memory_census.h"
 #include "test/restore_building.h"
 #include "test/stress_pieces.h"
+#include "test/chunk_fall.h"
 #include "test/vehicle_push.h"
 #include "test/stream_report.h"
 #include "test/view_shots.h"
@@ -123,6 +124,7 @@ void init() {
     debris_offload::install(cfg);  // after the bridge: it moves pieces from the snapshot the bridge takes
     zone_cycle::install(cfg);
     vehicle_push::install(cfg);
+    chunk_fall::install(cfg);
     restore_building::install(cfg);
     stress_pieces::install(cfg);
     memory_census::install(cfg);  // its D3D11 counters with the stress test

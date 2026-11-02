@@ -210,6 +210,33 @@ tools\replay_windows.py runs\<a> runs\<b> ...` compares replays of one recording
 leaves its pile. A pile takes at most `PhysXDebrisPileMaxPieces` (512), and a cell's few pieces join their building's
 pile next door after `PhysXDebrisPileNextDoorS` (10 s). The level's end logs `N pieces drawn by M piles` and `piles this level: ... made, ... joined, ...
 left again`. On the 245 s wcdlc7 replay the whole match went from 166-172 FPS without piles to 208-212.
+`Experiment.PhysXChunks=1` (off by default) simulates loose building chunks within 400 m of the player in PhysX (asleep in Havok: 110 m; at rest past 150 m they are parked, see research/docs/08 §15), their
+Havok bodies keyframed to it. `Experiment.PhysXChunkBreakKN` (50) is the load past which a part breaks off, and
+`PhysXChunkCrushJPerKg` (250) what that takes from the chunk's motion. How they break further (research/docs/08 §17):
+`PhysXChunkCrackPercent` (3, whole percent) is the share of the energy a chunk loses that goes to cracking it across its weakest
+section near the hit, `PhysXChunkMaterials` (1) makes a part's strength and energy follow the game's material table,
+`PhysXChunkStumpPercent` (100) is what a building loses where a chunk breaks against it, against what the chunk loses, and
+`PhysXChunkSnapMrad` (20) is how far a big chunk held at one end bends before it snaps past what holds it (more: sooner); 0
+turns any of them off. `PhysXChunkCrushAtContact` (1) takes what crushing costs at the point where parts broke, so a chunk can
+tip and be turned aside (0: off its speed and spin alike); `PhysXChunkRestStrength` (6) is how many times its load a part takes
+when what presses on it is hardly moving; `PhysXChunkWakeAhead` (1) has a moving chunk wake only the rubble ahead of it and on it
+(research/docs/08 §18). `PhysXRate` (60) is the host's steps a second: at 45 heavy moments slow down much less.
+`Test.ChunkFall=1` brings down the tallest building within 90 m with vehicle bombs on its
+ground floor once the host has the static world, holds the view 70 m from it, takes a screenshot every 0.5 s for 12 s
+and logs the chunk statistics and, each step, the destruction events on loose chunks (not with `Telemetry.Enabled`,
+which hooks the same function). `Test.ChunkFall=2` takes a floor out of it at mid height without bombs, so its top comes
+down on the stump still standing; `Test.ChunkFall=3` takes the far part of the longest building's stump and a floor at a third
+of its height, so what comes down is held at one end. The log follows what stands of the buildings next to it, to the end of the
+run, and `Test.ChunkFallNoStress=1` turns the game's stress evaluation off. Run it with `PhysXChunks` 0 and 1 to compare;
+research/docs/08 has the design.
+
+`Experiment.PhysXChangeEverySteps` (3) makes bodies freeze, thaw, come and go only every so many host steps, and
+`Experiment.PhysXCpuThreads` (0: 4 with GPU dynamics) sets PhysX's CPU threads in the host. A profile host
+(`tools/build_host.ps1 -PhysXProfile`, `tools/deploy.ps1 -ProfileHost`) logs PhysX's zones and the host's own
+(`HOST_ZONE`) with each report, and the zones of steps over 45 ms. research/docs/08 §14 has what they showed.
+`Experiment.PhysXChunkTrace` writes `chunk_trace.csv` to the run's folder: how each loose chunk came and went; at 1 also each
+one each frame, and `chunk_steps.csv` each host step (Test.ChunkFall turns that on).
+
 `Test.Viewpoints=1` (replays, and at the end of `Test.StressPieces`) measures a levelled map from fixed views placed
 around its debris before the replay ends: `viewpoints: view N` lines (frame times and each view's time window) and `viewpoint_N.png`;
 `Test.Viewpoints=2/3/4` first puts all debris, the piles or the pieces of their own out of sight. `python

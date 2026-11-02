@@ -81,6 +81,8 @@ Config load_config(const std::wstring& ini_path) {
     c.test_stand_in_probe = get_int(ini_path, L"Test", L"StandInProbe", 0) != 0;
     c.test_stand_in_drives_zone = get_int(ini_path, L"Test", L"StandInDrivesZone", 0) != 0;
     c.test_vehicle_push = get_int(ini_path, L"Test", L"VehiclePush", 0) != 0;
+    c.test_chunk_fall = get_int(ini_path, L"Test", L"ChunkFall", 0);
+    c.test_chunk_fall_no_stress = get_int(ini_path, L"Test", L"ChunkFallNoStress", 0) != 0;
     c.test_restore_building = get_int(ini_path, L"Test", L"RestoreBuilding", 0);
     c.test_stress_pieces = get_int(ini_path, L"Test", L"StressPieces", 0);
     c.test_stress_radius_m = get_int(ini_path, L"Test", L"StressRadiusM", 120);
@@ -127,6 +129,8 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_zone_reserve = get_int(ini_path, L"Experiment", L"ZoneReserve", 1200);
     c.exp_physx = get_int(ini_path, L"Experiment", L"PhysX", 0);
     c.exp_physx_rate = get_int(ini_path, L"Experiment", L"PhysXRate", 60);
+    c.exp_physx_change_every = get_int(ini_path, L"Experiment", L"PhysXChangeEverySteps", 3);
+    c.exp_physx_cpu_threads = get_int(ini_path, L"Experiment", L"PhysXCpuThreads", 0);
     c.exp_physx_max_bodies = get_int(ini_path, L"Experiment", L"PhysXMaxBodies", 65536);
     c.exp_physx_test = get_int(ini_path, L"Experiment", L"PhysXTest", 0);
     c.exp_physx_test_crash_after_s = get_int(ini_path, L"Experiment", L"PhysXTestCrashAfterS", 0);
@@ -145,6 +149,17 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_solid_mass_kg = get_int(ini_path, L"Experiment", L"PhysXSolidMassKg", 0);
     c.exp_physx_adopt_delay_ms = get_int(ini_path, L"Experiment", L"PhysXAdoptDelayMs", 2000);
     c.exp_physx_world_only_at_once = get_int(ini_path, L"Experiment", L"PhysXWorldOnlyAtOnce", 1) != 0;
+    c.exp_physx_chunks = get_int(ini_path, L"Experiment", L"PhysXChunks", 0) != 0;
+    c.exp_physx_chunk_crush_j_per_kg = get_int(ini_path, L"Experiment", L"PhysXChunkCrushJPerKg", 250);
+    c.exp_physx_chunk_trace = get_int(ini_path, L"Experiment", L"PhysXChunkTrace", 0);
+    c.exp_physx_chunk_break_kn = get_int(ini_path, L"Experiment", L"PhysXChunkBreakKN", 50);
+    c.exp_physx_chunk_crack_percent = get_int(ini_path, L"Experiment", L"PhysXChunkCrackPercent", 3);
+    c.exp_physx_chunk_materials = get_int(ini_path, L"Experiment", L"PhysXChunkMaterials", 1) != 0;
+    c.exp_physx_chunk_stump_percent = get_int(ini_path, L"Experiment", L"PhysXChunkStumpPercent", 100);
+    c.exp_physx_chunk_snap_mrad = get_int(ini_path, L"Experiment", L"PhysXChunkSnapMrad", 20);
+    c.exp_physx_chunk_rest_strength = get_int(ini_path, L"Experiment", L"PhysXChunkRestStrength", 6);
+    c.exp_physx_chunk_crush_at_contact = get_int(ini_path, L"Experiment", L"PhysXChunkCrushAtContact", 1) != 0;
+    c.exp_physx_chunk_wake_ahead = get_int(ini_path, L"Experiment", L"PhysXChunkWakeAhead", 1) != 0;
     c.fly_camera = get_int(ini_path, L"FlyCamera", L"Enabled", 0) != 0;
     c.fly_camera_key = get_int(ini_path, L"FlyCamera", L"Key", VK_F10);
     if (c.fly_camera_key < 1 || c.fly_camera_key > 0xFE) c.fly_camera_key = VK_F10;
