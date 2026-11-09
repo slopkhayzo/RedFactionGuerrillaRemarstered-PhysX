@@ -41,6 +41,7 @@ uint32_t host_statics();  // static actors in the host's scene
 // The loose chunks' impacts the host reported since the last call, at most `max` (simulation thread).
 uint32_t take_events(rfgphysx::ContactEvent* out, uint32_t max);
 uint32_t max_bodies();
+uint32_t shared_bytes();  // the shared memory mapped into the game: control, ring, snapshots, events
 float step_hz();
 // The number of the last Frame record sent. A snapshot's last_frame past the number when a command was sent: the host
 // has applied that command, and the snapshot shows it.

@@ -80,7 +80,17 @@ Known limitations
 - In the heaviest moments, with tens of thousands of pieces moving at once, the debris moves in slow motion for a
   while instead of the frame rate dropping.
 - PhysX keeps up to 65,536 pieces; past that the farthest from you are removed. PhysXMaxBodies in the settings raises
-  it, at the cost of graphics memory.
+  it, at the cost of graphics memory and of the game's own memory, which is short: the game is a 32-bit program and
+  can address 4 GB whatever your PC has. Each slot takes about 0.4 KB of it, used or not. About 125,000 is the
+  suggested most. Up to 262,144 works, but on big maps (custom ones especially) it leaves the game very little or too
+  little: it then stops drawing, crashes, or fails with "CreateTexture2D failed with error code 0x8007000e". Each
+  session's rfgphys.log shows how much is left ("address space").
+- RenderInstances above 65,000 does nothing: the game numbers render instances with 16 bits.
+- If the game stops drawing, crashes, or shows "CreateTexture2D failed with error code 0x8007000e", it ran out of
+  that memory. Keep PhysXMaxBodies at 125,000 or less and HavokHeapMB at 256. On NVIDIA cards the driver also keeps
+  its shader cache for the game in it: once the game's shaders pass 16 MB the cache file is 256 MB, all of it in the
+  game's memory. In the NVIDIA Control Panel (Manage 3D settings, Program Settings, rfg.exe), setting Shader Cache
+  Size to Disabled should give that back; rfgphys.log names the cache when it is that big.
 - A building standing next to a collapse can come loose whole a while later: that is the game's own structural stress.
 - Very large piles need a fast CPU and graphics card. Tested on an NVIDIA RTX 4090 with an 8-core CPU.
 

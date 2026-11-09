@@ -1067,6 +1067,11 @@ struct VehicleProxy {
     float support_lo[3] = {};         // the box of what it bears on, in its frame
     float support_hi[3] = {};
     double snap_next_ms = 0;
+    // This frame's keyframe (apply_chunk_keyframes): where its middle was when it went out, and the frame's length it
+    // was given. For a body found far from its target after Havok's step (put_back).
+    bool kf_sent = false;
+    float kf_from[3] = {};
+    float kf_dt = 0;
 };
 std::vector<VehicleProxy> g_vehicles;
 std::vector<uint32_t> g_vehicle_free;
@@ -1542,6 +1547,33 @@ void body_pose(const uint8_t* body, float pos[3], float q[4]) {
     memcpy(pos, t.pos, 12);
 }
 
+// Havok caps a body's speed and spin at its motion's hkUFloat8 codes (hkpRigidBody::getMaxLinearVelocity +0x19A,
+// getMaxAngularVelocity +0x19B; the value is ((table[code] + 0x3B800) << 12) as a float's bits). The game's movers
+// have 103 (41.2 m/s) and 68 (4.03 rad/s): a keyframed chunk could not follow a host body faster than that, and a
+// chunk the host turned faster than 4 rad/s fell further behind in its turn every frame (a chunk off by over 1 m in
+// nearly every frame of two of the user's sessions; every chunk put back in a replay had exactly 4.0 rad/s, 2026-11-09).
+// A driven chunk gets 116 (about 98 m/s and 98 rad/s); the game's own codes come back with its motion.
+constexpr uint32_t kBodyMaxLinVel = 0x19A, kBodyMaxAngVel = 0x19B;
+constexpr uint8_t kDrivenMaxVel = 116;
+std::unordered_map<const uint8_t*, uint16_t> g_raised_caps;  // Havok body -> its own codes (linear | angular << 8)
+void raise_caps(const uint8_t* body) {
+    uint8_t* b = const_cast<uint8_t*>(body);
+    if (b[kBodyMaxLinVel] >= kDrivenMaxVel && b[kBodyMaxAngVel] >= kDrivenMaxVel) return;
+    g_raised_caps.try_emplace(body, uint16_t(b[kBodyMaxLinVel] | (b[kBodyMaxAngVel] << 8)));
+    b[kBodyMaxLinVel] = std::max(b[kBodyMaxLinVel], kDrivenMaxVel);
+    b[kBodyMaxAngVel] = std::max(b[kBodyMaxAngVel], kDrivenMaxVel);
+}
+void restore_caps(const uint8_t* body) {
+    const auto it = g_raised_caps.find(body);
+    if (it == g_raised_caps.end()) return;
+    if (*reinterpret_cast<void* const*>(body + kEntityWorld)) {
+        uint8_t* b = const_cast<uint8_t*>(body);
+        b[kBodyMaxLinVel] = uint8_t(it->second & 0xFF);
+        b[kBodyMaxAngVel] = uint8_t(it->second >> 8);
+    }
+    g_raised_caps.erase(it);
+}
+
 // `restore`: a driven chunk's Havok body moves on its own again (given back after the scan: changing a body's motion
 // can move it between the islands being walked); without it, it is made again at once and stays keyframed.
 void drop_vehicle(size_t i, bool restore = true, bool quiet = false) {
@@ -1558,6 +1590,7 @@ void drop_vehicle(size_t i, bool restore = true, bool quiet = false) {
         // velocity and spin, without gravity, for good (the chunks floating in the sky of a session that filled the slots).
         if (restore) g_keyframe_now.erase(std::remove(g_keyframe_now.begin(), g_keyframe_now.end(), v.handle), g_keyframe_now.end());
     }
+    if (!*reinterpret_cast<void* const*>(v.body + kEntityWorld)) g_raised_caps.erase(v.body);
     g_vehicle_of_body.erase(v.body);
     body_release(v.body);
     if (i + 1 < g_vehicles.size()) {
@@ -1625,7 +1658,12 @@ void make_chunk_slot(const float* player_pos) {
 }
 
 void restore_motions() {
-    for (const auto& [handle, motion] : g_motion_restores) set_motion(handle, motion);
+    uint8_t* const* bodies = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies));
+    for (const auto& [handle, motion] : g_motion_restores) {
+        if (handle != 0xFFFFFFFFu)
+            if (const uint8_t* body = bodies[handle]) restore_caps(body);
+        set_motion(handle, motion);
+    }
     g_motion_restores.clear();
 }
 
@@ -1826,6 +1864,7 @@ void scan_vehicles(const float* player_pos) {
             continue;
         }
         g_driven.erase(at->second.obj_handle);
+        g_raised_caps.erase(at->first);
         body_release(at->first);
         at = g_parked.erase(at);
     }
@@ -2809,16 +2848,65 @@ void apply_chunk_keyframes() {
     const float dt = rfg::global<float>(r::Frametime);
     if (!(dt > 1e-5f)) return;
     const auto apply = rfg::fn<void(__cdecl*)(uint32_t, const float*, const float*, float)>(r::havok_body_apply_hard_keyframe);
-    for (const VehicleProxy& v : g_vehicles) {
+    for (VehicleProxy& v : g_vehicles) {
+        v.kf_sent = false;
         if (!v.driven || !*reinterpret_cast<void* const*>(v.body + kEntityWorld)) continue;
         if (v.still_frames >= 4) {  // at rest there: no more keyframes
             stop_havok_body(v.body);
             continue;
         }
+        raise_caps(v.body);
+        float hp[3], hq[4];
+        body_pose(v.body, hp, hq);
+        point_of(hp, hq, v.mid, v.kf_from);
+        v.kf_dt = dt;
+        v.kf_sent = true;
         float rot[9];
         rows_from_quat(ipc::Quat{v.q[0], v.q[1], v.q[2], v.q[3]}, rot);
         apply(v.handle, rot, v.pos, dt);
     }
+}
+
+// A driven chunk's Havok body found far from where this frame's keyframe should have taken it (or, at rest, from where
+// the host has it) is put there. Two of the user's avenue sessions (2026-11-07/08) had a chunk off by over 1 m in
+// nearly every frame of the match, 3 km once, where others had 1-50 such frames: the chunk the game draws flickered
+// between two places. The first few each level go to the log with what the frame did, to find why.
+// In a replay (2026-11-09) every case was a target faster than Havok lets a keyframed body go: 1.5-1.7 m asked in one
+// 4-18 ms frame, 0.07-0.25 m done, the spin left at exactly 4.0 rad/s. A chunk turning faster than that in the host
+// lags in its turn too, which its middle may not show: put back past kPutBackTurn as well.
+constexpr float kPutBackM = 1.5f;
+constexpr float kPutBackTurn = 0.6f;  // rad, about 34 degrees
+constexpr uint32_t kPutBackLogs = 8;
+uint32_t g_put_back = 0, g_put_back_logged = 0;
+void put_back(VehicleProxy& v, const float at[3], const float sent[3], float off, float turn) {
+    if (++g_put_back % 100 == 0) LOG("debris offload: loose chunks put back on their targets %u times this level", g_put_back);
+    if (g_put_back_logged < kPutBackLogs) {
+        ++g_put_back_logged;
+        const float* lv = reinterpret_cast<const float*>(v.body + kBodyLinVel);
+        const float* av = reinterpret_cast<const float*>(v.body + kBodyAngVel);
+        auto dist = [](const float* a, const float* b) {
+            return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+        };
+        char kf[160] = "no keyframe this frame (at rest)";
+        if (v.kf_sent)
+            snprintf(kf, sizeof(kf), "its keyframe asked %.2f m in %.2f ms, Havok's step took it %.2f m (the frame "
+                     "now says %.2f ms)", double(dist(sent, v.kf_from)), double(v.kf_dt) * 1000.0,
+                     double(dist(at, v.kf_from)), double(rfg::global<float>(r::Frametime)) * 1000.0);
+        LOG("debris offload: loose chunk %08X (%u parts, %.1f t) was %.2f m and %.0f degrees from its target after "
+            "Havok's step: %s; Havok's velocity now %.1f m/s, %.1f rad/s; motion type %u, still for %u frames: put back",
+            v.obj_handle, v.parts, double(v.mass) / 1000.0, double(off), double(turn) * 57.29578, kf,
+            double(std::sqrt(lv[0] * lv[0] + lv[1] * lv[1] + lv[2] * lv[2])),
+            double(std::sqrt(av[0] * av[0] + av[1] * av[1] + av[2] * av[2])), unsigned(v.body[kBodyMotionType]),
+            unsigned(v.still_frames));
+    }
+    float rot[9];
+    rows_from_quat(ipc::Quat{v.q[0], v.q[1], v.q[2], v.q[3]}, rot);
+    rfg::fn<void(__cdecl*)(uint32_t, const float*, const float*)>(r::havok_body_set_pos_orient_by_handle)(v.handle, v.pos,
+                                                                                                         rot);
+    float* lvw = reinterpret_cast<float*>(const_cast<uint8_t*>(v.body) + kBodyLinVel);
+    float* avw = reinterpret_cast<float*>(const_cast<uint8_t*>(v.body) + kBodyAngVel);
+    lvw[0] = lvw[1] = lvw[2] = 0.0f;
+    avw[0] = avw[1] = avw[2] = 0.0f;
 }
 
 // Every frame: each proxy follows its body (a body that left the world takes its proxy with it), and each driven
@@ -2934,6 +3022,9 @@ void move_vehicles() {
                 g_follow_max = std::max(g_follow_max, off);
                 g_follow_peak = std::max(g_follow_peak, off);
                 g_follow_far += off > 1.0f ? 1 : 0;
+                const float dot = std::fabs(hq[0] * v.q[0] + hq[1] * v.q[1] + hq[2] * v.q[2] + hq[3] * v.q[3]);
+                const float turn = 2.0f * std::acos(std::min(dot, 1.0f));
+                if (off > kPutBackM || turn > kPutBackTurn) put_back(v, at, sent, off, turn);
             }
             if (v.body[kBodyMotionType] != kChunkMotionKeyframed) {  // the game made it move on its own again
                 set_motion(v.handle, kChunkMotionKeyframed);
@@ -3010,6 +3101,7 @@ void reset_vehicles() {  // the level's end (Havok's world still there) and star
     g_driven.clear();
     g_motion_restores.clear();
     g_keyframe_now.clear();
+    g_raised_caps.clear();
     AcquireSRWLockExclusive(&g_chunk_impulse_lock);
     g_chunk_impulses_queued.clear();
     ReleaseSRWLockExclusive(&g_chunk_impulse_lock);
@@ -5805,13 +5897,15 @@ void __cdecl d_level_shutdown() {
                 "taken off their bodies as the game broke them off %llu; bodies made again as their parts did not add "
                 "up %llu; scans that left a new chunk in Havok until the static world had caught up %u; chunk-frames "
                 "held without a pose %u; chunks given back to Havok without one %u; Havok bodies at most %.2f m from "
-                "their targets, over 1 m in %u chunk-frames",
+                "their targets, over 1 m in %u chunk-frames, put back there %u times",
                 static_cast<unsigned long long>(g_crushed), g_crushed_kg / 1000.0,
                 static_cast<unsigned long long>(g_parts_removed), static_cast<unsigned long long>(g_sync_mismatch),
-                g_chunks_waited_for_mirror, g_chunks_held, g_chunks_given_back, double(g_follow_peak), g_follow_far);
+                g_chunks_waited_for_mirror, g_chunks_held, g_chunks_given_back, double(g_follow_peak), g_follow_far,
+                g_put_back);
         g_chunks_waited_for_mirror = g_chunks_held = g_chunks_given_back = 0;
         g_follow_peak = 0;
         g_follow_far = 0;
+        g_put_back = g_put_back_logged = 0;
         log_chunk_ends();
         if (g_chunk_trace) fflush(g_chunk_trace);
         g_crushed = g_parts_removed = g_sync_mismatch = 0;
@@ -5953,6 +6047,13 @@ bool install(const Config& cfg) {
     g_player_slot = g_slots - 1;
     g_vehicle_first = g_player_slot - kVehicleSlots;  // the vehicles' proxies, below the player's capsule
     g_pieces.assign(g_slots, Piece{});
+    // Every slot takes the game's 32-bit address space, used or not: its record here, its tables and its place in the
+    // host's three pose snapshots (shared memory). Raised to 260,000, that was enough for the avenue's load to fail.
+    LOG("debris offload: %u body slots take %.0f MB of the game's address space (%.0f MB of tables, %.0f MB of shared "
+        "memory)", g_slots,
+        (double(g_slots) * double(sizeof(Piece) + sizeof(Spatial) + 1) + double(pxbridge::shared_bytes())) / 1048576.0,
+        double(g_slots) * double(sizeof(Piece) + sizeof(Spatial) + 1) / 1048576.0,
+        double(pxbridge::shared_bytes()) / 1048576.0);
     g_free.clear();
     for (uint32_t s = g_vehicle_first; s-- > 0;) g_free.push_back(s);  // pop_back hands out 0, 1, 2, ...
     reset_vehicles();

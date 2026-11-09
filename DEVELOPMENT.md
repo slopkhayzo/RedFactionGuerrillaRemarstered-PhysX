@@ -103,6 +103,17 @@ with the one before:
 Every session also logs the most of Havok's heap it used (`Havok's heap: at most ... MB in use`; the block is
 committed whole, so what it does not use is address space the game lacks), and each 32 MB step on the way.
 
+And the game's address space (`address space ...`, core/address_space.cpp, measured every 5 s on a thread of its own):
+at the main menu, in each level's first seconds, each new low 32 MB under the last one logged, a warning once a level
+below 160 MB free or a largest free block under 48 MB, and the level's lowest at its end. When it runs out the game
+stops drawing, crashes, or fails with "CreateTexture2D failed with error code 0x8007000e"; `debris offload: N body
+slots take ... MB` gives what `Experiment.PhysXMaxBodies` costs of it. At the main menu and in the first level it
+also logs what holds the address space (images, mapped views, private memory; the 16 biggest allocations, named), and
+a line when the NVIDIA driver's shader cache for the game (a `.nvph` file in `%LOCALAPPDATA%\NVIDIA\DXCache`, mapped
+whole) takes 64 MB or more. Measured at the main menu on 2026-11-09: the game's own pools leave 766 MB free;
+RenderInstances=65000 costs 33 MB, DebrisPool=32768 6 MB, HavokHeapMB its size, PhysXMaxBodies 0.4 KB a slot, and
+the shader cache 256 MB once it has grown past 16 MB.
+
 `Test.StreamReport=S` (test/stream_report.cpp) logs, S seconds into gameplay, what the streaming did with a map's asm
 containers: each failed container with its error, every chunk container (`.rfgchunkx`) and `ns_base` with its state
 and, for those still waiting, which of their primitives are not loaded, and each building mover (`rfg_mover`) with its

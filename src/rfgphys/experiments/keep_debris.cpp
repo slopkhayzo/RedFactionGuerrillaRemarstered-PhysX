@@ -733,6 +733,9 @@ bool install_keep_debris(const Config& cfg) {
     }
     if (cfg.exp_render_instances > 0)
         g_render_instances = cfg.exp_render_instances > 65000 ? 65000 : cfg.exp_render_instances;
+    if (cfg.exp_render_instances > 65000)
+        LOG("experiment RenderInstances=%d: 65,000 is the most (the game numbers render instances with 16 bits)",
+            cfg.exp_render_instances);
     if (!setup_render_instances()) return false;  // the effect filters always; the instances when asked
     session::add_flush_handler(&log_exhausted_factories);
     if (cfg.exp_debris_pool > int(kGameDebrisPool)) {

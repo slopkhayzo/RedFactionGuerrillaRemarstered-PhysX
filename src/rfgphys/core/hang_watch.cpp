@@ -26,6 +26,8 @@ constexpr double kBusyShare = 0.5;    // a thread using half a core or more over
 constexpr DWORD kProbeMs = 1000;
 constexpr double kFirstStallNoteMs = 5000;  // a gameplay frame held this long is noted in the log, then at 10 s, 20 s
 constexpr double kOtherStateHangMs = 60000;  // unattended runs: a menu or loading frame held this long
+constexpr double kMenuReportMs = 15000;      // in play: a menu frame held this long is reported, once
+constexpr int kLoad = 2;                     // GS_LOAD: a campaign save loads in up to about 30 s
 
 double g_hang_ms = 0;
 bool g_unattended = false;
@@ -165,7 +167,7 @@ DWORD WINAPI watch_main(void*) {
     SetThreadDescription(GetCurrentThread(), L"rfgphys hang watch");
     unsigned long long seen = gameloop::frames_ended();
     int64_t since = session::qpc();
-    bool told_idle = false;
+    bool told_idle = false, menu_reported = false;
     double next_note_ms = kFirstStallNoteMs;
     for (;;) {
         Sleep(1000);
@@ -184,17 +186,33 @@ DWORD WINAPI watch_main(void*) {
         // Unattended runs watch the others too, with a longer limit (four test runs froze loading a save, and the
         // user closed their windows).
         const bool gameplay = state == kGameplay;
-        if (frames != seen || (!gameplay && !g_unattended)) {
-            if (next_note_ms > kFirstStallNoteMs)  // a stall was noted: say that it ended
+        if (frames != seen) {
+            if (next_note_ms > kFirstStallNoteMs || menu_reported)  // a stall was noted: say that it ended
                 LOG("hang watch: frames go on (state %d) after %.0f s", gameloop::last_state(),
                     session::ticks_to_ms(session::qpc() - since) / 1000.0);
             seen = frames;
             since = session::qpc();
-            told_idle = false;
+            told_idle = menu_reported = false;
             next_note_ms = kFirstStallNoteMs;
             continue;
         }
         const double stalled = session::ticks_to_ms(session::qpc() - since);
+        if (!gameplay && !g_unattended) {
+            // In play a menu or loading screen may hold a frame for long, and the game is not ended for it. A frozen
+            // menu still leaves what the game's threads do in the log, once: the user closes the window, and a hang on
+            // the way back to the main menu after a long match (2026-11-07) left nothing to go on. Not before the
+            // first frame (about 12 s) nor while a level loads.
+            if (!menu_reported && frames > 0 && state != kLoad && stalled >= kMenuReportMs) {
+                menu_reported = true;
+                const std::vector<Busy> busy = busy_threads();
+                if (gameloop::frames_ended() == seen) {
+                    LOG("hang watch: a menu frame has not ended for %.0f s; the game goes on, what its threads do:",
+                        (stalled + kProbeMs) / 1000.0);
+                    report(stalled + kProbeMs, state, busy);
+                }
+            }
+            continue;
+        }
         const double limit = gameplay ? g_hang_ms : std::max(g_hang_ms, kOtherStateHangMs);
         // A freeze the user ends before the report still leaves a trace: frames stopped, rather than a game that ran
         // on without showing it.

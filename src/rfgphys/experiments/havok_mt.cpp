@@ -67,7 +67,11 @@ constexpr uint32_t kRefLockCount = 0x0C, kRefLockSection = 0x1C;
 // hkFreeListMemorySystem::m_solverAllocator (+0x94), whose lock is at +0x224.
 constexpr uint32_t kSolverAllocatorLock = 0x94 + 0x224;
 constexpr SIZE_T kWorkerStack = 2 << 20;
-constexpr double kHangMs = 5000;  // a step this long is a deadlock (heavy steps take a few ms)
+// A step this long is noted in the log (heavy steps take a few ms), and one of HangSeconds (30 s) is a deadlock. It used
+// to be 5 s, which ended a replay whose step waited 5 s on the game's own log file inside a contact callback
+// (keen::debug::nativePrint's WriteFile, 2026-11-09; the user's machine is a VM, its disks now and then retry an IO).
+constexpr double kSlowStepMs = 5000;
+double g_hang_ms = 30000;
 
 struct JobHandlerFuncs {    // hkJobQueue::hkJobHandlerFuncs
     void* const* process;   // JobStatus (*)(hkJobQueue&, JobQueueEntry&), indexed by job subtype
@@ -190,12 +194,18 @@ void report_hang(double ms) {
 // Ends the process when a multithreaded step deadlocks, so unattended runs never hang (the log says where).
 DWORD WINAPI watch_main(void*) {
     SetThreadDescription(GetCurrentThread(), L"rfgphys havok watch");
+    int64_t noted = 0;
     for (;;) {
         Sleep(250);
         const int64_t start = g_step_start.load(std::memory_order_acquire);
         if (!start) continue;
         const double ms = session::ticks_to_ms(session::qpc() - start);
-        if (ms < kHangMs) continue;
+        if (ms >= kSlowStepMs && noted != start) {
+            noted = start;
+            LOG("experiment HavokThreads: a multithreaded Havok step has run for %.0f ms (slow storage, a paused machine "
+                "or a deadlock); after %.0f s it is taken for a deadlock", ms, g_hang_ms / 1000.0);
+        }
+        if (ms < g_hang_ms) continue;
         report_hang(ms);
         session::exit_now("experiment HavokThreads: a multithreaded Havok step deadlocked (hang report in the log)");
     }
@@ -659,6 +669,7 @@ bool install_havok_mt(const Config& cfg) {
     g_requested = std::min(cfg.exp_havok_threads, kMaxThreads - 1);
     g_min_island_size = cfg.exp_havok_min_island_size;
     g_jobs_on_sim_thread = cfg.test_havok_jobs_on_sim_thread;
+    g_hang_ms = std::max(cfg.hang_s, 10) * 1000.0;
     bool ok = contacts::install();
     ok &= Guarded<0, void*>::install(r::GeneralCollisionListener__contactPointRemovedCallback,
                                      "GeneralCollisionListener::contactPointRemovedCallback");

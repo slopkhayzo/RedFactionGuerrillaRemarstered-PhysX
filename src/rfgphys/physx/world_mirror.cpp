@@ -29,6 +29,11 @@ namespace ipc = rfgphysx;
 constexpr int kGameplay = 1;                      // GS_GAMEPLAY
 constexpr double kScanEveryMs = 250;
 constexpr double kScanBudgetMs = 20;              // export work per scan; the rest waits for the next one
+// Commands waiting for room in the ring, at most, before a scan exports more bodies; the rest wait for later scans.
+// Without it the avenue's export queued 54 MB at once, in 390,000 records of their own, as the level loaded: memory
+// the game, 32-bit, was short of then (a crash in this queue, and the game's own "out of memory" at the avenue's load
+// with more body slots, 2026-11-07/09). The host takes the commands no faster than it cooks them anyway.
+constexpr size_t kOutboxCap = size_t(6) << 20;
 constexpr uint32_t kChunkTriangles = 16384;       // triangles per StaticMesh record
 constexpr uint32_t kDestroyableExisting = 0x48;   // rfg_destroyable_shape::num_existing_child_shapes
 
@@ -74,6 +79,8 @@ std::unordered_map<const uint8_t*, Mirrored> g_bodies;  // Havok entity -> its m
 uint32_t g_next_group = 1;
 std::deque<std::vector<uint8_t>> g_outbox;
 size_t g_outbox_bytes = 0;
+size_t g_outbox_peak = 0;         // the most waiting at once, since the level's mirror began
+uint64_t g_export_bytes = 0;      // queued since then
 double g_next_scan = 0;
 double g_next_change_log = 0;
 uint32_t g_log_added = 0, g_log_changed = 0, g_log_removed = 0, g_log_reused = 0;
@@ -87,6 +94,8 @@ FrameStats g_stats{};
 
 void queue(std::vector<uint8_t>&& record) {
     g_outbox_bytes += record.size();
+    g_export_bytes += record.size();
+    g_outbox_peak = std::max(g_outbox_peak, g_outbox_bytes);
     g_outbox.push_back(std::move(record));
 }
 
@@ -349,7 +358,7 @@ void scan() {
     const int n = *reinterpret_cast<const int*>(island + 0x50);
     const int64_t t0 = session::qpc();
     for (auto& [e, m] : g_bodies) m.seen = false;
-    bool budget_left = true;
+    bool budget_left = g_outbox_bytes < kOutboxCap;
     uint32_t added = 0, changed = 0, removed = 0;
     uint32_t reused = 0;
     for (int i = 0; i < n; ++i) {
@@ -389,7 +398,8 @@ void scan() {
         } else {
             continue;  // next scan
         }
-        if (session::ticks_to_ms(session::qpc() - t0) > kScanBudgetMs) budget_left = false;
+        if (session::ticks_to_ms(session::qpc() - t0) > kScanBudgetMs || g_outbox_bytes >= kOutboxCap)
+            budget_left = false;
     }
     for (auto it = g_bodies.begin(); it != g_bodies.end();) {
         if (!it->second.seen) {
@@ -409,8 +419,9 @@ void scan() {
         g_export_done_ms = session::since_start_ms();
         uint32_t unsupported = 0;
         for (uint32_t c : g_unsupported) unsupported += c;
-        LOG("world mirror: %zu Havok bodies exported (%.1f MB of commands queued)%s", g_bodies.size(),
-            double(g_outbox_bytes) / (1024.0 * 1024.0), unsupported ? "; leaf shapes left out:" : "");
+        LOG("world mirror: %zu Havok bodies exported (%.1f MB of commands, at most %.1f MB of them waiting at once)%s",
+            g_bodies.size(), double(g_export_bytes) / (1024.0 * 1024.0), double(g_outbox_peak) / (1024.0 * 1024.0),
+            unsupported ? "; leaf shapes left out:" : "");
         for (int t = 0; t <= hs::kTypeCount; ++t)
             if (g_unsupported[t]) LOG("  %s: %u", hs::type_name(uint8_t(t)), g_unsupported[t]);
         // The game's collision models (every distinct piece shape of every loaded chunk, the terrain's, ...) share one
@@ -604,6 +615,8 @@ void on_frame(int game_state) {
             for (auto& [e, m] : g_bodies) remove_group(m.group);
             g_bodies.clear();
             g_initial_done = false;
+            g_export_bytes = 0;
+            g_outbox_peak = g_outbox_bytes;
             g_host_has_world = false;
             g_check_state = Check::Idle;
         }

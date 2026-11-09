@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "core/address_space.h"
 #include "core/build_check.h"
 #include "core/config.h"
 #include "core/gameloop.h"
@@ -135,6 +136,7 @@ void init() {
     harness::install(cfg);
     fly_camera::install(cfg);  // never with the harness: both take over the game's input
     hang_watch::start(cfg);
+    address_space::install(cfg);
     if (!hooks::enable_all()) return;
     if (cfg.telemetry && cfg.profiler) profiler::start(cfg);
     session::start_watchdog();

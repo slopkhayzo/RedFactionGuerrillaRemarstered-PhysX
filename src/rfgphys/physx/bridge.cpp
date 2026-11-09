@@ -266,6 +266,7 @@ bool install(const Config& cfg) {
 bool active() { return g_state == State::Starting || g_state == State::Ready; }
 bool ready() { return g_state == State::Ready; }
 uint32_t max_bodies() { return g_ctl ? g_ctl->max_bodies : 0; }
+uint32_t shared_bytes() { return g_ctl ? g_ctl->total_size : 0; }
 float step_hz() { return g_ctl ? g_ctl->step_hz : 60.0f; }
 uint32_t frame() { return g_frame; }
 
