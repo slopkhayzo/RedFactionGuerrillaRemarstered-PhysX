@@ -16,11 +16,13 @@
 #include <unordered_set>
 #include <vector>
 #include <deque>
+#include <new>
 
 #include "core/config.h"
 #include "core/gameloop.h"
 #include "core/log.h"
 #include "core/session.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "harness/harness.h"
 #include "hooks/hooks.h"
@@ -48,29 +50,35 @@ constexpr uint32_t kLowLogged = 16;
 uint32_t g_low_slots[kLowLogged], g_low_logged = 0;
 
 // general_mover / object fields (01 §10.10, research/docs/06 §13).
-constexpr uint32_t kObjFlags = 0x54, kObjHavokHandle = 0x4C, kObjAttach = 0x40;  // child_constraint, host_constraint, attach_info
+// OpenRFG64: struct offsets by name (game/layout.h); flags and the chunks' file records stay constants.
+const uint32_t &kObjFlags = layout::object_flags, &kObjHavokHandle = layout::object_havok_handle,
+               &kObjAttach = layout::object_attach;  // child_constraint, host_constraint, attach_info (3 pointers)
 constexpr uint8_t kObjDestroyed = 0x10;
-constexpr uint32_t kObjHandle = 0x6C, kObjType = 0x7E;
+const uint32_t &kObjHandle = layout::object_handle, &kObjType = layout::object_type;
 // object::srid: the stream2 container the object's data comes from; a mover's is its building's chunk (mesh,
 // materials, destruction data: what the render instance draws). The object holds a reference on it while byte +0x55
 // of its flags has 8 (requested) or 0x10 (streamed in); world::free_object gives it back.
-constexpr uint32_t kObjSrid = 0x98, kObjStreamFlags = 0x55;
+const uint32_t &kObjSrid = layout::object_srid, &kObjStreamFlags = layout::object_stream_flags;
 constexpr uint8_t kObjStreamHeld = 0x18;
-constexpr uint32_t kMoverFlags = 0xE0, kMoverLoadBalanced = 4, kMoverFading = 0x800;
-constexpr uint32_t kMoverChunkUid = 0xA4;  // object_mover::chunk_uid: (c_chunk_base::internal_uid << 16) | pool index
+const uint32_t& kMoverFlags = layout::mover_flags;
+constexpr uint32_t kMoverLoadBalanced = 4, kMoverFading = 0x800;
+const uint32_t& kMoverChunkUid = layout::mover_chunk_uid;  // object_mover::chunk_uid: (c_chunk_base::internal_uid << 16) | pool index
 constexpr uint32_t kNoChunk = 0xFFFFFFFFu;
-constexpr uint32_t kGmRenderInstance = 0x118;  // general_mover::rdd.model_instance_p
-constexpr uint32_t kGmOriginalObject = 0x128;  // general_mover::original_object: the object it broke off
+const uint32_t& kGmRenderInstance = layout::gm_render_instance;  // general_mover::rdd.model_instance_p
+const uint32_t& kGmOriginalObject = layout::gm_original_object;  // general_mover::original_object: the object it broke off
 constexpr uint32_t kNoObject = 0xFFFFFFFFu;
 // world_zone: state (2: loaded), its obj_zone, its name.
-constexpr uint32_t kZoneState = 0x58, kZoneObj = 0xD4, kZoneName = 0x18;
+const uint32_t &kZoneState = layout::zone_state, &kZoneObj = layout::zone_obj, &kZoneName = layout::zone_name;
 constexpr int32_t kZoneLoaded = 2;
 // World lists: all_objects.elt, subtype_objects[OT_SUB_MOVER_GENERAL] (elt, num).
-constexpr uint32_t kWorldAllObjects = 0x64, kWorldGeneralMovers = 0x3C4, kWorldGeneralMoverCount = 0x3CC;
+const uint32_t &kWorldAllObjects = layout::world_all_objects, &kWorldGeneralMovers = layout::world_general_movers,
+               &kWorldGeneralMoverCount = layout::world_general_mover_count;
 // hkpRigidBody: motion at +0xE0 (type +8, m_inertiaAndMassInv +0xC0, m_linearVelocity +0xD0, m_angularVelocity +0xE0).
-constexpr uint32_t kBodyMotionType = 0xE8, kBodyInvMass = 0x1AC, kBodyLinVel = 0x1B0, kBodyAngVel = 0x1C0;
+const uint32_t &kBodyMotionType = layout::hk_entity_motion_type, &kBodyInvMass = layout::hk_body_inv_mass,
+               &kBodyLinVel = layout::hk_body_lin_vel, &kBodyAngVel = layout::hk_body_ang_vel;
 // rl_scene_entity: rotation rows (rvec, uvec, fvec) at +0x08, position at +0x2C, flags at +0x40, partition at +0x9C.
-constexpr uint32_t kInstRot = 0x08, kInstPos = 0x2C, kInstFlags = 0x40, kInstPartition = 0x9C;
+const uint32_t &kInstRot = layout::inst_rot, &kInstPos = layout::inst_pos, &kInstFlags = layout::inst_flags,
+               &kInstPartition = layout::inst_partition;
 constexpr uint32_t kPlayerShape = 0xFFFF0001u;
 
 bool g_on = false;
@@ -87,7 +95,7 @@ uint32_t g_batch_restored = 0;  // bits set again (they had been cleared), for t
 // indices plus GPU buffers, inst +0x158). Drawn batched, a piece never uses it. The render task gives the pieces'
 // meshes back (rl_delete_mesh_recompile_data, the game's own deferred delete; a few hundred a frame, within its 2,048
 // queue slots), and no new ones are built for them. The set of the pieces' instances is read by that hook.
-constexpr uint32_t kInstRecompileData = 0x158;
+const uint32_t& kInstRecompileData = layout::inst_recompile_data;
 constexpr uint32_t kDropPerFrame = 400;
 bool g_drop_meshes = false;
 uint32_t g_meshes_dropped = 0, g_recompiles_skipped = 0;
@@ -99,7 +107,9 @@ std::unordered_set<const void*> g_piece_set;
 // every piece's instance every frame). Any thread queues.
 SRWLOCK g_fix_lock = SRWLOCK_INIT;
 std::vector<uint8_t*> g_fix_queue;
-uint32_t g_slots = 0, g_player_slot = 0;
+// OpenRFG64: the player's capsule is slot 0, the vehicles' proxies the next kVehicleSlots, and the pieces have
+// [g_debris_first, g_slots). g_slots grows during the session (grow_slots), up to g_slots_max.
+uint32_t g_slots = 0, g_player_slot = 0, g_debris_first = 0, g_slots_max = 0;
 constexpr uint32_t kNoStandIn = 0xFFFFFFFFu;
 constexpr uint32_t kNoPile = 0xFFFFFFFFu;
 struct Piece {
@@ -128,8 +138,42 @@ struct Piece {
     uint32_t srid = 0;        // the chunk container its general_mover held a reference on (0: none): see g_srid_pieces
     uint32_t chunk_uid = kNoChunk;  // its building's chunk
     uint32_t original = kNoObject;  // the object it broke off (its general_mover's original_object)
+    double born_ms = 0;       // OpenRFG64: when it was taken over (young pieces are given up last)
 };
-std::vector<Piece> g_pieces;
+// OpenRFG64: the records by slot. The slots grow during the session and a record may not move (references to
+// one are kept across calls), so address space for the most slots is reserved at start and committed as they grow.
+template <typename T>
+class SlotArray {
+public:
+    bool reserve(size_t most) {
+        if (m_data) return most <= m_most;
+        void* p = VirtualAlloc(nullptr, most * sizeof(T), MEM_RESERVE, PAGE_READWRITE);
+        if (!p) return false;
+        m_data = static_cast<T*>(p);
+        m_most = most;
+        return true;
+    }
+    bool grow(size_t n, const T& init) {
+        if (n <= m_size) return true;
+        if (n > m_most || !VirtualAlloc(m_data + m_size, (n - m_size) * sizeof(T), MEM_COMMIT, PAGE_READWRITE))
+            return false;
+        for (size_t i = m_size; i < n; ++i) new (m_data + i) T(init);
+        m_size = n;
+        return true;
+    }
+    T& operator[](size_t i) { return m_data[i]; }
+    const T& operator[](size_t i) const { return m_data[i]; }
+    size_t size() const { return m_size; }
+    T* begin() { return m_data; }
+    T* end() { return m_data + m_size; }
+    const T* begin() const { return m_data; }
+    const T* end() const { return m_data + m_size; }
+
+private:
+    T* m_data = nullptr;
+    size_t m_size = 0, m_most = 0;
+};
+SlotArray<Piece> g_pieces;
 std::vector<uint32_t> g_free;
 // A freed slot waits here until the snapshots show it empty. Until the host has heard, they show its last body, alive, and
 // a new body put in the slot went where that one was for a few frames (research/docs/08 §13): a chunk warping and back.
@@ -395,10 +439,10 @@ void release_chunk_refs() {
 
 uint8_t* world() { return static_cast<uint8_t*>(rfg::addr(r::World)); }
 
-constexpr uint32_t kBodyFilterInfo = 0x2C;  // hkpEntity: m_collidable.m_broadPhaseHandle.m_collisionFilterInfo
+const uint32_t& kBodyFilterInfo = layout::hk_entity_filter_info;  // hkpEntity: m_collidable.m_broadPhaseHandle.m_collisionFilterInfo
 // hkpWorldObject::m_properties: hkpProperty {key, pad, value (8 bytes)} at +0x7C, count at +0x80. The game keeps
 // the object at key 0 (object_from_world_obj), the physical and effect materials at 3 and 4.
-constexpr uint32_t kBodyProps = 0x7C, kBodyPropCount = 0x80;
+const uint32_t &kBodyProps = layout::hk_body_properties, &kBodyPropCount = layout::hk_body_property_count;
 uint32_t body_property(const uint8_t* body, uint32_t key) {
     const uint8_t* props = *reinterpret_cast<uint8_t* const*>(body + kBodyProps);
     const int n = *reinterpret_cast<const int*>(body + kBodyPropCount);
@@ -491,7 +535,7 @@ std::vector<std::pair<uint32_t, uint8_t*>> g_waiting_list;  // this pass's waiti
 
 // The game's object behind a waiting piece, if it is still the same live general mover; null when the game removed it.
 uint8_t* waiting_object(uint32_t handle, const uint8_t* inst) {
-    uint8_t* obj = rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(r::world__object_from_handle)(world(), nullptr,
+    uint8_t* obj = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(r::world__object_from_handle)(world() RFG_EDX_ARG,
                                                                                                        handle);
     if (!obj || obj[kObjType] != 2 || obj[kObjType + 1] != 0 || (obj[kObjFlags] & kObjDestroyed) ||
         *reinterpret_cast<uint8_t**>(obj + kGmRenderInstance) != inst)
@@ -507,17 +551,17 @@ void push_new_piece_by_blow(const uint8_t* body, uint32_t handle, uint32_t now_m
 // vanished. Pieces in PhysX stay visible at any distance, so the pieces still waiting in Havok do too: they fade with
 // the threshold the game gives moving debris (back in when faded, never out). Fades for deletion are unchanged.
 constexpr uint32_t kMoverPermanent = 2;  // never distance-faded by the game either
-constexpr uint32_t kObjRenderAlpha = 0xA0;  // uint16, Lparam_super_overbrighten when fully visible
+const uint32_t& kObjRenderAlpha = layout::mover_render_alpha;  // uint16, Lparam_super_overbrighten when fully visible
 constexpr float kNoDistanceFade = 1e8f;  // the game's threshold for moving debris (squared metres)
-void(__fastcall* o_update_render_opacity)(uint8_t*, void*) = nullptr;
-void __fastcall d_update_render_opacity(uint8_t* mover, void* edx) {
+void(__fastcall* o_update_render_opacity)(uint8_t* RFG_EDX_TYPE) = nullptr;
+void __fastcall d_update_render_opacity(uint8_t* mover RFG_EDX_PARAM) {
     const uint32_t mflags = *reinterpret_cast<const uint32_t*>(mover + kMoverFlags);
     if (g_on && (mflags & kMoverLoadBalanced) && !(mflags & kMoverPermanent) &&
         *reinterpret_cast<const int32_t*>(mover + kObjHavokHandle) != -1 && rfg::global<uint8_t>(r::Multiplayer) == 0) {
         rfg::fn<int(__thiscall*)(uint8_t*, float, float)>(r::object_mover__handle_fading)(mover, 0.0f, kNoDistanceFade);
         return;
     }
-    o_update_render_opacity(mover, edx);
+    o_update_render_opacity(mover RFG_EDX_PASS);
 }
 
 // world::object_physically_in_original_zone(object*): whether the object's position lies in the 511 m square of the
@@ -539,9 +583,9 @@ uint64_t g_zone_deleted[kZoneReasons] = {};
 const void* g_zone_check_return = nullptr;
 const void* g_chunk_zone_check_return = nullptr;  // in object_mover::check_for_movement_delete
 std::atomic<uint32_t> g_chunks_kept_in_zone{0};
-bool(__fastcall* o_in_original_zone)(void*, void*, uint8_t*) = nullptr;
-bool __fastcall d_in_original_zone(void* w, void* edx, uint8_t* obj) {
-    const bool in = o_in_original_zone(w, edx, obj);
+bool(__fastcall* o_in_original_zone)(void* RFG_EDX_TYPE, uint8_t*) = nullptr;
+bool __fastcall d_in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj) {
+    const bool in = o_in_original_zone(w RFG_EDX_PASS, obj);
     // A loose chunk in the host goes where the host takes it, past a zone's edge too.
     if (!in && obj && _ReturnAddress() == g_chunk_zone_check_return && g_driven.count(*reinterpret_cast<const uint32_t*>(obj + kObjHandle))) {
         g_chunks_kept_in_zone.fetch_add(1, std::memory_order_relaxed);
@@ -556,7 +600,7 @@ bool __fastcall d_in_original_zone(void* w, void* edx, uint8_t* obj) {
         return in;
     }
     const uint32_t mflags = *reinterpret_cast<const uint32_t*>(obj + kMoverFlags);
-    const uint32_t* attach = reinterpret_cast<const uint32_t*>(obj + kObjAttach);
+    void* const* attach = reinterpret_cast<void* const*>(obj + kObjAttach);  // three pointers
     const bool has_instance = *reinterpret_cast<uint8_t* const*>(obj + kGmRenderInstance) != nullptr;
     const bool has_body = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle) != 0xFFFFFFFFu;
     const int why = !(mflags & kMoverLoadBalanced)         ? kZoneNotDebris
@@ -609,7 +653,7 @@ void adopt() {
         if (!(mflags & kMoverLoadBalanced) || (mflags & kMoverFading) || is_fading(obj)) continue;
         uint8_t* inst = *reinterpret_cast<uint8_t**>(obj + kGmRenderInstance);
         if (!inst) continue;
-        const uint32_t* attach = reinterpret_cast<const uint32_t*>(obj + kObjAttach);
+        void* const* attach = reinterpret_cast<void* const*>(obj + kObjAttach);  // three pointers
         if (attach[0] || attach[1] || attach[2]) continue;  // constrained or attached: stays with the game
         const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle);
         if (handle == 0xFFFFFFFFu) continue;
@@ -704,6 +748,7 @@ void adopt() {
         p = Piece{};
         p.inst = inst;
         p.fresh = 1;
+        p.born_ms = session::since_start_ms();
         p.srid = holds ? srid : 0;
         if (p.srid) {
             uint32_t& sharing = g_srid_pieces[p.srid];
@@ -815,9 +860,9 @@ void queue_instance_fix(uint8_t* inst) {
 
 // rl_destroyable_model_instance::set_compiled_cache_data(rl_mesh_recompile_data*, rl_mesh_recompile_parameters*): a
 // compiled mesh arrives (rl_mesh_recompile_finalize); it returns the one it replaces.
-void*(__fastcall* o_set_compiled)(uint8_t*, void*, void*, void*) = nullptr;
-void* __fastcall d_set_compiled(uint8_t* inst, void* edx, void* data, void* params) {
-    void* old = o_set_compiled(inst, edx, data, params);
+void*(__fastcall* o_set_compiled)(uint8_t* RFG_EDX_TYPE, void*, void*) = nullptr;
+void* __fastcall d_set_compiled(uint8_t* inst RFG_EDX_PARAM, void* data, void* params) {
+    void* old = o_set_compiled(inst RFG_EDX_PASS, data, params);
     AcquireSRWLockShared(&g_piece_set_lock);
     const bool piece = g_piece_set.count(inst) != 0;
     ReleaseSRWLockShared(&g_piece_set_lock);
@@ -961,7 +1006,7 @@ constexpr float kPlayerJump = 3.0f;  // m in one frame: a teleport, not a move
 void player_proxy() {
     uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
     if (!player) return;
-    const float* p = reinterpret_cast<const float*>(player + 0x04);
+    const float* p = reinterpret_cast<const float*>(player + layout::object_pos);
     const ipc::Vec3 centre{p[0], p[1] + 0.9f, p[2]};
     if (!g_player_ready) {
         // A capsule as a hull: two rings of 12 points, 0.35 m radius, 1.1 m apart, plus the poles.
@@ -1017,8 +1062,8 @@ constexpr float kVehicleJump = 4.0f;          // m in one frame: a teleport (a s
 constexpr size_t kProxyMaxParts = 256;        // a body of more convex parts is left out (a large part of a building)
 constexpr int8_t kObjTypeMover = 2, kSubTypeMoverRfg = 1;  // OT_MOVER, OT_SUB_MOVER_RFG
 constexpr int8_t kObjTypeVehicle = 3;         // OT_VEHICLE (walkers too)
-constexpr uint32_t kEntityWorld = 0x8;        // hkpWorldObject::m_world: null once the body left the world
-constexpr uint32_t kDestroyableExisting = 0x48;  // rfg_destroyable_shape::num_existing_child_shapes
+const uint32_t& kEntityWorld = layout::hk_world_object_world;        // hkpWorldObject::m_world: null once the body left the world
+const uint32_t& kDestroyableExisting = layout::destroyable_existing_children;  // rfg_destroyable_shape::num_existing_child_shapes
 uint32_t g_vehicle_first = 0;                 // first of the proxy slots
 
 // A tracked body holds a reference of ours, so its memory stays valid until we let go of it, whatever the game does.
@@ -1117,7 +1162,7 @@ constexpr uint8_t kChunkMotionKeyframed = 4;     // hkpMotion::MOTION_KEYFRAMED
 constexpr uint8_t kChunkMotionFixed = 5;         // hkpMotion::MOTION_FIXED
 constexpr float kChunkFlySpeed = 0.5f;           // m/s: a chunk slower than this just waits for its first pose
 constexpr double kChunkFlyMs = 150.0;            // and no chunk flies on longer than this
-constexpr uint32_t kDestroyableMass = 0x80;      // rfg_destroyable_shape::mass
+const uint32_t& kDestroyableMass = layout::destroyable_mass;      // rfg_destroyable_shape::mass
 constexpr uint32_t kChunkShapeBase = 0xC0000000u; // host shape ids of chunks: one per proxy slot, made anew each time
 constexpr size_t kChunkMaxParts = 20000;          // the largest types have about 13,000 pieces
 std::vector<std::pair<uint32_t, uint8_t>> g_motion_restores;  // Havok handle, motion type: after the scan
@@ -1278,7 +1323,7 @@ float chunk_mass(const uint8_t* body) {
 // A chunk in the host, crushed from below, sinks as it loses its parts, while its bounds go on holding what it was: its
 // bounds reached the volume with the rest of it well above the ground, and hundreds of parts were gone in a frame
 // (research/docs/08 §15). The host keeps a chunk on the ground; it has no need of this.
-constexpr uint32_t kDestroyableBmin = 0x68;      // rfg_destroyable_shape::local_bmin, then local_bmax
+const uint32_t& kDestroyableBmin = layout::destroyable_bmin;      // rfg_destroyable_shape::local_bmin, then local_bmax
 void(__cdecl* o_delete_outside)(uint8_t*) = nullptr;
 std::atomic<uint32_t> g_chunks_kept_inside{0}, g_chunks_kept_logged{0};
 uint32_t g_chunk_kept_handles[16];
@@ -1412,9 +1457,9 @@ void set_motion(uint32_t handle, uint8_t motion) {
 // rfg_subpiece_base (0x40) for each key: its centre of mass in the chunk's frame, its mass, flag 0x20 for an
 // indestructible material.
 constexpr uint8_t kPartInBody = 0, kPartGone = 2;
-constexpr uint32_t kDestroyableObjects = 0x24, kDestroyableParent = 0x3C;
+const uint32_t &kDestroyableObjects = layout::destroyable_objects, &kDestroyableParent = layout::destroyable_parent;
 constexpr uint32_t kSubpieceSize = 0x24, kSubpieceOwner = 0x08, kSubpieceFlags = 0x18, kSubpieceGone = 0x100000;
-constexpr uint32_t kBaseObjects = 0x04, kBaseNumObjects = 0x0C;
+const uint32_t &kBaseObjects = layout::base_destroyable_objects, &kBaseNumObjects = layout::base_destroyable_num_objects;
 constexpr uint32_t kBaseObjectSize = 0x40, kBaseCentre = 0x24, kBaseMass = 0x30, kBaseFlags = 0x3F;
 constexpr uint8_t kBaseIndestructible = 0x20;
 
@@ -1450,7 +1495,7 @@ bool place_parts(const uint8_t* shape, const uint32_t* keys, const uint8_t* stat
             if (*reinterpret_cast<const uint32_t*>(sub + kSubpieceFlags) & kSubpieceGone) continue;
             const int32_t off = *reinterpret_cast<const int32_t*>(sub + kSubpieceOwner);
             if (off == 0 || off == -1) continue;
-            place[i] = sub + kSubpieceOwner + off == shape ? 1 : 2;
+            place[i] = rfg::rel_ptr(sub + kSubpieceOwner) == shape ? 1 : 2;
         }
         return true;
     } __except (subpiece_read_filter(GetExceptionCode())) {
@@ -1463,7 +1508,7 @@ bool subpiece_base(const uint8_t* shape, uint32_t key, float centre[3], float& m
     __try {
         const uint8_t* parent = *reinterpret_cast<uint8_t* const*>(shape + kDestroyableParent);
         if (!parent || key >= *reinterpret_cast<const uint32_t*>(parent + kBaseNumObjects)) return false;
-        const uint8_t* base = parent + kBaseObjects + *reinterpret_cast<const int32_t*>(parent + kBaseObjects);
+        const uint8_t* base = rfg::rel_ptr(parent + kBaseObjects);
         const uint8_t* b = base + size_t(key) * kBaseObjectSize;
         const float* c = reinterpret_cast<const float*>(b + kBaseCentre);
         centre[0] = c[0], centre[1] = c[1], centre[2] = c[2];
@@ -1530,7 +1575,7 @@ uint32_t vehicle_shape(const uint8_t* body, float mid[3], float& half) {
 constexpr uint32_t kLayerDebris = 41;  // COLLIDE_RFG_NORMAL_FAST
 bool layer_bit(uint32_t a, uint32_t b) {
     const uint8_t* filter = rfg::global<uint8_t*>(r::Havok_filter);
-    const uint32_t* table = filter ? *reinterpret_cast<const uint32_t* const*>(filter + 0x34) : nullptr;
+    const uint32_t* table = filter ? *reinterpret_cast<const uint32_t* const*>(filter + layout::game_filter_layer_table) : nullptr;
     if (!table || a >= 128 || b >= 128) return false;
     const uint32_t bit = a * 128 + b;
     return (table[bit >> 5] >> (bit & 31)) & 1u;
@@ -1553,7 +1598,7 @@ void body_pose(const uint8_t* body, float pos[3], float q[4]) {
 // chunk the host turned faster than 4 rad/s fell further behind in its turn every frame (a chunk off by over 1 m in
 // nearly every frame of two of the user's sessions; every chunk put back in a replay had exactly 4.0 rad/s, 2026-11-09).
 // A driven chunk gets 116 (about 98 m/s and 98 rad/s); the game's own codes come back with its motion.
-constexpr uint32_t kBodyMaxLinVel = 0x19A, kBodyMaxAngVel = 0x19B;
+const uint32_t &kBodyMaxLinVel = layout::hk_body_max_lin_vel, &kBodyMaxAngVel = layout::hk_body_max_ang_vel;
 constexpr uint8_t kDrivenMaxVel = 116;
 std::unordered_map<const uint8_t*, uint16_t> g_raised_caps;  // Havok body -> its own codes (linear | angular << 8)
 void raise_caps(const uint8_t* body) {
@@ -1678,13 +1723,13 @@ void scan_vehicles(const float* player_pos) {
     uint32_t chunks_in_range = 0, chunks_no_driver = 0;
     bool mirror_asked = false, mirror_ready = false;
     for (uint32_t list = 0; list < 2; ++list) {  // m_activeSimulationIslands, m_inactiveSimulationIslands
-        const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + 0x28 + list * 0xC);
-        const int ni = *reinterpret_cast<const int*>(hw + 0x2C + list * 0xC);
+        const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + (list ? layout::hk_world_inactive_islands : layout::hk_world_active_islands));
+        const int ni = *reinterpret_cast<const int*>(hw + (list ? layout::hk_world_inactive_island_count : layout::hk_world_active_island_count));
         for (int i = 0; islands && i < ni; ++i) {
             const uint8_t* island = islands[i];
             if (!island) continue;
-            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + 0x4C);
-            const int ne = *reinterpret_cast<const int*>(island + 0x50);
+            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + layout::hk_island_entities);
+            const int ne = *reinterpret_cast<const int*>(island + layout::hk_island_entity_count);
             for (int e = 0; entities && e < ne; ++e) {
                 const uint8_t* body = entities[e];
                 const uint8_t* obj = body ? object_of(body) : nullptr;
@@ -2164,9 +2209,10 @@ void flag_crush(uint32_t obj_handle, uint32_t key, int from) {
     uint8_t* events = static_cast<uint8_t*>(rfg::addr(r::RFG_dyn_collisions));
     const int n = std::min(rfg::global<int>(r::Num_rfg_dyn_collisions), 1024);
     for (int i = n; i-- > from;) {
-        uint8_t* e = events + size_t(i) * 0x110;  // rfg_collision_event
-        if (*reinterpret_cast<const uint32_t*>(e + 0x50) == obj_handle && *reinterpret_cast<const uint32_t*>(e + 0x4C) == key) {
-            e[0xC8] |= 0x10;
+        uint8_t* e = events + size_t(i) * layout::collision_event_size;  // rfg_collision_event
+        if (*reinterpret_cast<const uint32_t*>(e + layout::collision_event_object) == obj_handle &&
+            *reinterpret_cast<const uint32_t*>(e + layout::collision_event_key) == key) {
+            e[layout::collision_event_flags] |= 0x10;
             return;
         }
     }
@@ -2194,7 +2240,7 @@ bool break_in_game(VehicleProxy& v, uint8_t* a, uint32_t key, const float na[3])
 }
 
 uint8_t* object_of_handle(uint32_t handle) {
-    return rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(r::world__object_from_handle)(world(), nullptr, handle);
+    return rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(r::world__object_from_handle)(world() RFG_EDX_ARG, handle);
 }
 
 // ---- cracks (research/docs/08 §17) ----
@@ -2204,9 +2250,10 @@ uint8_t* object_of_handle(uint32_t handle) {
 // the game's own shardify makes the new chunk. Sections are looked for across the chunk's own axes, which are its building's, so
 // cuts tend to follow floors and walls; a little tilt and the parts by a cut changing sides for weaker links leave it uneven. A
 // cut along the hit's direction goes first, as in anything crushed: across it, a block landing upright would only stand on itself.
-constexpr uint32_t kDestroyableLinks = 0x28;
+const uint32_t& kDestroyableLinks = layout::destroyable_links;
 constexpr uint32_t kSubpieceLinks = 0x04, kSubpieceNumLinks = 0x23;
-constexpr uint32_t kBaseLinks = 0x10, kBaseNumLinks = 0x14, kLinkBaseSize = 0x10, kLinkBaseEnds = 0x08;
+const uint32_t &kBaseLinks = layout::base_destroyable_links, &kBaseNumLinks = layout::base_destroyable_num_links;
+constexpr uint32_t kLinkBaseSize = 0x10, kLinkBaseEnds = 0x08;  // rfg_link_base: a file record, the same on x64
 constexpr float kLinkDamageScalar = 15.0f;     // Link_area_damage_scalar: a link takes this many times a contact's damage (J)
 constexpr uint32_t kCrackMinParts = 100, kCrackMinSideParts = 30;
 constexpr float kCrackMinSideMass = 0.15f;     // of the chunk, each side of a cut
@@ -2245,8 +2292,8 @@ bool read_crack_graph(const uint8_t* shape, const uint32_t* keys, const uint8_t*
         const uint8_t* live = *reinterpret_cast<uint8_t* const*>(shape + kDestroyableLinks);
         const uint8_t* parent = *reinterpret_cast<uint8_t* const*>(shape + kDestroyableParent);
         if (!objects || !live || !parent) return false;
-        const uint8_t* base_objects = parent + kBaseObjects + *reinterpret_cast<const int32_t*>(parent + kBaseObjects);
-        const uint8_t* base_links = parent + kBaseLinks + *reinterpret_cast<const int32_t*>(parent + kBaseLinks);
+        const uint8_t* base_objects = rfg::rel_ptr(parent + kBaseObjects);
+        const uint8_t* base_links = rfg::rel_ptr(parent + kBaseLinks);
         const uint32_t num_links = *reinterpret_cast<const uint32_t*>(parent + kBaseNumLinks);
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t key = keys[i];
@@ -2263,7 +2310,7 @@ bool read_crack_graph(const uint8_t* shape, const uint32_t* keys, const uint8_t*
             const uint32_t key = nodes[i].key;
             const uint8_t* sub = objects + size_t(key) * kSubpieceSize;
             const uint32_t count = sub[kSubpieceNumLinks];
-            const uint16_t* list = reinterpret_cast<const uint16_t*>(sub + kSubpieceLinks + *reinterpret_cast<const int32_t*>(sub + kSubpieceLinks));
+            const uint16_t* list = reinterpret_cast<const uint16_t*>(rfg::rel_ptr(sub + kSubpieceLinks));
             for (uint32_t j = 0; j < count; ++j) {
                 const uint32_t index = list[j];
                 if (index >= num_links || link_count >= link_room) continue;
@@ -2294,9 +2341,9 @@ void log_materials() {
         const uint8_t* m = by_index(uint8_t(i));
         if (!m) continue;
         LOG("debris offload: material %d %.32s: density %.0f, brittleness %.2f, restitution %.2f, friction %.2f, link strength %u, flags %08X", i,
-            reinterpret_cast<const char*>(m), double(*reinterpret_cast<const float*>(m + 0x30)), double(*reinterpret_cast<const float*>(m + 0x34)),
-            double(*reinterpret_cast<const float*>(m + 0x38)), double(*reinterpret_cast<const float*>(m + 0x3C)),
-            *reinterpret_cast<const uint32_t*>(m + 0x40), *reinterpret_cast<const uint32_t*>(m + 0x48));
+            reinterpret_cast<const char*>(m), double(*reinterpret_cast<const float*>(m + layout::material_density)), double(*reinterpret_cast<const float*>(m + layout::material_brittleness)),
+            double(*reinterpret_cast<const float*>(m + layout::material_restitution)), double(*reinterpret_cast<const float*>(m + layout::material_friction)),
+            *reinterpret_cast<const uint32_t*>(m + layout::material_link_strength), *reinterpret_cast<const uint32_t*>(m + layout::material_flags));
     }
 }
 
@@ -2311,13 +2358,13 @@ float crack_rand(uint32_t& seed) {  // -1 to 1. Its own: the game's random draws
 // calls brittleness (glass 0.2, concrete 1, steel 2-10: more of it, tougher) for the energy.
 bool g_chunk_materials = true;
 constexpr uint32_t kBaseMaterial = 0x3C;
-constexpr uint32_t kMaterialBrittleness = 0x34, kMaterialLinkStrength = 0x40;
+const uint32_t &kMaterialBrittleness = layout::material_brittleness, &kMaterialLinkStrength = layout::material_link_strength;
 constexpr float kRefLinkStrength = 235000.0f, kRefBrittleness = 1.11f;  // Concrete-Normal
 int subpiece_material_index(const uint8_t* shape, uint32_t key) {
     __try {
         const uint8_t* parent = *reinterpret_cast<uint8_t* const*>(shape + kDestroyableParent);
         if (!parent || key >= *reinterpret_cast<const uint32_t*>(parent + kBaseNumObjects)) return -1;
-        const uint8_t* base = parent + kBaseObjects + *reinterpret_cast<const int32_t*>(parent + kBaseObjects);
+        const uint8_t* base = rfg::rel_ptr(parent + kBaseObjects);
         return base[size_t(key) * kBaseObjectSize + kBaseMaterial];
     } __except (subpiece_read_filter(GetExceptionCode())) {
         return -1;
@@ -2562,12 +2609,12 @@ bool shape_mass(const uint8_t* shape, double& kg) {
         const uint8_t* parent = *reinterpret_cast<uint8_t* const*>(shape + kDestroyableParent);
         if (!objects || !parent) return false;
         const uint32_t count = *reinterpret_cast<const uint32_t*>(parent + kBaseNumObjects);
-        const uint8_t* base = parent + kBaseObjects + *reinterpret_cast<const int32_t*>(parent + kBaseObjects);
+        const uint8_t* base = rfg::rel_ptr(parent + kBaseObjects);
         for (uint32_t key = 0; key < count; ++key) {
             const uint8_t* sub = objects + size_t(key) * kSubpieceSize;
             if (*reinterpret_cast<const uint32_t*>(sub + kSubpieceFlags) & kSubpieceGone) continue;
             const int32_t off = *reinterpret_cast<const int32_t*>(sub + kSubpieceOwner);
-            if (off == 0 || off == -1 || sub + kSubpieceOwner + off != shape) continue;
+            if (off == 0 || off == -1 || rfg::rel_ptr(sub + kSubpieceOwner) != shape) continue;
             kg += double(*reinterpret_cast<const float*>(base + size_t(key) * kBaseObjectSize + kBaseMass));
         }
         return true;
@@ -2582,7 +2629,7 @@ bool shape_materials(const uint8_t* shape, double* kg, uint32_t* count_of, doubl
         const uint8_t* parent = *reinterpret_cast<uint8_t* const*>(shape + kDestroyableParent);
         if (!parent) return false;
         const uint32_t count = *reinterpret_cast<const uint32_t*>(parent + kBaseNumObjects);
-        const uint8_t* base = parent + kBaseObjects + *reinterpret_cast<const int32_t*>(parent + kBaseObjects);
+        const uint8_t* base = rfg::rel_ptr(parent + kBaseObjects);
         for (uint32_t key = 0; key < count; ++key) {
             const uint8_t* b = base + size_t(key) * kBaseObjectSize;
             const uint8_t index = b[kBaseMaterial];
@@ -2600,7 +2647,7 @@ bool shape_materials(const uint8_t* shape, double* kg, uint32_t* count_of, doubl
 // What a building loses where a chunk breaks against it: the chunk's mass there, from the piece hit outward through its links.
 // Without this the stump broke only at what was touched, and held up better than what came down on it.
 float g_stump_share = 0;
-constexpr uint32_t kObjDestroyableShape = 0x14C, kObjHasDestroyable = 0x154;
+const uint32_t &kObjDestroyableShape = layout::rfg_mover_destroyable_shape, &kObjHasDestroyable = layout::rfg_mover_has_destroyable;
 constexpr uint32_t kStumpDamage = 900000;     // under Slice_min_damage
 constexpr int kStumpPartsPerHit = 4;
 constexpr float kStumpFromAbove = 0.3f;       // the contact's normal, up: as the host's reports of what holds a chunk
@@ -2625,10 +2672,10 @@ bool linked_keys(const uint8_t* shape, uint32_t key, uint32_t* out, uint32_t roo
         const uint32_t key_count = *reinterpret_cast<const uint32_t*>(parent + kBaseNumObjects);
         const uint32_t num_links = *reinterpret_cast<const uint32_t*>(parent + kBaseNumLinks);
         if (key >= key_count) return false;
-        const uint8_t* base_links = parent + kBaseLinks + *reinterpret_cast<const int32_t*>(parent + kBaseLinks);
+        const uint8_t* base_links = rfg::rel_ptr(parent + kBaseLinks);
         const uint8_t* sub = objects + size_t(key) * kSubpieceSize;
         const uint32_t count = sub[kSubpieceNumLinks];
-        const uint16_t* list = reinterpret_cast<const uint16_t*>(sub + kSubpieceLinks + *reinterpret_cast<const int32_t*>(sub + kSubpieceLinks));
+        const uint16_t* list = reinterpret_cast<const uint16_t*>(rfg::rel_ptr(sub + kSubpieceLinks));
         for (uint32_t j = 0; j < count && n < room; ++j) {
             const uint32_t index = list[j];
             if (index >= num_links || *reinterpret_cast<const int32_t*>(live + size_t(index) * 4) <= 0) continue;
@@ -2695,8 +2742,8 @@ void crush_stump(uint8_t* b, uint32_t key, double energy, const float nb[3]) {
                 g_stump_kg += double(mass);
                 StumpLost& lost = g_stump_by[handle];
                 lost.kg += double(mass);
-                lost.x = reinterpret_cast<const float*>(b + 0x04)[0];
-                lost.z = reinterpret_cast<const float*>(b + 0x04)[2];
+                lost.x = reinterpret_cast<const float*>(b + layout::object_pos)[0];
+                lost.z = reinterpret_cast<const float*>(b + layout::object_pos)[2];
             }
         }
         uint32_t next[16];
@@ -2761,8 +2808,8 @@ void process_chunk_events() {
         const float wp[3] = {e.point.x, e.point.y, e.point.z};
         const float wn[3] = {e.normal.x, e.normal.y, e.normal.z}, wn_b[3] = {-wn[0], -wn[1], -wn[2]};
         float pa[3], na[3], pb[3] = {0, 0, 0}, nb[3] = {0, 0, 0};
-        to_local(pa, na, wp, wn, reinterpret_cast<const float*>(a + 0x04), reinterpret_cast<const float*>(a + 0x10));
-        if (b) to_local(pb, nb, wp, wn_b, reinterpret_cast<const float*>(b + 0x04), reinterpret_cast<const float*>(b + 0x10));
+        to_local(pa, na, wp, wn, reinterpret_cast<const float*>(a + layout::object_pos), reinterpret_cast<const float*>(a + layout::object_orient));
+        if (b) to_local(pb, nb, wp, wn_b, reinterpret_cast<const float*>(b + layout::object_pos), reinterpret_cast<const float*>(b + layout::object_orient));
         if (!break_in_game(*c, a, key_a, na)) {
             later.push_back(e);
             continue;
@@ -2781,7 +2828,7 @@ void process_chunk_events() {
             uint8_t* u = world_mirror::object_of_group(e.under & ~ipc::kEventStatic);
             if (u && int8_t(u[kObjType]) == kObjTypeMover && int8_t(u[kObjType + 1]) == kSubTypeMoverRfg && !(u[kObjFlags] & kObjDestroyed)) {
                 float pu[3], nu[3];
-                to_local(pu, nu, wp, wn_b, reinterpret_cast<const float*>(u + 0x04), reinterpret_cast<const float*>(u + 0x10));
+                to_local(pu, nu, wp, wn_b, reinterpret_cast<const float*>(u + layout::object_pos), reinterpret_cast<const float*>(u + layout::object_orient));
                 crush_stump(u, e.under_key, double(e.energy), nu);
             }
         }
@@ -2939,7 +2986,7 @@ void move_vehicles() {
         g_next_vehicle_scan = now + kVehicleScanMs;
         scanned_at = now;
         chunk_made_waiting = false;
-        scan_vehicles(reinterpret_cast<const float*>(player + 0x04));
+        scan_vehicles(reinterpret_cast<const float*>(player + layout::object_pos));
     }
     send_chunk_impulses();
     if (g_chunks_in_physx) process_chunk_events();
@@ -2973,7 +3020,7 @@ void move_vehicles() {
     for (size_t i = g_vehicles.size(); i-- > 0;) {
         VehicleProxy& v = g_vehicles[i];
         if (!*reinterpret_cast<void* const*>(v.body + kEntityWorld)) {
-            if (v.driven) note_chunk_end(kEndGone, v, reinterpret_cast<const float*>(player + 0x04));
+            if (v.driven) note_chunk_end(kEndGone, v, reinterpret_cast<const float*>(player + layout::object_pos));
             drop_vehicle(i, false);  // gone from Havok's world
             continue;
         }
@@ -3107,7 +3154,7 @@ void reset_vehicles() {  // the level's end (Havok's world still there) and star
     ReleaseSRWLockExclusive(&g_chunk_impulse_lock);
     g_vehicle_free.clear();
     g_vehicle_cooling.clear();
-    for (uint32_t s = g_player_slot; s-- > g_vehicle_first;) g_vehicle_free.push_back(s);
+    for (uint32_t s = g_vehicle_first + kVehicleSlots; s-- > g_vehicle_first;) g_vehicle_free.push_back(s);
     g_next_vehicle_scan = 0;
 }
 
@@ -3131,7 +3178,11 @@ void reset_vehicles() {  // the level's end (Havok's world still there) and star
 // the game's own loose bodies (debris, building chunks, ragdolls, props: chunks lying in a pile shot out of it when
 // stand-ins appeared inside them as the player came near) and without vehicles (which push the pieces in the host,
 // vehicle proxies above); the ghosts' row without characters too.
+// OpenRFG64: packed to 4 like rfg.exe on x86 only; OpenRFG64 lays it out naturally (pointers on 8), which these
+// members give by themselves (checked against its PDB: 0x118 bytes, obj_ptr 0x78, flags 0xB0, cm_index 0xE4, shape 0xF8).
+#if !defined(_WIN64)
 #pragma pack(push, 4)
+#endif
 struct PhysicsCreateInfo {  // physics_create_info (PDB), the argument of havok_body_create
     uint32_t collision_type;          // +0x00: the collision filter info
     float pos[3];                     // +0x04
@@ -3157,11 +3208,19 @@ struct PhysicsCreateInfo {  // physics_create_info (PDB), the argument of havok_
     int32_t shape_type;               // +0xFC: havok_shape_type
     uint8_t physical_material, effect_material, auto_remove_level, padding;  // +0x100
 };
+#if !defined(_WIN64)
 #pragma pack(pop)
 static_assert(sizeof(PhysicsCreateInfo) == 0x104, "physics_create_info");
 static_assert(offsetof(PhysicsCreateInfo, obj_ptr) == 0x78 && offsetof(PhysicsCreateInfo, flags) == 0xAC &&
                   offsetof(PhysicsCreateInfo, cm_index) == 0xE0 && offsetof(PhysicsCreateInfo, shape_type) == 0xFC,
               "physics_create_info layout");
+#else
+static_assert(sizeof(PhysicsCreateInfo) == 0x118, "physics_create_info (OpenRFG64)");
+static_assert(offsetof(PhysicsCreateInfo, obj_ptr) == 0x78 && offsetof(PhysicsCreateInfo, flags) == 0xB0 &&
+                  offsetof(PhysicsCreateInfo, cm_index) == 0xE4 && offsetof(PhysicsCreateInfo, shape) == 0xF8 &&
+                  offsetof(PhysicsCreateInfo, shape_type) == 0x110,
+              "physics_create_info layout (OpenRFG64)");
+#endif
 constexpr int32_t kMotionKeyframed = 4;          // hkpMotion::MOTION_KEYFRAMED
 constexpr int32_t kQualityKeyframed = 1;         // HK_COLLIDABLE_QUALITY_KEYFRAMED
 constexpr int32_t kSolverDeactivationLow = 2;    // hkpRigidBodyCinfo::SOLVER_DEACTIVATION_LOW
@@ -3178,7 +3237,7 @@ constexpr size_t kAimMax = 16;                   // its pieces nearest the camer
 constexpr size_t kMaxStandIns = 384, kCreatePerFrame = 64;
 constexpr uint32_t kLayerSolid = 100, kLayerGhost = 101;  // unused by the game, whose layers end at 63
 // world: subtype_objects[OT_SUB_ITEM_PROJECTILE] (base_array<ushort>: elt +4, num +0xC), the live projectiles.
-constexpr uint32_t kWorldProjectiles = 0x3C0 + 8 * 0x10 + 4, kWorldProjectileCount = 0x3C0 + 8 * 0x10 + 0xC;
+const uint32_t &kWorldProjectiles = layout::world_projectiles, &kWorldProjectileCount = layout::world_projectile_count;
 std::vector<uint32_t> g_stand_in_slots;          // pieces with a stand-in (may repeat; stand_in is the truth)
 uint32_t g_stand_in_pass = 0, g_stand_ins_live = 0;
 uint32_t g_stand_ins_created = 0, g_stand_in_failures = 0, g_stand_ins_peak = 0, g_stand_ins_boxes = 0;
@@ -3218,7 +3277,7 @@ uint8_t* zone_object() {
     uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
     if (!player) return nullptr;
     uint8_t* zone = rfg::fn<uint8_t*(__thiscall*)(void*, const float*)>(r::world__get_zone_by_pos)(
-        world(), reinterpret_cast<const float*>(player + 0x04));
+        world(), reinterpret_cast<const float*>(player + layout::object_pos));
     if (!zone || int8_t(zone[kObjType]) != kObjTypeZone) return nullptr;
     if (zone != g_zone_obj) {
         if (!g_zone_obj)
@@ -3278,7 +3337,7 @@ void create_stand_in(uint32_t slot, const float pos[3], const float rot[9]) {
     if (std::find(g_stand_in_zones.begin(), g_stand_in_zones.end(), zone) == g_stand_in_zones.end()) {
         g_stand_in_zones.push_back(zone);
         CarriedZone c{zone, {}};
-        memcpy(c.pos, zone + 0x04, sizeof(c.pos));
+        memcpy(c.pos, zone + layout::object_pos, sizeof(c.pos));
         g_carried_zones.push_back(c);
     }
     ++g_stand_ins_created;
@@ -3291,7 +3350,7 @@ void create_stand_in(uint32_t slot, const float pos[3], const float rot[9]) {
 bool g_layers_logged = false;
 void ensure_stand_in_layers() {
     const uint8_t* filter = rfg::global<uint8_t*>(r::Havok_filter);
-    uint32_t* table = filter ? *reinterpret_cast<uint32_t* const*>(filter + 0x34) : nullptr;
+    uint32_t* table = filter ? *reinterpret_cast<uint32_t* const*>(filter + layout::game_filter_layer_table) : nullptr;
     if (!table || !layer_bit(kLayerSolid, kLayerSolid)) return;
     auto set_pair = [table](uint32_t a, uint32_t b, bool on) {
         for (const uint32_t bit : {a * 128 + b, b * 128 + a}) {
@@ -3354,10 +3413,10 @@ void update_stand_ins() {
     wanted.clear();
     if (s && player) {
         ensure_stand_in_layers();
-        const float* pp = reinterpret_cast<const float*>(player + 0x04);
+        const float* pp = reinterpret_cast<const float*>(player + layout::object_pos);
         const float px = pp[0], py = pp[1] + 0.9f, pz = pp[2];
         const ipc::BodyPose* poses = pxbridge::poses(s);
-        const uint32_t slots = std::min<uint32_t>(s->slots, g_vehicle_first);
+        const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
         // The paths: each projectile's next kProjectileAhead s, and the line of fire from the camera.
         static std::vector<Segment> paths;
         paths.clear();
@@ -3383,7 +3442,7 @@ void update_stand_ins() {
             if (!obj || (obj[kObjFlags] & kObjDestroyed)) continue;
             const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle);
             const uint8_t* body = handle == 0xFFFFFFFFu ? nullptr : bodies[handle];
-            const float* pos = reinterpret_cast<const float*>(obj + 0x04);
+            const float* pos = reinterpret_cast<const float*>(obj + layout::object_pos);
             float d[3] = {0, 0, 0};
             if (body) {
                 const float* v = reinterpret_cast<const float*>(body + kBodyLinVel);
@@ -3394,8 +3453,8 @@ void update_stand_ins() {
         const size_t projectile_paths = paths.size();
         {
             const uint8_t* cam = static_cast<const uint8_t*>(rfg::addr(r::Rfg_camera));
-            const float* cam_pos = reinterpret_cast<const float*>(cam + 0x2C);   // real_pos
-            const float* fvec = reinterpret_cast<const float*>(cam + 0x50 + 0x18);  // real_orient.fvec
+            const float* cam_pos = reinterpret_cast<const float*>(cam + layout::camera_real_pos);   // real_pos
+            const float* fvec = reinterpret_cast<const float*>(cam + layout::camera_real_orient + 0x18);  // real_orient.fvec
             const float d[3] = {fvec[0] * kAimRange, fvec[1] * kAimRange, fvec[2] * kAimRange};
             add_path(cam_pos, d, kAimMargin);
         }
@@ -3504,7 +3563,7 @@ void update_stand_ins() {
     }
     g_stand_in_slots.resize(keep);
     for (const CarriedZone& c : g_carried_zones) {
-        const float* now = reinterpret_cast<const float*>(c.zone + 0x04);
+        const float* now = reinterpret_cast<const float*>(c.zone + layout::object_pos);
         const float dx = now[0] - c.pos[0], dy = now[1] - c.pos[1], dz = now[2] - c.pos[2];
         if (dx * dx + dy * dy + dz * dz > 1e-4f && g_zone_moved_logs < 5) {
             ++g_zone_moved_logs;
@@ -3530,8 +3589,8 @@ void update_stand_ins() {
 constexpr uint32_t kZoneSlotBullet = 26, kZoneSlotMelee = 27;
 constexpr uint32_t kNoSlot = 0xFFFFFFFFu;
 constexpr float kHitSlack = 0.08f;  // m around a piece's bounds: Havok's convex radius around its shape
-using ZoneMelee = bool(__fastcall*)(void*, void*, void*, float, const float*, const float*, const float*, uint32_t, void*);
-using ZoneBullet = void(__fastcall*)(void*, void*, void*, float, const uint8_t*);
+using ZoneMelee = bool(__fastcall*)(void* RFG_EDX_TYPE, void*, float, const float*, const float*, const float*, uint32_t, void*);
+using ZoneBullet = void(__fastcall*)(void* RFG_EDX_TYPE, void*, float, const uint8_t*);
 ZoneMelee o_zone_melee = nullptr;
 ZoneBullet o_zone_bullet = nullptr;
 uint32_t g_melee_hits = 0, g_bullet_hits = 0, g_hits_logged = 0;
@@ -3586,9 +3645,9 @@ void push_piece(uint32_t slot, const float j[3], const float at[3], const char* 
 
 thread_local bool g_in_wide_blow = false;  // within a blow passed on whole (below): its stand-in hits are part of it
 
-bool __fastcall d_zone_melee(void* self, void* edx, void* attacker, float damage, const float* impulse,
+bool __fastcall d_zone_melee(void* self RFG_EDX_PARAM, void* attacker, float damage, const float* impulse,
                              const float* pos, const float* c, uint32_t u, void* weapon) {
-    const bool result = o_zone_melee(self, edx, attacker, damage, impulse, pos, c, u, weapon);
+    const bool result = o_zone_melee(self RFG_EDX_PASS, attacker, damage, impulse, pos, c, u, weapon);
     if (g_on && impulse && pos && !g_in_wide_blow) {
         const uint32_t slot = stand_in_piece_at(pos);
         if (slot != kNoSlot) {
@@ -3599,11 +3658,11 @@ bool __fastcall d_zone_melee(void* self, void* edx, void* attacker, float damage
     return result;
 }
 
-void __fastcall d_zone_bullet(void* self, void* edx, void* shooter, float damage, const uint8_t* info) {
-    o_zone_bullet(self, edx, shooter, damage, info);
+void __fastcall d_zone_bullet(void* self RFG_EDX_PARAM, void* shooter, float damage, const uint8_t* info) {
+    o_zone_bullet(self RFG_EDX_PASS, shooter, damage, info);
     if (!g_on || !info) return;
-    const float* hit_pos = reinterpret_cast<const float*>(info + 0x1C);     // weapon_fire_info::hit_pos
-    const float* hit_normal = reinterpret_cast<const float*>(info + 0x28);  // hit_normal
+    const float* hit_pos = reinterpret_cast<const float*>(info + layout::weapon_fire_hit_pos);     // weapon_fire_info::hit_pos
+    const float* hit_normal = reinterpret_cast<const float*>(info + layout::weapon_fire_hit_normal);  // hit_normal
     const uint32_t slot = stand_in_piece_at(hit_pos);
     if (slot == kNoSlot) return;
     const float k = damage * rfg::global<float>(r::Bullet_movable_scalar);
@@ -3625,10 +3684,11 @@ void __fastcall d_zone_bullet(void* self, void* edx, void* shooter, float damage
 constexpr float kWideBlowRadius = 1.0f;  // m: a sphere wider than any of the game's own moves
 constexpr uint32_t kBlowGapMs = 250;
 constexpr float kBlowNewReach = 0.25f;
-constexpr uint32_t kHumanMeleeMove = 0x97C;  // human::combat.cur_melee_combat_move (human_combat at +0x928, +0x54)
-constexpr uint32_t kObjForward = 0x28;       // object::orient.fvec
+const uint32_t& kHumanMeleeMove = layout::human_melee_move;  // human::combat.cur_melee_combat_move (human_combat at +0x928, +0x54)
+const uint32_t& kObjForward = layout::object_forward;       // object::orient.fvec
 // human_melee_combat_move_data
-constexpr uint32_t kMoveCastRadius = 0x14, kMoveImpactImpulse = 0x28, kMoveAwayScale = 0x30;
+const uint32_t &kMoveCastRadius = layout::melee_cast_radius, &kMoveImpactImpulse = layout::melee_impact_impulse,
+               &kMoveAwayScale = layout::melee_away_scale;
 struct Blow {
     const void* attacker;
     const void* move;
@@ -3746,8 +3806,9 @@ void send_melee_sweeps() {
 
 bool patch_zone_hits() {
     void** vt = static_cast<void**>(rfg::addr(r::obj_zone_vftable));
-    if (vt[kZoneSlotMelee] != rfg::addr(r::obj_zone__process_melee_hit) ||
-        vt[kZoneSlotBullet] != rfg::addr(r::object__process_bullet_hit))
+    // OpenRFG64: an incrementally linked build's vtable points at jump thunks (rfg::code_target).
+    if (rfg::code_target(vt[kZoneSlotMelee]) != rfg::addr(r::obj_zone__process_melee_hit) ||
+        rfg::code_target(vt[kZoneSlotBullet]) != rfg::addr(r::object__process_bullet_hit))
         return false;
     DWORD old;
     if (!VirtualProtect(&vt[kZoneSlotBullet], 2 * sizeof(void*), PAGE_READWRITE, &old)) return false;
@@ -3786,28 +3847,31 @@ struct RayResult {
     uint32_t object = 0xFFFFFFFFu;
 };
 RayResult probe_ray(const float a[3], const float b[3], bool static_level = false) {
-    alignas(16) uint8_t in[0x30] = {};
-    rfg::fn<void(__fastcall*)(void*, void*)>(r::raycast_input__raycast_input)(in, nullptr);
+    // OpenRFG64: room for the running build's raycast_input / raycast_output (their constructors fill them: 64
+    // and 16 bytes on x64, 48 and 12 in rfg.exe); start and end are their first members in both.
+    alignas(16) uint8_t in[0x80] = {};
+    alignas(16) uint8_t out[0x40] = {};
+    RayResult res;
+    if (layout::raycast_input_size > sizeof(in) || layout::raycast_output_size > sizeof(out)) return res;
+    rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(r::raycast_input__raycast_input)(in RFG_EDX_ARG);
     memcpy(in, a, 12);
     memcpy(in + 0xC, b, 12);
-    alignas(16) uint8_t out[0x10] = {};
-    rfg::fn<void(__fastcall*)(void*, void*)>(r::raycast_output__raycast_output)(out, nullptr);
+    rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(r::raycast_output__raycast_output)(out RFG_EDX_ARG);
     const uint32_t cast = static_level ? r::havok_raycast_against_static_level_only : r::havok_raycast;
-    RayResult res;
     if (rfg::fn<bool(__cdecl*)(void*, void*)>(cast)(in, out)) {
         const uint8_t* hits = *reinterpret_cast<const uint8_t* const*>(out);
-        res.hits = *reinterpret_cast<const int*>(out + 4);
+        res.hits = *reinterpret_cast<const int*>(out + layout::raycast_output_count);
         float best = 2.0f;
         for (int i = 0; hits && i < res.hits; ++i) {
-            const uint8_t* h = hits + i * 0x38;
-            const float fraction = *reinterpret_cast<const float*>(h + 0x24);
+            const uint8_t* h = hits + size_t(i) * layout::raycast_hit_size;
+            const float fraction = *reinterpret_cast<const float*>(h + layout::raycast_hit_fraction);
             if (fraction >= best) continue;
             best = res.fraction = fraction;
-            res.handle = *reinterpret_cast<const uint32_t*>(h + 0x30);
-            res.object = *reinterpret_cast<const uint32_t*>(h + 0x28);
+            res.handle = *reinterpret_cast<const uint32_t*>(h + layout::raycast_hit_havok_handle);
+            res.object = *reinterpret_cast<const uint32_t*>(h + layout::raycast_hit_object);
         }
     }
-    rfg::fn<void(__fastcall*)(void*, void*)>(r::raycast_output___raycast_output)(out, nullptr);
+    rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(r::raycast_output___raycast_output)(out RFG_EDX_ARG);
     return res;
 }
 
@@ -3846,7 +3910,7 @@ void probe_frame() {
                                  hit_y > mid[1] - p.radius - 0.1f && hit_y < mid[1] + p.radius + 0.1f;
         if (on_stand_in) ++g_probe_ray_hits;
         uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
-        const float* pp = player ? reinterpret_cast<const float*>(player + 0x04) : mid;
+        const float* pp = player ? reinterpret_cast<const float*>(player + layout::object_pos) : mid;
         LOG("stand-in probe: ray (%.1f, %.1f, %.1f) down 6 m, %.1f m from the player: default filter %d hits, nearest "
             "at %.2f (handle %08X, object %08X); static level %d hits, nearest at %.2f; its stand-in %08X", double(top[0]),
             double(top[1]), double(top[2]),
@@ -3858,7 +3922,7 @@ void probe_frame() {
         void** vt = *reinterpret_cast<void***>(g_zone_obj);
         const ZoneMelee melee = reinterpret_cast<ZoneMelee>(vt[kZoneSlotMelee]);
         const uint32_t before = g_melee_hits;
-        melee(g_zone_obj, nullptr, nullptr, 10.0f, j, mid, mid, 0, nullptr);
+        melee(g_zone_obj RFG_EDX_ARG, nullptr, 10.0f, j, mid, mid, 0, nullptr);
         const bool passed_on = g_melee_hits != before;
         g_probe_blows += passed_on ? 1 : 0;
         LOG("stand-in probe: piece %u (%.0f kg, %s, %s shape): the default ray from above hits %s; the blow %s",
@@ -3984,7 +4048,7 @@ void census_general_movers() {
         if (!*reinterpret_cast<uint8_t**>(obj + kGmRenderInstance)) { ++count[kNoInstance]; continue; }
         const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle);
         const uint8_t* body = handle == 0xFFFFFFFFu ? nullptr : bodies[handle];
-        const uint32_t* attach = reinterpret_cast<const uint32_t*>(obj + kObjAttach);
+        void* const* attach = reinterpret_cast<void* const*>(obj + kObjAttach);  // three pointers
         if (attach[0] || attach[1] || attach[2]) {
             ++count[kAttached];
             if (body) ++constrained_with_shape;
@@ -4028,7 +4092,7 @@ void census_vehicles() {
     uint8_t* hw = rfg::global<uint8_t*>(r::Havok_world);
     uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
     if (!hw || !player) return;
-    const float* pp = reinterpret_cast<const float*>(player + 0x04);
+    const float* pp = reinterpret_cast<const float*>(player + layout::object_pos);
     const auto object_of = rfg::fn<uint8_t*(__cdecl*)(const uint8_t*)>(r::object_from_world_obj);
     struct Seen {
         uint8_t* obj;
@@ -4039,13 +4103,13 @@ void census_vehicles() {
     static uint32_t censuses = 0;
     uint32_t logged = censuses++ ? 40 : 0;  // the bodies one by one in the first census only
     for (uint32_t list = 0; list < 2; ++list) {  // m_activeSimulationIslands, m_inactiveSimulationIslands
-        const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + 0x28 + list * 0xC);
-        const int ni = *reinterpret_cast<const int*>(hw + 0x2C + list * 0xC);
+        const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + (list ? layout::hk_world_inactive_islands : layout::hk_world_active_islands));
+        const int ni = *reinterpret_cast<const int*>(hw + (list ? layout::hk_world_inactive_island_count : layout::hk_world_active_island_count));
         for (int i = 0; islands && i < ni; ++i) {
             const uint8_t* island = islands[i];
             if (!island) continue;
-            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + 0x4C);
-            const int ne = *reinterpret_cast<const int*>(island + 0x50);
+            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + layout::hk_island_entities);
+            const int ne = *reinterpret_cast<const int*>(island + layout::hk_island_entity_count);
             for (int e = 0; entities && e < ne; ++e) {
                 const uint8_t* body = entities[e];
                 uint8_t* obj = body ? object_of(body) : nullptr;
@@ -4086,13 +4150,13 @@ void census_islands() {
     std::vector<std::pair<uint32_t, uint32_t>> counts;  // key (type, subtype, motion, layer), bodies
     uint32_t total = 0;
     for (uint32_t list = 0; list < 2; ++list) {
-        const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + 0x28 + list * 0xC);
-        const int ni = *reinterpret_cast<const int*>(hw + 0x2C + list * 0xC);
+        const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + (list ? layout::hk_world_inactive_islands : layout::hk_world_active_islands));
+        const int ni = *reinterpret_cast<const int*>(hw + (list ? layout::hk_world_inactive_island_count : layout::hk_world_active_island_count));
         for (int i = 0; islands && i < ni; ++i) {
             const uint8_t* island = islands[i];
             if (!island) continue;
-            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + 0x4C);
-            const int ne = *reinterpret_cast<const int*>(island + 0x50);
+            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + layout::hk_island_entities);
+            const int ne = *reinterpret_cast<const int*>(island + layout::hk_island_entity_count);
             for (int e = 0; entities && e < ne; ++e) {
                 const uint8_t* body = entities[e];
                 if (!body) continue;
@@ -4133,10 +4197,10 @@ void describe_hit(int32_t frame, const char* filter, const RayResult& ray, float
     int type = -1, sub = -1, motion = -1;
     float opos[3] = {};
     if (ray.hits && ray.object != 0xFFFFFFFFu) {
-        const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(r::world__object_from_handle);
-        if (const uint8_t* obj = from_handle(world(), nullptr, ray.object)) {
+        const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(r::world__object_from_handle);
+        if (const uint8_t* obj = from_handle(world() RFG_EDX_ARG, ray.object)) {
             type = int8_t(obj[kObjType]), sub = int8_t(obj[kObjType + 1]);
-            memcpy(opos, obj + 0x04, sizeof(opos));
+            memcpy(opos, obj + layout::object_pos, sizeof(opos));
             const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle);
             const uint8_t* body = handle == 0xFFFFFFFFu ? nullptr
                                                         : static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies))[handle];
@@ -4151,8 +4215,8 @@ void describe_hit(int32_t frame, const char* filter, const RayResult& ray, float
 
 void inspect_view(int32_t frame) {
     const uint8_t* cam = static_cast<const uint8_t*>(rfg::addr(r::Rfg_camera));
-    const float* cp = reinterpret_cast<const float*>(cam + 0x2C);         // real_pos
-    const float* fv = reinterpret_cast<const float*>(cam + 0x50 + 0x18);  // real_orient.fvec
+    const float* cp = reinterpret_cast<const float*>(cam + layout::camera_real_pos);         // real_pos
+    const float* fv = reinterpret_cast<const float*>(cam + layout::camera_real_orient + 0x18);  // real_orient.fvec
     constexpr float kRange = 300.0f, kPastPlayer = 4.0f;  // the third-person camera looks over the player's shoulder
     const float start[3] = {cp[0] + fv[0] * kPastPlayer, cp[1] + fv[1] * kPastPlayer, cp[2] + fv[2] * kPastPlayer};
     const float end[3] = {cp[0] + fv[0] * kRange, cp[1] + fv[1] * kRange, cp[2] + fv[2] * kRange};
@@ -4164,30 +4228,32 @@ void inspect_view(int32_t frame) {
     describe_hit(frame, "default", ray, dist, hit);
     {
         RayResult building;
-        alignas(16) uint8_t in[0x30] = {};
-        rfg::fn<void(__fastcall*)(void*, void*)>(r::raycast_input__raycast_input)(in, nullptr);
+        // OpenRFG64: buffers for the running build's sizes (see probe_ray).
+        alignas(16) uint8_t in[0x80] = {};
+        alignas(16) uint8_t out[0x40] = {};
+        rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(r::raycast_input__raycast_input)(in RFG_EDX_ARG);
         memcpy(in, start, 12);
         memcpy(in + 0xC, end, 12);
-        alignas(16) uint8_t out[0x10] = {};
-        rfg::fn<void(__fastcall*)(void*, void*)>(r::raycast_output__raycast_output)(out, nullptr);
+        rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(r::raycast_output__raycast_output)(out RFG_EDX_ARG);
         if (rfg::fn<bool(__cdecl*)(void*, void*)>(r::havok_raycast_against_destroyable_geometry)(in, out)) {
             const uint8_t* hits = *reinterpret_cast<const uint8_t* const*>(out);
-            building.hits = *reinterpret_cast<const int*>(out + 4);
+            building.hits = *reinterpret_cast<const int*>(out + layout::raycast_output_count);
             float best = 2.0f;
             for (int i = 0; hits && i < building.hits; ++i) {
-                const float f = *reinterpret_cast<const float*>(hits + i * 0x38 + 0x24);
-                if (f < best) best = building.fraction = f, building.object = *reinterpret_cast<const uint32_t*>(hits + i * 0x38 + 0x28);
+                const uint8_t* h = hits + size_t(i) * layout::raycast_hit_size;
+                const float f = *reinterpret_cast<const float*>(h + layout::raycast_hit_fraction);
+                if (f < best) best = building.fraction = f, building.object = *reinterpret_cast<const uint32_t*>(h + layout::raycast_hit_object);
             }
         }
-        rfg::fn<void(__fastcall*)(void*, void*)>(r::raycast_output___raycast_output)(out, nullptr);
+        rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(r::raycast_output___raycast_output)(out RFG_EDX_ARG);
         const float bdist = kPastPlayer + (building.hits ? building.fraction : 1.0f) * (kRange - kPastPlayer);
         const float bhit[3] = {cp[0] + fv[0] * bdist, cp[1] + fv[1] * bdist, cp[2] + fv[2] * bdist};
         describe_hit(frame, "destroyable-geometry", building, bdist, bhit);
     }
     // A fan of rays, 9 x 9 over 20 degrees around the view: every object they hit first, once.
     {
-        const float* rv = reinterpret_cast<const float*>(cam + 0x50);         // real_orient.rvec
-        const float* uv = reinterpret_cast<const float*>(cam + 0x50 + 0xC);   // real_orient.uvec
+        const float* rv = reinterpret_cast<const float*>(cam + layout::camera_real_orient);         // real_orient.rvec
+        const float* uv = reinterpret_cast<const float*>(cam + layout::camera_real_orient + 0xC);   // real_orient.uvec
         std::vector<std::pair<uint32_t, float>> seen;  // object, distance
         for (int iy = -4; iy <= 4; ++iy)
             for (int ix = -4; ix <= 4; ++ix) {
@@ -4205,14 +4271,14 @@ void inspect_view(int32_t frame) {
                 if (it == seen.end()) seen.emplace_back(fan.object, fd);
                 else it->second = std::min(it->second, fd);
             }
-        const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(r::world__object_from_handle);
+        const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(r::world__object_from_handle);
         for (size_t i = 0; i < seen.size() && i < 12; ++i) {
-            const uint8_t* obj = from_handle(world(), nullptr, seen[i].first);
+            const uint8_t* obj = from_handle(world() RFG_EDX_ARG, seen[i].first);
             if (!obj) continue;
             const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle);
             const uint8_t* body = handle == 0xFFFFFFFFu ? nullptr
                                                         : static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies))[handle];
-            const float* op = reinterpret_cast<const float*>(obj + 0x04);
+            const float* op = reinterpret_cast<const float*>(obj + layout::object_pos);
             LOG("inspect frame %d:   the fan hits object %08X type %d/%d at (%.1f, %.1f, %.1f), first at %.1f m; its body: "
                 "motion %d, %u pieces in its shape", frame, seen[i].first, int(int8_t(obj[kObjType])),
                 int(int8_t(obj[kObjType + 1])), double(op[0]), double(op[1]), double(op[2]), double(seen[i].second),
@@ -4224,7 +4290,7 @@ void inspect_view(int32_t frame) {
     const ipc::SnapshotHeader* s = pxbridge::snapshot(nullptr);
     if (s) {
         const ipc::BodyPose* poses = pxbridge::poses(s);
-        const uint32_t slots = std::min<uint32_t>(s->slots, g_vehicle_first);
+        const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
         uint32_t n = 0, frozen = 0, awake = 0, stand_ins = 0, above = 0;
         float lo = 1e30f, hi = -1e30f;
         for (uint32_t i = 0; i < slots; ++i) {
@@ -4285,8 +4351,8 @@ void inspect_view(int32_t frame) {
         std::vector<std::pair<uint32_t, uint32_t>> counts;  // (type, subtype, motion) -> bodies
         auto visit = [&](const uint8_t* island, bool fixed) {
             if (!island) return;
-            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + 0x4C);
-            const int ne = *reinterpret_cast<const int*>(island + 0x50);
+            const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + layout::hk_island_entities);
+            const int ne = *reinterpret_cast<const int*>(island + layout::hk_island_entity_count);
             for (int e = 0; entities && e < ne; ++e) {
                 const uint8_t* body = entities[e];
                 if (!body) continue;
@@ -4307,10 +4373,10 @@ void inspect_view(int32_t frame) {
                         sig - 1);
             }
         };
-        visit(*reinterpret_cast<uint8_t* const*>(hw + 0x20), true);  // m_fixedIsland
+        visit(*reinterpret_cast<uint8_t* const*>(hw + layout::hk_world_fixed_island), true);  // m_fixedIsland
         for (uint32_t list = 0; list < 2; ++list) {
-            const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + 0x28 + list * 0xC);
-            const int ni = *reinterpret_cast<const int*>(hw + 0x2C + list * 0xC);
+            const uint8_t* const* islands = *reinterpret_cast<uint8_t* const* const*>(hw + (list ? layout::hk_world_inactive_islands : layout::hk_world_active_islands));
+            const int ni = *reinterpret_cast<const int*>(hw + (list ? layout::hk_world_inactive_island_count : layout::hk_world_active_island_count));
             for (int i = 0; islands && i < ni; ++i) visit(islands[i], false);
         }
         char text[512];
@@ -4347,7 +4413,7 @@ void inspect_frame() {
 // Which layers the key layers collide with, from the game's layer table (havok_game_filter: bit a * 128 + b).
 void log_layer_table() {
     const uint8_t* filter = rfg::global<uint8_t*>(r::Havok_filter);
-    const uint32_t* table = filter ? *reinterpret_cast<const uint32_t* const*>(filter + 0x34) : nullptr;
+    const uint32_t* table = filter ? *reinterpret_cast<const uint32_t* const*>(filter + layout::game_filter_layer_table) : nullptr;
     if (!table) return;
     static const struct {
         int layer;
@@ -4383,7 +4449,7 @@ struct GameRenderTask {
     GameRenderTask* next;
     GameRenderTask* prev;
 };
-static_assert(sizeof(GameRenderTask) == 0x14, "game_render_task");
+static_assert(sizeof(GameRenderTask) == (sizeof(void*) == 8 ? 0x28 : 0x14), "game_render_task");  // OpenRFG64: x64 from its PDB
 GameRenderTask g_render_task{};
 bool g_task_registered = false;
 
@@ -4401,42 +4467,107 @@ constexpr uint32_t kRecyclePerFrame = 200;
 bool g_recycling = false;
 uint64_t g_recycled_total = 0;
 
+// OpenRFG64: the body slots grow during the session instead of being fixed at its start (PhysXMaxBodies is
+// where they start). Before the free ones run out, a block more is committed (the host's shared memory and the
+// records here; the host's tables follow the slots it is handed), while the GPU has room: every program's graphics
+// memory in use (NVML, read by the host) stays under its total less PhysXVramReserveMB. A levelled map of 260,000
+// pieces took about 20 GB, so the GPU's memory is the real limit. Past that, or past PhysXSlotsMax, the farthest
+// pieces go as before, those younger than PhysXRecycleMinAgeS last: the debris of a blast far away went at once
+// otherwise (it was the farthest), and looked as if it never came.
+constexpr uint32_t kGrowFreeBelow = 8192;  // free slots that call for more
+uint32_t g_vram_reserve_cfg_mb = 0;       // PhysXVramReserveMB (0: an eighth of the GPU's memory, at least 2 GB)
+double g_recycle_min_age_ms = 60000.0;    // PhysXRecycleMinAgeS
+bool g_grow_blocked_logged = false;
+uint64_t g_recycled_young = 0;  // young pieces given up: there were not enough old ones
+
+uint32_t vram_reserve_mb(uint32_t total_mb) {
+    return g_vram_reserve_cfg_mb ? g_vram_reserve_cfg_mb : std::max<uint32_t>(2048u, total_mb / 8);
+}
+
+bool vram_room() {
+    if (!pxbridge::host_gpu()) return true;  // PhysX on the CPU: the GPU's memory is not its to fill
+    const uint32_t total = pxbridge::vram_total_mb(), used = pxbridge::vram_used_mb();
+    return total && used + vram_reserve_mb(total) < total;
+}
+
+bool slots_can_grow() { return g_slots < g_slots_max && pxbridge::ready() && vram_room(); }
+
+// Simulation thread, end of frame, before adopt.
+void grow_slots() {
+    if (g_free.size() >= kGrowFreeBelow || g_slots >= g_slots_max || !pxbridge::ready()) return;
+    if (!vram_room()) {
+        if (!g_grow_blocked_logged)
+            LOG("debris offload: the slots stay at %u: the GPU's memory is %u of %u MB in use (%u MB kept free, "
+                "Experiment.PhysXVramReserveMB); the farthest pieces go instead", g_slots, pxbridge::vram_used_mb(),
+                pxbridge::vram_total_mb(), vram_reserve_mb(pxbridge::vram_total_mb()));
+        g_grow_blocked_logged = true;
+        return;
+    }
+    g_grow_blocked_logged = false;
+    const uint32_t step = std::max<uint32_t>(16384u, ((g_slots - g_debris_first) / 8 + 1023u) & ~1023u);
+    const uint32_t want = std::min<uint32_t>(g_slots + step, g_slots_max);
+    if (!pxbridge::commit_slots(want) || !g_pieces.grow(want, Piece{})) {
+        LOG("debris offload: the slots cannot grow past %u: the system refused the memory (error %lu)", g_slots,
+            GetLastError());
+        g_slots_max = g_slots;
+        return;
+    }
+    // Handed out after the slots free now (pop_back), the lowest first.
+    std::vector<uint32_t> added;
+    added.reserve(want - g_slots);
+    for (uint32_t s = want; s-- > g_slots;) added.push_back(s);
+    g_free.insert(g_free.begin(), added.begin(), added.end());
+    LOG("debris offload: %u body slots now (+%u); the GPU's memory %u of %u MB in use, PhysX's heap %u MB", want,
+        want - g_slots, pxbridge::vram_used_mb(), pxbridge::vram_total_mb(), pxbridge::gpu_heap_mb());
+    g_slots = want;
+}
+
 int32_t render_pool_free() {
-    return rfg::global<int32_t>(r::rl_destroyable_model_instance__ms_object_pool + 0xC);
+    return rfg::global<int32_t>(r::rl_destroyable_model_instance__ms_object_pool + layout::render_instance_pool_count);
 }
 
 void recycle_far_pieces() {
     const int32_t free = render_pool_free();
     const size_t slots_free = g_free.size();
+    const bool grows = slots_can_grow();  // OpenRFG64: slots that can grow are not short
     if (!g_recycling) {
-        if (free >= kPoolReserve && slots_free >= kSlotReserve) return;
+        if (free >= kPoolReserve && (slots_free >= kSlotReserve || grows)) return;
         g_recycling = true;
         LOG("debris offload: %d render instances and %zu slots left: giving up the pieces farthest from the player", free, slots_free);
-    } else if (free >= kPoolReserve + kPoolHysteresis && slots_free >= kSlotReserve + kSlotHysteresis) {
+    } else if (free >= kPoolReserve + kPoolHysteresis && (slots_free >= kSlotReserve + kSlotHysteresis || grows)) {
         g_recycling = false;
-        LOG("debris offload: %d render instances and %zu slots free again (%llu pieces given up so distant)", free, slots_free, g_recycled_total);
+        LOG("debris offload: %d render instances and %zu slots free again (%llu pieces given up so distant, %llu of "
+            "them younger than %.0f s: no older ones were left)", free, slots_free, g_recycled_total, g_recycled_young,
+            g_recycle_min_age_ms / 1000.0);
         return;
     }
-    const bool for_slots = slots_free < kSlotReserve + kSlotHysteresis;
+    const bool for_slots = slots_free < kSlotReserve + kSlotHysteresis && !grows;
+    const double now_ms = session::since_start_ms();
     uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(r::player_get_local_player)();
     const ipc::SnapshotHeader* s = pxbridge::snapshot(nullptr);
     if (!player || !s) return;
-    const float* pp = reinterpret_cast<const float*>(player + 0x04);
+    const float* pp = reinterpret_cast<const float*>(player + layout::object_pos);
     const ipc::BodyPose* poses = pxbridge::poses(s);
     const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
-    static std::vector<std::pair<float, uint32_t>> distant;
+    // OpenRFG64: the young pieces go last: farthest first among the old ones, then among the young (only when
+    // there are not enough old ones: with no render instance free, no new piece comes at all).
+    static std::vector<std::pair<double, uint32_t>> distant;
     distant.clear();
+    size_t old_ones = 0;
     for (uint32_t i = 0; i < slots; ++i) {
         if (!g_pieces[i].inst || (g_pieces[i].pile != kNoPile && !for_slots) || i == g_player_slot) continue;
         const ipc::Vec3& p = poses[i].pos;
-        const float dx = p.x - pp[0], dy = p.y - pp[1], dz = p.z - pp[2];
-        distant.emplace_back(-(dx * dx + dy * dy + dz * dz), i);  // farthest first
+        const double dx = p.x - pp[0], dy = p.y - pp[1], dz = p.z - pp[2];
+        const bool young = now_ms - g_pieces[i].born_ms < g_recycle_min_age_ms;
+        old_ones += !young;
+        distant.emplace_back((young ? 1e15 : 0.0) - (dx * dx + dy * dy + dz * dz), i);  // old and farthest first
     }
     const size_t n = std::min<size_t>(distant.size(), kRecyclePerFrame);
     if (!n) return;
     std::nth_element(distant.begin(), distant.begin() + (n - 1), distant.end());
     for (size_t k = 0; k < n; ++k) give_up(distant[k].second, true);
     g_recycled_total += n;
+    if (n > old_ones) g_recycled_young += n - old_ones;
 }
 
 // A restored object (world::restore_object: destroyed and streamed in again, as an activity's building when the
@@ -4484,9 +4615,10 @@ void forget_restored() {
 // frame, before_kick 7.9-8.7 -> 2.8-3.0 ms, 40% fewer draws, the same address space. Drawn batched instead, piles
 // saved nothing: a pile is culled as one box, and each of its pieces is a draw of its own in every pass that sees any
 // part of it (twice the draws).
-constexpr uint32_t kInstMatMap = 0x118, kInstSubArray = 0x11C, kInstNumSubs = 0x120, kInstRenderableSubs = 0x124,
-                   kInstShared = 0x148;
-constexpr uint32_t kBaseOrigIndex = 0x0C, kBaseSubArray = 0x14;
+const uint32_t &kInstMatMap = layout::inst_mat_map, &kInstSubArray = layout::inst_sub_instances,
+               &kInstNumSubs = layout::inst_num_sub_instances, &kInstRenderableSubs = layout::inst_num_renderable_sub_instances,
+               &kInstShared = layout::inst_shared_data;
+const uint32_t &kBaseOrigIndex = layout::shared_original_index_map, &kBaseSubArray = layout::shared_base_sub_instances;
 // rl_sub_instance: rl_compressed_transform (pos, pitch, bank, heading), m_instance_index, m_submesh_id, flags
 // (bit 0 visible, bit 1 active, bit 31 disable_deferred).
 constexpr uint32_t kSubSize = 0x20, kSubPitch = 0x0C, kSubSubmesh = 0x1A, kSubFlags = 0x1C;
@@ -4578,7 +4710,16 @@ M43 sub_instance_matrix(const uint8_t* sub) {  // in its instance
 // A building's pieces in one cell of `size` m.
 uint64_t merge_cell_key(const void* base, const ipc::Vec3& p, float size) {
     const auto c = [&](float v) { return uint64_t(uint32_t(int32_t(std::floor(v / size))) & 0x3FFu); };
+#if defined(_WIN64)
+    // OpenRFG64: a 64-bit address does not fit above the 30 cell bits; a mixed hash of it does (splitmix64).
+    uint64_t h = uint64_t(reinterpret_cast<uintptr_t>(base)) + 0x9E3779B97F4A7C15ull;
+    h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ull;
+    h = (h ^ (h >> 27)) * 0x94D049BB133111EBull;
+    h ^= h >> 31;
+    return h << 30 | c(p.x) << 20 | c(p.y) << 10 | c(p.z);
+#else
     return uint64_t(reinterpret_cast<uintptr_t>(base)) << 30 | c(p.x) << 20 | c(p.y) << 10 | c(p.z);
+#endif
 }
 
 struct RlSplitInfo {  // rl_split_info
@@ -4589,7 +4730,7 @@ struct RlSplitInfo {  // rl_split_info
     int32_t num_to_enable;
     int16_t* to_enable;
 };
-static_assert(sizeof(RlSplitInfo) == 0x18, "rl_split_info");
+static_assert(sizeof(RlSplitInfo) == (sizeof(void*) == 8 ? 0x30 : 0x18), "rl_split_info");  // OpenRFG64: x64 from its PDB
 
 struct Pile {
     uint8_t* inst = nullptr;  // its render instance (null: a free entry); not one of the pieces' instances any more
@@ -4674,7 +4815,7 @@ void size_instance(uint8_t* inst) {
 // d_compile_cache's tlsf_free crashed on it). d_start_recompile cancels in that case too.
 // The valid flag is only read at a stop where the compiler was paused, so clearing it is enough only for changes made
 // in the handshake (the game's and the piles' are); a change made elsewhere would need the compiler paused first.
-constexpr uint32_t kInstRecompileParams = 0x154, kParamsValid = 8;
+const uint32_t &kInstRecompileParams = layout::inst_recompile_params, &kParamsValid = layout::recompile_params_valid;
 void cancel_compile(uint8_t* inst) {
     uint8_t* params = *reinterpret_cast<uint8_t* const*>(inst + kInstRecompileParams);
     if (params && *reinterpret_cast<uint8_t* const*>(params) == inst)
@@ -4693,18 +4834,18 @@ void cancel_compile(uint8_t* inst) {
 bool g_free_mesh_copies = false;
 volatile LONG g_compiles_made = 0, g_compiles_cancelled = 0, g_compiles_failed = 0;
 uint8_t* buffer_allocator() {
-    return *reinterpret_cast<uint8_t* const*>(static_cast<const uint8_t*>(rfg::addr(r::Init_params)) + 0x14C);
+    return *reinterpret_cast<uint8_t* const*>(static_cast<const uint8_t*>(rfg::addr(r::Init_params)) + layout::init_params_buffer_allocator);
 }
-void*(__fastcall* o_compile_cache)(uint8_t*, void*, uint8_t*) = nullptr;
-void* __fastcall d_compile_cache(uint8_t* inst, void* edx, uint8_t* params) {
-    uint8_t* data = static_cast<uint8_t*>(o_compile_cache(inst, edx, params));
+void*(__fastcall* o_compile_cache)(uint8_t* RFG_EDX_TYPE, uint8_t*) = nullptr;
+void* __fastcall d_compile_cache(uint8_t* inst RFG_EDX_PARAM, uint8_t* params) {
+    uint8_t* data = static_cast<uint8_t*>(o_compile_cache(inst RFG_EDX_PASS, params));
     if (data) {
         InterlockedIncrement(&g_compiles_made);
         if (g_free_mesh_copies) {
             uint8_t* a = buffer_allocator();
             using FreeFn = void(__thiscall*)(void*, void*);  // keen::MemoryAllocator::free, the third virtual
             const FreeFn free_fn = reinterpret_cast<const FreeFn*>(*reinterpret_cast<void* const*>(a))[2];
-            for (const uint32_t at : {0x44u, 0x48u}) {
+            for (const uint32_t at : {layout::recompile_index_copy, layout::recompile_vertex_copy}) {  // x86 0x44, 0x48
                 void*& copy = *reinterpret_cast<void**>(data + at);
                 free_fn(a, copy);
                 copy = nullptr;
@@ -4745,6 +4886,8 @@ bool walk_pool(void* pool, HeapWalk& w) {
     }
 }
 bool heap_names(const uint8_t* a, char (&kind)[48], char (&name)[64], uint32_t& size) {
+    // OpenRFG64: x86 RTTI and allocator layouts; on OpenRFG64 its own memtest census reports the heaps.
+    if (rfg::is_openrfg64()) return false;
     __try {
         const uint8_t* const* vtable = *reinterpret_cast<const uint8_t* const* const*>(a);
         const uint8_t* col = vtable[-1];  // the RTTI complete object locator: its type descriptor at +0x0C
@@ -5049,7 +5192,7 @@ void piles_frame() {
     if (!s) return;
     const ipc::BodyPose* poses = pxbridge::poses(s);
     const uint8_t* states = pxbridge::states(s);
-    const uint32_t slots = std::min<uint32_t>(std::min<uint32_t>(s->slots, g_vehicle_first), g_slots);
+    const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
     const double now_ms = session::since_start_ms();
     // Every kPileScanMs the still pieces of their own are sorted into their building's cells (`ready`); the joins go on
     // frame after frame within their time budget until the cells are done, and only then is the next scan due.
@@ -5304,6 +5447,7 @@ void on_frame(int game_state) {
     send_melee_sweeps();
     cool_slots(g_cooling, g_free);
     cool_slots(g_vehicle_cooling, g_vehicle_free);
+    grow_slots();  // OpenRFG64
     if (world_mirror::ready()) adopt();  // not before the pieces have a world to land on
     player_proxy();
     move_vehicles();
@@ -5359,7 +5503,8 @@ void __cdecl d_start_recompile(const void* inst, bool in_handshake) {
 constexpr float kKickAtCentre = 15.0f, kKickImpulse = 40000.0f, kKickMin = 4.0f, kKickMax = 25.0f;
 // explosion_info (PDB): m_name at +0, m_radius +0x2C, m_secondary_radius +0x30, m_impulse_magnitude +0x5C,
 // expanding_explosion_duration +0x64 and _delay +0x68 (ms).
-constexpr uint32_t kExplRadius = 0x2C, kExplSecondaryRadius = 0x30, kExplImpulse = 0x5C, kExplExpandMs = 0x64;
+const uint32_t &kExplRadius = layout::explosion_radius, &kExplSecondaryRadius = layout::explosion_secondary_radius,
+               &kExplImpulse = layout::explosion_impulse, &kExplExpandMs = layout::explosion_expand_ms;
 struct PendingExplosion {
     float pos[3];
     float radius;
@@ -5510,10 +5655,10 @@ void release_zone(uint8_t* w, uint8_t* zone) {
     }
 }
 
-void(__fastcall* o_destream_zone)(void*, void*, uint8_t*) = nullptr;
-void __fastcall d_destream_zone(void* w, void* edx, uint8_t* zone) {
+void(__fastcall* o_destream_zone)(void* RFG_EDX_TYPE, uint8_t*) = nullptr;
+void __fastcall d_destream_zone(void* w RFG_EDX_PARAM, uint8_t* zone) {
     if (g_on && w && zone) release_zone(static_cast<uint8_t*>(w), zone);
-    o_destream_zone(w, edx, zone);
+    o_destream_zone(w RFG_EDX_PASS, zone);
 }
 
 // chunk_base_unload_internal(c_chunk_base*, bool): a chunk unloads (stream2_do_frame, end of the handshake), its
@@ -5542,7 +5687,7 @@ void __cdecl d_chunk_unload(uint8_t* chunk, bool delete_mesh) {
             ++g_chunks_out_under_pieces;
             g_chunk_pieces_released += n;
             char name[129];
-            memcpy(name, chunk + 0x30, 128);  // c_chunk_base::name
+            memcpy(name, chunk + layout::chunk_name, 128);  // c_chunk_base::name
             name[128] = 0;
             LOG("debris offload: chunk %s unloads under %u pieces: they go first", name, n);
         }
@@ -5654,7 +5799,7 @@ void(__cdecl* o_level_shutdown)() = nullptr;
 void log_render_stats() {
     const ipc::SnapshotHeader* s = pxbridge::snapshot(nullptr);
     const ipc::BodyPose* poses = s ? pxbridge::poses(s) : nullptr;
-    const uint32_t slots = s ? std::min<uint32_t>(s->slots, g_vehicle_first) : 0;
+    const uint32_t slots = s ? std::min<uint32_t>(s->slots, g_slots) : 0;
     uint32_t mats[8] = {}, subs[8] = {}, pieces = 0, frozen = 0, awake = 0, piled = 0;
     uint64_t mat_sum = 0, sub_sum = 0;
     std::unordered_map<const void*, uint32_t> per_base;
@@ -5662,7 +5807,7 @@ void log_render_stats() {
     constexpr float kCells[3] = {4.0f, 8.0f, 16.0f};
     std::unordered_map<uint64_t, uint32_t> groups[3];
     auto bucket = [](uint32_t v) { return v <= 1 ? 0 : v <= 2 ? 1 : v <= 4 ? 2 : v <= 8 ? 3 : v <= 16 ? 4 : v <= 32 ? 5 : v <= 64 ? 6 : 7; };
-    for (uint32_t i = 0; i < g_vehicle_first && i < g_slots; ++i) {
+    for (uint32_t i = g_debris_first; i < g_slots; ++i) {
         const uint8_t* inst = g_pieces[i].inst;
         if (!inst) continue;
         if (g_pieces[i].pile != kNoPile) {
@@ -5671,7 +5816,7 @@ void log_render_stats() {
         }
         ++pieces;
         const uint8_t* map = *reinterpret_cast<uint8_t* const*>(inst + kInstMatMap);
-        const uint32_t m = map && map[0x10] ? *reinterpret_cast<const uint32_t*>(map + 0x0C) : 0;
+        const uint32_t m = map && map[layout::material_map_is_set] ? *reinterpret_cast<const uint32_t*>(map + layout::material_map_count) : 0;
         const uint32_t r = *reinterpret_cast<const uint32_t*>(inst + kInstRenderableSubs);
         ++mats[bucket(m)];
         ++subs[bucket(r)];
@@ -5700,11 +5845,11 @@ void log_render_stats() {
             batched += (*reinterpret_cast<const uint16_t*>(pile.inst + kInstFlags) & kInstBatchable) != 0;
             largest = std::max(largest, pile.members);
             if (data) {
-                const uint32_t n = *reinterpret_cast<const uint32_t*>(data + 0x3C);
-                vbytes += uint64_t(*reinterpret_cast<const uint32_t*>(data + 0x30)) *
-                          *reinterpret_cast<const uint16_t*>(data + 0x2C);
-                ibytes += uint64_t(*reinterpret_cast<const uint32_t*>(data + 0x10)) *
-                          *reinterpret_cast<const uint16_t*>(data + 0x2E);
+                const uint32_t n = *reinterpret_cast<const uint32_t*>(data + layout::recompile_num_render_blocks);
+                vbytes += uint64_t(*reinterpret_cast<const uint32_t*>(data + layout::recompile_num_verts)) *
+                          *reinterpret_cast<const uint16_t*>(data + layout::recompile_vertex_stride);
+                ibytes += uint64_t(*reinterpret_cast<const uint32_t*>(data + layout::recompile_index_count)) *
+                          *reinterpret_cast<const uint16_t*>(data + layout::recompile_index_stride);
                 blocks += n;
                 most_blocks = std::max(most_blocks, n);
             } else {
@@ -5946,8 +6091,8 @@ uint32_t crush_in_box(uint32_t object_handle, const float lo[3], const float hi[
     const uint8_t* parent = shape ? *reinterpret_cast<uint8_t* const*>(shape + kDestroyableParent) : nullptr;
     if (!parent) return 0;
     const uint32_t count = *reinterpret_cast<const uint32_t*>(parent + kBaseNumObjects);
-    const float* pos = reinterpret_cast<const float*>(obj + 0x04);
-    const float* rows = reinterpret_cast<const float*>(obj + 0x10);  // rvec, uvec, fvec
+    const float* pos = reinterpret_cast<const float*>(obj + layout::object_pos);
+    const float* rows = reinterpret_cast<const float*>(obj + layout::object_orient);  // rvec, uvec, fvec
     static const float zero[3] = {0, 0, 0}, up[3] = {0, 1, 0};
     const auto add_contact = rfg::fn<bool(__cdecl*)(uint8_t*, uint8_t*, uint32_t, const float*, const float*, const float*, const float*, uint32_t, uint32_t, bool)>(
         r::rfg_dyn_multi_add_pre_collide_contact);
@@ -6042,20 +6187,28 @@ ChunkStats chunk_stats() {
 
 bool install(const Config& cfg) {
     if (cfg.exp_physx <= 0 || !cfg.exp_physx_world || !cfg.exp_physx_debris) return true;
-    g_slots = pxbridge::max_bodies();
+    // OpenRFG64: the player's capsule is slot 0 and the vehicles' proxies the next kVehicleSlots; the pieces
+    // come after them and their slots grow during the session (grow_slots). The host's tables and the snapshots it
+    // writes follow the highest slot in use: with the capsule in the last slot they spanned all the slots at all times.
+    g_slots = pxbridge::committed_slots();
+    g_slots_max = std::max(pxbridge::max_bodies(), g_slots);
     if (g_slots < kVehicleSlots + 1024) return true;
-    g_player_slot = g_slots - 1;
-    g_vehicle_first = g_player_slot - kVehicleSlots;  // the vehicles' proxies, below the player's capsule
-    g_pieces.assign(g_slots, Piece{});
-    // Every slot takes the game's 32-bit address space, used or not: its record here, its tables and its place in the
-    // host's three pose snapshots (shared memory). Raised to 260,000, that was enough for the avenue's load to fail.
-    LOG("debris offload: %u body slots take %.0f MB of the game's address space (%.0f MB of tables, %.0f MB of shared "
-        "memory)", g_slots,
-        (double(g_slots) * double(sizeof(Piece) + sizeof(Spatial) + 1) + double(pxbridge::shared_bytes())) / 1048576.0,
+    g_player_slot = 0;
+    g_vehicle_first = 1;
+    g_debris_first = 1 + kVehicleSlots;
+    if (!g_pieces.reserve(g_slots_max) || !g_pieces.grow(g_slots, Piece{})) {
+        LOG("debris offload: no memory for %u body slots (error %lu)", g_slots, GetLastError());
+        return true;
+    }
+    g_vram_reserve_cfg_mb = uint32_t(std::max(cfg.exp_physx_vram_reserve_mb, 0));
+    g_recycle_min_age_ms = double(std::max(cfg.exp_physx_recycle_min_age_s, 0)) * 1000.0;
+    LOG("debris offload: %u body slots to start with, up to %u while the GPU has room (%u MB of it kept free; 0: an "
+        "eighth of it, at least 2 GB); %.0f MB of tables and %.0f MB of shared memory now; pieces younger than %.0f s are "
+        "given up last", g_slots, g_slots_max, g_vram_reserve_cfg_mb,
         double(g_slots) * double(sizeof(Piece) + sizeof(Spatial) + 1) / 1048576.0,
-        double(pxbridge::shared_bytes()) / 1048576.0);
+        double(g_slots) * double(3 * (sizeof(ipc::BodyPose) + 1)) / 1048576.0, g_recycle_min_age_ms / 1000.0);
     g_free.clear();
-    for (uint32_t s = g_vehicle_first; s-- > 0;) g_free.push_back(s);  // pop_back hands out 0, 1, 2, ...
+    for (uint32_t s = g_slots; s-- > g_debris_first;) g_free.push_back(s);  // pop_back hands out the lowest first
     reset_vehicles();
     InitializeCriticalSection(&g_expl_lock);
     InitializeCriticalSection(&g_blow_lock);
@@ -6070,17 +6223,25 @@ bool install(const Config& cfg) {
     ok &= hooks::create(r::chunk_base_unload_internal, &d_chunk_unload, &o_chunk_unload, "chunk_base_unload_internal");
     if (!ok) return false;
     // The zone check before general_mover::update_pos_and_orient's destroy: call (E8) at +0x40, test al, al after it.
+    // OpenRFG64: in OpenRFG64 the call is found in the function's code (rfg::call_return), not at +0x40.
     const uint8_t* zone_call = static_cast<const uint8_t*>(rfg::addr(r::general_mover__update_pos_and_orient + 0x40));
-    if (zone_call[0] == 0xE8 && zone_call[5] == 0x84 && zone_call[6] == 0xC0 &&
+    const void* zone_return = rfg::is_openrfg64()
+        ? rfg::call_return(r::general_mover__update_pos_and_orient, rfg::size::general_mover__update_pos_and_orient,
+                           r::world__object_physically_in_original_zone)
+        : (zone_call[0] == 0xE8 && zone_call[5] == 0x84 && zone_call[6] == 0xC0 ? zone_call + 5 : nullptr);
+    if (zone_return &&
         hooks::create(r::world__object_physically_in_original_zone, &d_in_original_zone, &o_in_original_zone,
                       "world::object_physically_in_original_zone"))
-        g_zone_check_return = zone_call + 5;
+        g_zone_check_return = zone_return;
     else
         LOG("debris offload: WARNING the zone check in general_mover::update_pos_and_orient is not hooked: pieces thrown "
             "out of their zone while they wait in Havok are deleted, as in the game");
     // The same before a loose chunk's: call (E8) at +0x12, test al, al after it.
     const uint8_t* chunk_zone_call = static_cast<const uint8_t*>(rfg::addr(r::object_mover__check_for_movement_delete + 0x12));
-    if (g_zone_check_return && chunk_zone_call[0] == 0xE8 && chunk_zone_call[5] == 0x84 && chunk_zone_call[6] == 0xC0)
+    if (g_zone_check_return && rfg::is_openrfg64())
+        g_chunk_zone_check_return = rfg::call_return(r::object_mover__check_for_movement_delete, rfg::size::object_mover__check_for_movement_delete,
+                                                     r::world__object_physically_in_original_zone);
+    else if (g_zone_check_return && chunk_zone_call[0] == 0xE8 && chunk_zone_call[5] == 0x84 && chunk_zone_call[6] == 0xC0)
         g_chunk_zone_check_return = chunk_zone_call + 5;
     g_on = true;
     g_batch = cfg.exp_physx_debris_batch != 0;
@@ -6169,7 +6330,7 @@ bool install(const Config& cfg) {
     session::add_frame_callback(&on_frame);  // adoption; the moves run in a game render task (registered there)
     session::add_flush_handler(&on_exit);
     LOG("debris offload armed: debris pieces go to the PhysX host (%u slots), the player is a kinematic capsule there, "
-        "vehicles push the pieces (%u slots)%s%s", g_vehicle_first, kVehicleSlots,
+        "vehicles push the pieces (%u slots)%s%s", g_slots - g_debris_first, kVehicleSlots,
         g_batch ? "; their render instances are drawn through the batched pass" : "",
         g_solid ? "; heavy pieces are solid to the player (Havok stand-ins), the capsule pushes light ones" : "");
     return true;
@@ -6177,7 +6338,7 @@ bool install(const Config& cfg) {
 
 FrameStats take_frame() {
     FrameStats f = g_stats;
-    f.live = uint32_t(g_vehicle_first - g_free.size());
+    f.live = uint32_t(g_slots - g_debris_first - g_free.size());
     g_stats = {};
     return f;
 }
@@ -6187,7 +6348,7 @@ std::vector<uint32_t> pieces_near(const float center[3], float radius) {
     const ipc::SnapshotHeader* s = g_on ? pxbridge::snapshot(nullptr) : nullptr;
     if (!s) return out;
     const ipc::BodyPose* poses = pxbridge::poses(s);
-    const uint32_t slots = std::min<uint32_t>(s->slots, g_vehicle_first);
+    const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
     for (uint32_t i = 0; i < slots; ++i) {
         if (!g_pieces[i].inst || !(poses[i].flags & ipc::kPoseAlive)) continue;
         const float dx = poses[i].pos.x - center[0], dy = poses[i].pos.y - center[1], dz = poses[i].pos.z - center[2];
@@ -6216,7 +6377,7 @@ uint32_t count_pieces_of(uint32_t object_handle) {
 
 bool piece_position(uint32_t slot, float out[3]) {
     const ipc::SnapshotHeader* s = g_on ? pxbridge::snapshot(nullptr) : nullptr;
-    if (!s || slot >= g_vehicle_first || !g_pieces[slot].inst) return false;
+    if (!s || slot < g_debris_first || slot >= g_slots || !g_pieces[slot].inst) return false;
     const ipc::BodyPose& b = pxbridge::poses(s)[slot];
     out[0] = b.pos.x, out[1] = b.pos.y, out[2] = b.pos.z;
     return true;
@@ -6228,7 +6389,7 @@ void kick_pieces_for_test(bool on) { g_expl_kicks.store(on, std::memory_order_re
 
 Census census() {
     if (!g_on) return {};
-    Census c{uint32_t(g_vehicle_first - g_free.size()), g_vehicle_first, g_piles_live, g_piled_now, g_waiting_for_pile,
+    Census c{uint32_t(g_slots - g_debris_first - g_free.size()), g_slots - g_debris_first, g_piles_live, g_piled_now, g_waiting_for_pile,
              uint32_t(g_pile_candidates.size()), g_piled_total, g_unpiled_total, g_recycled_total, g_task_frames, {}};
     for (int k = 0; k < kTaskParts; ++k) c.task_ms[k] = g_task[k].total;
     return c;
@@ -6238,7 +6399,7 @@ bool debris_extent(float centre[3], float& radius, float& low_y, uint32_t& piece
     const ipc::SnapshotHeader* s = g_on ? pxbridge::snapshot(nullptr) : nullptr;
     if (!s) return false;
     const ipc::BodyPose* poses = pxbridge::poses(s);
-    const uint32_t slots = std::min<uint32_t>(std::min<uint32_t>(s->slots, g_vehicle_first), g_slots);
+    const uint32_t slots = std::min<uint32_t>(s->slots, g_slots);
     double sum[3] = {};
     std::vector<float> ys;
     for (uint32_t i = 0; i < slots; ++i) {

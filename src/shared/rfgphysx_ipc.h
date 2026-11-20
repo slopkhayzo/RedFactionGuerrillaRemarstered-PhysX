@@ -3,7 +3,10 @@
 // research/docs/06 §3 and §13. Both sides compile this header, so every structure uses fixed-size types only and its
 // layout is pinned by the static_asserts at the end.
 //
-// The game creates one named file mapping and starts the host with its name:
+// The game creates one named file mapping and starts the host with its name. Since version 23 the mapping is only
+// reserved for max_bodies slots (SEC_RESERVE): the game commits each snapshot's poses and state bytes for the slots
+// it hands out, before it hands them out, and a commit through its view is one for the host's view too.
+//
 //
 //   [Control][command ring][query results][snapshot 0][snapshot 1][snapshot 2][event ring]
 //
@@ -25,7 +28,9 @@
 namespace rfgphysx {
 
 constexpr uint32_t kMagic = 0x58505246;  // "FRPX"
-constexpr uint32_t kVersion = 22;  // 22: Control::chunk_rest_strength; 21: a support in the event ring is the box of what the chunk bears on; 20: ShapePartPlaced::break_strength, supports in the event ring; 19: ContactEvent::lost; 18: DestroyBody::quiet; 17: CreateBody::made_qpc; 16: cpu_threads, change_every; 15: loose chunks' parts break in the host (break_energy, break_force_kn; ContactEvent: a part that broke); 13: RemoveParts; 12: ContactEvent energy and velocity; 11: the event ring; 10: ShapePartPlaced, kBodyChunk; 9: StaticConvexPlaced
+constexpr uint32_t kVersion = 23;  // 23 (OpenRFG64): the slots grow (the shared memory is reserved for max_bodies and
+// committed by the game as it hands slots out; the host's tables follow), and the host reports the GPU's memory;
+// 22: Control::chunk_rest_strength; 21: a support in the event ring is the box of what the chunk bears on; 20: ShapePartPlaced::break_strength, supports in the event ring; 19: ContactEvent::lost; 18: DestroyBody::quiet; 17: CreateBody::made_qpc; 16: cpu_threads, change_every; 15: loose chunks' parts break in the host (break_energy, break_force_kn; ContactEvent: a part that broke); 13: RemoveParts; 12: ContactEvent energy and velocity; 11: the event ring; 10: ShapePartPlaced, kBodyChunk; 9: StaticConvexPlaced
 constexpr uint32_t kMaxRays = 4096;  // per RaycastBatch
 
 enum class HostState : uint32_t {
@@ -75,7 +80,13 @@ struct alignas(64) Control {
     std::atomic<uint32_t> query_done;      // request id of the last RaycastBatch answered
     std::atomic<uint32_t> statics;         // static actors in the scene (the mirrored world)
     std::atomic<uint32_t> event_head;      // events written (only grows; the record is event_head & (count-1))
-    uint32_t reserved1[8];
+    // 23: the GPU's memory, MB, from NVML (every program's, the game's own drawing and the path tracer's too), every
+    // half second; 0: not known (no NVML). The game grows the slots while there is room (debris_offload).
+    std::atomic<uint32_t> vram_used_mb;
+    std::atomic<uint32_t> vram_total_mb;
+    std::atomic<uint32_t> gpu_heap_mb;     // 23: PhysX's GPU heap, MB (it never shrinks), every 5 s
+    std::atomic<uint32_t> slots_capacity;  // 23: the host's tables by slot (they follow the slots the game hands out)
+    uint32_t reserved1[4];
     char host_message[256];
 
     // Game -> host.
@@ -464,6 +475,7 @@ static_assert(sizeof(CmdHeader) == 8 && sizeof(StaticPlane) % 8 == 0 && sizeof(S
               sizeof(KinematicTarget) == 48 && sizeof(Impulse) == 48 && sizeof(MeleeSweep) == 56);
 static_assert(sizeof(CreateBody) == 88 && offsetof(CreateBody, made_qpc) == 80 && sizeof(Frame) == 24 && offsetof(Frame, qpc) == 16);
 static_assert(sizeof(SnapshotHeader) == 64 && offsetof(SnapshotHeader, sim_time) == 8 && sizeof(BodyPose) == 64);
+static_assert(offsetof(Control, vram_used_mb) == 96 && offsetof(Control, slots_capacity) == 108, "version 23's fields");
 static_assert(sizeof(ContactEvent) == 80 && offsetof(Control, event_head) == 92 && offsetof(Control, event_tail) == 396,
               "event layout differs between the 32- and 64-bit builds");
 

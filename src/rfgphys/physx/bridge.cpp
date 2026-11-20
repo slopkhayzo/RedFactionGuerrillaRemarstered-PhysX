@@ -46,6 +46,8 @@ uint64_t g_period_sequence = 0;  // and its sequence
 float g_period_ms = 0;          // the time a step takes, smoothed
 FrameStats g_stats{};
 
+uint32_t g_committed = 0;  // OpenRFG64: slots whose snapshot memory is committed (commit_slots)
+
 ipc::SnapshotHeader* snapshot_at(uint32_t index) {
     return reinterpret_cast<ipc::SnapshotHeader*>(g_base + g_ctl->snapshot_offset + size_t(index) * g_ctl->snapshot_stride);
 }
@@ -192,16 +194,34 @@ std::wstring quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 
 bool install(const Config& cfg) {
     if (cfg.exp_physx <= 0) return true;
+#if defined(_WIN64)
+    // OpenRFG64: in a 64-bit game the slots are no longer bounded by the address space (0.4 KB a slot was
+    // what the 32-bit game could not spare past 262,144). The shared memory is reserved for PhysXSlotsMax and
+    // committed from PhysXMaxBodies on, as debris_offload hands the slots out (commit_slots).
+    const uint32_t initial = uint32_t(std::clamp(cfg.exp_physx_max_bodies, 4096, 1 << 23));
+    const uint32_t max_bodies = uint32_t(std::clamp(cfg.exp_physx_slots_max, int(initial), 1 << 23) + 1023) & ~1023u;
+#else
     const uint32_t max_bodies = uint32_t(cfg.exp_physx_max_bodies < 1024     ? 1024
                                          : cfg.exp_physx_max_bodies > 262144 ? 262144
                                                                              : cfg.exp_physx_max_bodies);
+    const uint32_t initial = max_bodies;
+#endif
     const uint32_t stride = ipc::snapshot_stride(max_bodies);
     const uint32_t total = kControlBytes + kRingSize + kQueryBytes + 3 * stride + kEventCount * uint32_t(sizeof(ipc::ContactEvent));
     wchar_t name[96];
     swprintf_s(name, L"Local\\rfgphysx-%lu-%lu", GetCurrentProcessId(), GetTickCount());
-    g_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, total, name);
+    g_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE | SEC_RESERVE, 0, total, name);
     if (g_mapping) g_base = static_cast<uint8_t*>(MapViewOfFile(g_mapping, FILE_MAP_ALL_ACCESS, 0, 0, total));
-    if (!g_base) {
+    // The parts of fixed size are committed now: the control block, the ring and the query results; each snapshot's
+    // header; the event ring. The snapshots' poses and state bytes follow the slots (commit_slots).
+    const uint32_t snapshots_at = kControlBytes + kRingSize + kQueryBytes;
+    const uint32_t events_at = snapshots_at + 3 * stride;
+    bool committed = g_base && VirtualAlloc(g_base, snapshots_at, MEM_COMMIT, PAGE_READWRITE) &&
+                     VirtualAlloc(g_base + events_at, total - events_at, MEM_COMMIT, PAGE_READWRITE);
+    for (uint32_t k = 0; committed && k < 3; ++k)
+        committed = VirtualAlloc(g_base + snapshots_at + size_t(k) * stride, sizeof(ipc::SnapshotHeader), MEM_COMMIT,
+                                 PAGE_READWRITE) != nullptr;
+    if (!g_base || !committed) {
         LOG("experiment PhysX: cannot create %u MB of shared memory (error %lu)", total >> 20, GetLastError());
         return true;
     }
@@ -217,6 +237,10 @@ bool install(const Config& cfg) {
     g_ctl->event_offset = kControlBytes + kRingSize + kQueryBytes + 3 * stride;
     g_ctl->event_count = kEventCount;
     g_ctl->max_bodies = max_bodies;
+    if (!commit_slots(initial)) {
+        LOG("experiment PhysX: cannot commit the shared memory of %u slots (error %lu)", initial, GetLastError());
+        return true;
+    }
     g_ctl->game_pid = GetCurrentProcessId();
     g_ctl->backend = cfg.exp_physx == 2 ? ipc::kBackendCpu : ipc::kBackendGpu;
     g_ctl->step_hz = float(cfg.exp_physx_rate < 10 ? 10 : cfg.exp_physx_rate > 240 ? 240 : cfg.exp_physx_rate);
@@ -259,13 +283,40 @@ bool install(const Config& cfg) {
     session::add_frame_callback(&on_frame);
     session::add_flush_handler(&on_exit);
     LOG("experiment PhysX: host started (pid %lu, %s backend requested, %.0f Hz, %u body slots, %u MB shared memory)",
-        pi.dwProcessId, cfg.exp_physx == 2 ? "CPU" : "GPU", double(g_ctl->step_hz), max_bodies, total >> 20);
+        pi.dwProcessId, cfg.exp_physx == 2 ? "CPU" : "GPU", double(g_ctl->step_hz), initial, total >> 20);
+    if (max_bodies > initial)
+        LOG("experiment PhysX: the slots grow from %u up to %u while the GPU has room (OpenRFG64); %u MB of "
+            "shared memory reserved, committed as the slots are handed out", initial, max_bodies, total >> 20);
     return true;
 }
 
 bool active() { return g_state == State::Starting || g_state == State::Ready; }
 bool ready() { return g_state == State::Ready; }
 uint32_t max_bodies() { return g_ctl ? g_ctl->max_bodies : 0; }
+uint32_t committed_slots() { return g_committed; }
+
+bool commit_slots(uint32_t n) {
+    if (!g_ctl) return false;
+    n = std::min(n, g_ctl->max_bodies);
+    if (n <= g_committed) return true;
+    // Each snapshot: the poses of slots 0 .. n-1 after its header, and their state bytes (with 64 to spare: the game
+    // reads them 16 at a time) after max_bodies poses. Committing is per page and harmless when done already.
+    for (uint32_t k = 0; k < 3; ++k) {
+        uint8_t* s = g_base + g_ctl->snapshot_offset + size_t(k) * g_ctl->snapshot_stride;
+        uint8_t* states = s + sizeof(ipc::SnapshotHeader) + size_t(g_ctl->max_bodies) * sizeof(ipc::BodyPose);
+        const size_t state_bytes = std::min<size_t>(size_t(n) + 64, size_t(g_ctl->max_bodies));
+        if (!VirtualAlloc(s, sizeof(ipc::SnapshotHeader) + size_t(n) * sizeof(ipc::BodyPose), MEM_COMMIT, PAGE_READWRITE) ||
+            !VirtualAlloc(states, state_bytes, MEM_COMMIT, PAGE_READWRITE))
+            return false;
+    }
+    g_committed = n;
+    return true;
+}
+
+uint32_t vram_used_mb() { return g_ctl ? g_ctl->vram_used_mb.load(std::memory_order_relaxed) : 0; }
+uint32_t vram_total_mb() { return g_ctl ? g_ctl->vram_total_mb.load(std::memory_order_relaxed) : 0; }
+uint32_t gpu_heap_mb() { return g_ctl ? g_ctl->gpu_heap_mb.load(std::memory_order_relaxed) : 0; }
+bool host_gpu() { return g_ctl && g_ctl->host_gpu.load(std::memory_order_relaxed) != 0; }
 uint32_t shared_bytes() { return g_ctl ? g_ctl->total_size : 0; }
 float step_hz() { return g_ctl ? g_ctl->step_hz : 60.0f; }
 uint32_t frame() { return g_frame; }

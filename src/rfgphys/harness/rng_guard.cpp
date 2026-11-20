@@ -133,12 +133,12 @@ float(__cdecl* o_fl_rand_range)(float, float);
 bool(__cdecl* o_int_rand_chance)(uint32_t);
 bool(__cdecl* o_fl_rand_chance)(float);
 // __thiscall methods, hooked through __fastcall (ecx = this, edx unused).
-void(__fastcall* o_vec_sphere)(void*, void*);
-void(__fastcall* o_vec4_sphere)(void*, void*);
-void(__fastcall* o_vec_around_z)(void*, void*, float, float);
-void(__fastcall* o_vec4_around_z)(void*, void*, float, float);
-void(__fastcall* o_ts_set_rand)(void*, void*, int, int);
-void(__fastcall* o_tsr_set_rand)(void*, void*, int, int);
+void(__fastcall* o_vec_sphere)(void* RFG_EDX_TYPE);
+void(__fastcall* o_vec4_sphere)(void* RFG_EDX_TYPE);
+void(__fastcall* o_vec_around_z)(void* RFG_EDX_TYPE, float, float);
+void(__fastcall* o_vec4_around_z)(void* RFG_EDX_TYPE, float, float);
+void(__fastcall* o_ts_set_rand)(void* RFG_EDX_TYPE, int, int);
+void(__fastcall* o_tsr_set_rand)(void* RFG_EDX_TYPE, int, int);
 
 uint32_t __cdecl d_vrand() {
     Guard g(0, _ReturnAddress());
@@ -168,29 +168,29 @@ bool __cdecl d_fl_rand_chance(float p) {
     Guard g(6, _ReturnAddress());
     return o_fl_rand_chance(p);
 }
-void __fastcall d_vec_sphere(void* self, void* edx) {
+void __fastcall d_vec_sphere(void* self RFG_EDX_PARAM) {
     Guard g(7, _ReturnAddress());
-    o_vec_sphere(self, edx);
+    o_vec_sphere(self RFG_EDX_PASS);
 }
-void __fastcall d_vec4_sphere(void* self, void* edx) {
+void __fastcall d_vec4_sphere(void* self RFG_EDX_PARAM) {
     Guard g(8, _ReturnAddress());
-    o_vec4_sphere(self, edx);
+    o_vec4_sphere(self RFG_EDX_PASS);
 }
-void __fastcall d_vec_around_z(void* self, void* edx, float a, float b) {
+void __fastcall d_vec_around_z(void* self RFG_EDX_PARAM, float a, float b) {
     Guard g(9, _ReturnAddress());
-    o_vec_around_z(self, edx, a, b);
+    o_vec_around_z(self RFG_EDX_PASS, a, b);
 }
-void __fastcall d_vec4_around_z(void* self, void* edx, float a, float b) {
+void __fastcall d_vec4_around_z(void* self RFG_EDX_PARAM, float a, float b) {
     Guard g(10, _ReturnAddress());
-    o_vec4_around_z(self, edx, a, b);
+    o_vec4_around_z(self RFG_EDX_PASS, a, b);
 }
-void __fastcall d_ts_set_rand(void* self, void* edx, int lo, int hi) {
+void __fastcall d_ts_set_rand(void* self RFG_EDX_PARAM, int lo, int hi) {
     Guard g(11, _ReturnAddress());
-    o_ts_set_rand(self, edx, lo, hi);
+    o_ts_set_rand(self RFG_EDX_PASS, lo, hi);
 }
-void __fastcall d_tsr_set_rand(void* self, void* edx, int lo, int hi) {
+void __fastcall d_tsr_set_rand(void* self RFG_EDX_PARAM, int lo, int hi) {
     Guard g(12, _ReturnAddress());
-    o_tsr_set_rand(self, edx, lo, hi);
+    o_tsr_set_rand(self RFG_EDX_PASS, lo, hi);
 }
 
 // Order-independent hash of the sim thread's streams (other threads' streams, e.g. the render thread's, advance

@@ -14,6 +14,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/session.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
@@ -23,7 +24,8 @@ namespace {
 namespace r = rfg::rva;
 
 constexpr int kGameplay = 1;  // GS_GAMEPLAY
-constexpr uint32_t kInstFlags = 0x40, kInstSortMethod = 0x100;
+const uint32_t& kInstFlags = layout::inst_flags;             // OpenRFG64: by name (game/layout.h)
+const uint32_t& kInstSortMethod = layout::inst_sort_method;
 
 enum Fn { kBatch, kDeferred, kRender, kRenderDeferred, kFnCount };
 const char* const kFnNames[kFnCount] = {"add_to_batch", "add_to_deferred", "render", "render_for_deferred"};
@@ -82,28 +84,28 @@ void count(Fn fn, const void* self, void* ret) {
 }
 
 // __thiscall with N stack arguments, hooked as __fastcall (this in ecx, edx unused).
-using Fn3 = void(__fastcall*)(void*, void*, void*, void*, void*);
-using Fn2 = void(__fastcall*)(void*, void*, void*, void*);
-using Fn4 = void(__fastcall*)(void*, void*, void*, void*, void*, void*);
+using Fn3 = void(__fastcall*)(void* RFG_EDX_TYPE, void*, void*, void*);
+using Fn2 = void(__fastcall*)(void* RFG_EDX_TYPE, void*, void*);
+using Fn4 = void(__fastcall*)(void* RFG_EDX_TYPE, void*, void*, void*, void*);
 Fn3 o_batch = nullptr, o_render = nullptr;
 Fn2 o_deferred = nullptr;
 Fn4 o_render_deferred = nullptr;
 
-void __fastcall d_batch(void* self, void* edx, void* a, void* b, void* c) {
+void __fastcall d_batch(void* self RFG_EDX_PARAM, void* a, void* b, void* c) {
     count(kBatch, self, _ReturnAddress());
-    o_batch(self, edx, a, b, c);
+    o_batch(self RFG_EDX_PASS, a, b, c);
 }
-void __fastcall d_deferred(void* self, void* edx, void* a, void* b) {
+void __fastcall d_deferred(void* self RFG_EDX_PARAM, void* a, void* b) {
     count(kDeferred, self, _ReturnAddress());
-    o_deferred(self, edx, a, b);
+    o_deferred(self RFG_EDX_PASS, a, b);
 }
-void __fastcall d_render(void* self, void* edx, void* a, void* b, void* c) {
+void __fastcall d_render(void* self RFG_EDX_PARAM, void* a, void* b, void* c) {
     count(kRender, self, _ReturnAddress());
-    o_render(self, edx, a, b, c);
+    o_render(self RFG_EDX_PASS, a, b, c);
 }
-void __fastcall d_render_deferred(void* self, void* edx, void* a, void* b, void* c, void* d) {
+void __fastcall d_render_deferred(void* self RFG_EDX_PARAM, void* a, void* b, void* c, void* d) {
     count(kRenderDeferred, self, _ReturnAddress());
-    o_render_deferred(self, edx, a, b, c, d);
+    o_render_deferred(self RFG_EDX_PASS, a, b, c, d);
 }
 
 uint32_t g_frames = 0;

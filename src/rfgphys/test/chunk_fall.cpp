@@ -218,8 +218,8 @@ uint32_t g_post_logged = 0;
 enum Mover { kNone, kBuilding, kLoose };
 Mover mover(uint32_t handle) {
     if (handle == 0xFFFFFFFFu || !handle) return kNone;
-    const uint8_t* obj = rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(r::world__object_from_handle)(
-        world(), nullptr, handle);
+    const uint8_t* obj = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(r::world__object_from_handle)(
+        world() RFG_EDX_ARG, handle);
     if (!obj || int8_t(obj[kObjType]) != 2 || int8_t(obj[kObjType + 1]) != 1 || (obj[kObjFlags] & kObjDestroyed))
         return kNone;
     return *reinterpret_cast<const int*>(obj + kMoveType) == 0 ? kBuilding : kLoose;

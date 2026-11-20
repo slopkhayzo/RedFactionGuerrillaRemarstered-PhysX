@@ -75,7 +75,7 @@ uint32_t g_camera_locked = 0, g_corrections = 0, g_shots_fired = 0, g_shots_lock
 float g_max_deviation = 0;
 
 void(__cdecl* o_camera_post)();
-void(__fastcall* o_fire_projectile)(uint8_t*, void*, float*, float*);
+void(__fastcall* o_fire_projectile)(uint8_t* RFG_EDX_TYPE, float*, float*);
 
 uint8_t* local_player() { return rfg::fn<uint8_t*(__cdecl*)()>(rfg::rva::player_get_local_player)(); }
 uint8_t* camera() { return static_cast<uint8_t*>(rfg::addr(rfg::rva::Rfg_camera)); }
@@ -121,8 +121,8 @@ void correct_player(uint8_t* player, const Pose& rec, float deviation) {
     float pos[3], orient[9];
     memcpy(pos, rec.player_pos, sizeof(pos));
     memcpy(orient, rec.player_orient, sizeof(orient));
-    rfg::fn<void(__fastcall*)(void*, void*, float*, float*, bool)>(rfg::rva::human__update_pos_and_orient)(
-        player, nullptr, pos, orient, true);
+    rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE, float*, float*, bool)>(rfg::rva::human__update_pos_and_orient)(
+        player RFG_EDX_ARG, pos, orient, true);
     float zero[3] = {0, 0, 0};
     rfg::fn<void(__cdecl*)(void*, float*)>(rfg::rva::human_controller_set_vel)(player, zero);
     ++g_corrections;
@@ -136,7 +136,7 @@ void fire_missing_shots(uint8_t* player) {
     if (it == g_first_shot.end()) return;
     const uint32_t fired = g_shot_frame == g_frame ? g_shot_seq : 0;
     uint8_t* weapon = nullptr;
-    if (player) weapon = rfg::fn<uint8_t*(__fastcall*)(void*, void*)>(rfg::rva::human__get_equipped_weapon)(player, nullptr);
+    if (player) weapon = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE)>(rfg::rva::human__get_equipped_weapon)(player RFG_EDX_ARG);
     for (size_t i = it->second; i < g_shots.size() && g_shots[i].frame == uint32_t(g_frame); ++i) {
         Shot s = g_shots[i];
         if (s.seq < fired) continue;
@@ -145,7 +145,7 @@ void fire_missing_shots(uint8_t* player) {
             continue;
         }
         if (g_shots_forced < 10) LOG("track: frame %d: recorded shot %u not fired by the replay, fired now", g_frame, s.seq);
-        o_fire_projectile(weapon, nullptr, s.start, s.target);  // the trampoline: not seen by d_fire_projectile
+        o_fire_projectile(weapon RFG_EDX_ARG, s.start, s.target);  // the trampoline: not seen by d_fire_projectile
         ++g_shots_forced;
         write_record(kTagShot, &s, sizeof(s));
     }
@@ -194,11 +194,11 @@ void __cdecl d_camera_post() {
 }
 
 // weapon::fire_projectile(start, target): the projectile flies from start towards target (after spread).
-void __fastcall d_fire_projectile(uint8_t* weapon, void* edx, float* start, float* target) {
+void __fastcall d_fire_projectile(uint8_t* weapon RFG_EDX_PARAM, float* start, float* target) {
     uint8_t* player = g_frame >= 0 ? local_player() : nullptr;
     if (!player || !weapon || !start || !target ||
         *reinterpret_cast<uint32_t*>(weapon + kItemOwnerHandle) != *reinterpret_cast<uint32_t*>(player + kObjectHandle)) {
-        o_fire_projectile(weapon, edx, start, target);
+        o_fire_projectile(weapon RFG_EDX_PASS, start, target);
         return;
     }
     if (g_shot_frame != g_frame) {
@@ -220,7 +220,7 @@ void __fastcall d_fire_projectile(uint8_t* weapon, void* edx, float* start, floa
         ++g_shots_locked;
     }
     write_record(kTagShot, &shot, sizeof(shot));
-    o_fire_projectile(weapon, edx, shot.start, shot.target);
+    o_fire_projectile(weapon RFG_EDX_PASS, shot.start, shot.target);
 }
 
 }  // namespace

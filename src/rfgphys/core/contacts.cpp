@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/game_lock.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
@@ -17,8 +18,8 @@ std::vector<void (*)(uint32_t, uint32_t)> g_observers;
 // hkpCollidable, whose broadphase handle's filter info is at +0x1C (layer in the low 16 bits).
 uint32_t body_layer(const uint8_t* body) {
     for (int depth = 0; body && depth < 16; ++depth) {
-        const uint8_t* parent = *reinterpret_cast<const uint8_t* const*>(body + 0xC);
-        if (!parent) return *reinterpret_cast<const uint32_t*>(body + 0x1C) & 0xFFFF;
+        const uint8_t* parent = *reinterpret_cast<const uint8_t* const*>(body + layout::hk_cdbody_parent);
+        if (!parent) return *reinterpret_cast<const uint32_t*>(body + layout::hk_collidable_filter_info) & 0xFFFF;
         body = parent;
     }
     return 0;
@@ -27,8 +28,8 @@ uint32_t body_layer(const uint8_t* body) {
 // __thiscall GeneralCollisionListener::contactPointAddedCallback(hkpContactPointAddedEvent*), hooked through
 // __fastcall. The event starts with m_bodyA and m_bodyB (hkpCdBody*). With a multithreaded Havok step it runs on
 // Havok's worker threads too: the game lock serializes it, observers included.
-void(__fastcall* o_contact_added)(void*, void*, void*);
-void __fastcall d_contact_added(void* self, void* edx, void* event) {
+void(__fastcall* o_contact_added)(void* RFG_EDX_TYPE, void*);
+void __fastcall d_contact_added(void* self RFG_EDX_PARAM, void* event) {
     game_lock::Guard guard;
     if (event) {
         const auto* const* bodies = static_cast<const uint8_t* const*>(event);
@@ -36,7 +37,7 @@ void __fastcall d_contact_added(void* self, void* edx, void* event) {
         for (auto fn : g_observers) fn(a, b);
         if (g_skip_debris_pairs && is_debris_layer(a) && is_debris_layer(b)) return;
     }
-    o_contact_added(self, edx, event);
+    o_contact_added(self RFG_EDX_PASS, event);
 }
 
 }  // namespace

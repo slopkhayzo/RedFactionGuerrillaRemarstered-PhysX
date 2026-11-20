@@ -18,6 +18,16 @@
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
+#if defined(_WIN64)
+// OpenRFG64: this audit's crash reports name x86 registers. It does not run on OpenRFG64 (main.cpp); on x64
+// the names stand for their 64-bit counterparts so that it compiles.
+#define Eip Rip
+#define Esi Rsi
+#define Edi Rdi
+#define Ebx Rbx
+#define Ecx Rcx
+#endif
+
 namespace experiments {
 namespace {
 

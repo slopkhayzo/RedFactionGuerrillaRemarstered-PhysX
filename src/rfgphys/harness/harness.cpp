@@ -170,7 +170,7 @@ float g_last_dt = 1.f / 60.f;
 using VoidFn = void(__cdecl*)();
 VoidFn o_input_poll, o_match_begin;
 void(__cdecl* o_verify_save)(uint8_t*, bool);
-bool(__fastcall* o_input_event)(void*, void*, uint8_t*);
+bool(__fastcall* o_input_event)(void* RFG_EDX_TYPE, uint8_t*);
 bool(__cdecl* o_os_foreground)();
 int(__cdecl* o_gov)();
 int(__cdecl* o_timer_get)(int);
@@ -354,8 +354,8 @@ int __cdecl d_timer_get(int units) {
 // keen::SystemTimer::getElapsedTime (milliseconds): the input code reads it directly for button hold times, poll
 // intervals, double clicks and menu repeat. On the sim thread during a session those reads get the virtual clock,
 // so a held button lasts as long in a fast replay as it did while recording.
-uint32_t(__fastcall* o_elapsed)(void*, void*);
-uint32_t __fastcall d_elapsed(void* timer, void* edx) {
+uint32_t(__fastcall* o_elapsed)(void* RFG_EDX_TYPE);
+uint32_t __fastcall d_elapsed(void* timer RFG_EDX_PARAM) {
     if (g_clock_on && gameloop::on_sim_thread()) {
         namespace r = rfg::rva;
         namespace s = rfg::size;
@@ -367,7 +367,7 @@ uint32_t __fastcall d_elapsed(void* timer, void* edx) {
             called_from(ret, r::input_update_idle_time, s::input_update_idle_time))
             return virtual_ms();
     }
-    return o_elapsed(timer, edx);
+    return o_elapsed(timer RFG_EDX_PASS);
 }
 
 // gamestate_gp_last_havok_sim_time(): microseconds the last Havok step took, read by the load governor (rfgl).
@@ -396,9 +396,9 @@ void set_app_active() {
 
 // Application::processInputEvent(InputEvent*): event type at +3; 7..0x1D are keyboard, mouse, controller and
 // focus events. Synthetic sessions drop them all, so nobody at the machine can disturb a replay.
-bool __fastcall d_input_event(void* app, void* edx, uint8_t* ev) {
+bool __fastcall d_input_event(void* app RFG_EDX_PARAM, uint8_t* ev) {
     if (g_synthetic && ev && ev[3] >= 7 && ev[3] <= 0x1D) return true;
-    return o_input_event(app, edx, ev);
+    return o_input_event(app RFG_EDX_PASS, ev);
 }
 
 void __cdecl d_input_poll() {

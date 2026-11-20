@@ -99,6 +99,7 @@ void init() {
         return;
     }
     rfg::select_build(build);  // before anything uses a game address
+    if (rfg::layout_missing() > 0) return;  // OpenRFG64: logged by select_build
     if (!cfg.enabled) {
         LOG("disabled in config");
         return;
@@ -108,37 +109,50 @@ void init() {
         LOG("main-loop hook failed: plugin stays inactive");
         return;
     }
-    automation::install(cfg);
-    experiments::install_debris_collision(cfg);
-    experiments::install_render_tweaks(cfg);
-    experiments::install_big_buildings(cfg);
-    experiments::install_havok_mt(cfg);
-    experiments::install_havok_audit(cfg);
-    experiments::install_keep_debris(cfg);
-    if (cfg.telemetry) telemetry::install(cfg);  // frame callbacks: telemetry first, so it measures whole frames
+    // OpenRFG64: in OpenRFG64 only the modules converted to its layouts run (the PhysX pipeline). The game's
+    // limits that keep_debris raises at run time are raised in OpenRFG64's source there (src/memtest); the
+    // experiments, the record/replay harness, the tests and the telemetry are not converted.
+    const bool full = !rfg::is_openrfg64();
+    if (!full)
+        LOG("OpenRFG64: only the converted modules run (PhysX bridge, world mirror, debris offload, render routing, hang "
+            "watch); experiments, harness, tests, telemetry and keep_debris stay off");
+    if (full) {
+        automation::install(cfg);
+        experiments::install_debris_collision(cfg);
+        experiments::install_render_tweaks(cfg);
+        experiments::install_big_buildings(cfg);
+        experiments::install_havok_mt(cfg);
+        experiments::install_havok_audit(cfg);
+        experiments::install_keep_debris(cfg);
+        if (cfg.telemetry) telemetry::install(cfg);  // frame callbacks: telemetry first, so it measures whole frames
+    }
     gameloop::add_end(&session::on_frame);
     pxbridge::install(cfg);  // frame callbacks: the bridge takes the host's snapshot before its consumers run
-    pxtest::install(cfg);
-    collision_survey::install(cfg);
+    if (full) {
+        pxtest::install(cfg);
+        collision_survey::install(cfg);
+    }
     world_mirror::install(cfg);
     render_routing::install(cfg);
     debris_offload::install(cfg);  // after the bridge: it moves pieces from the snapshot the bridge takes
-    zone_cycle::install(cfg);
-    vehicle_push::install(cfg);
-    chunk_fall::install(cfg);
-    restore_building::install(cfg);
-    stress_pieces::install(cfg);
-    memory_census::install(cfg);  // its D3D11 counters with the stress test
-    visit::install(cfg);
-    view_shots::install(cfg);
-    stream_report::install(cfg);
-    viewpoints::install(cfg);
-    harness::install(cfg);
-    fly_camera::install(cfg);  // never with the harness: both take over the game's input
+    if (full) {
+        zone_cycle::install(cfg);
+        vehicle_push::install(cfg);
+        chunk_fall::install(cfg);
+        restore_building::install(cfg);
+        stress_pieces::install(cfg);
+        memory_census::install(cfg);  // its D3D11 counters with the stress test
+        visit::install(cfg);
+        view_shots::install(cfg);
+        stream_report::install(cfg);
+        viewpoints::install(cfg);
+        harness::install(cfg);
+        fly_camera::install(cfg);  // never with the harness: both take over the game's input
+    }
     hang_watch::start(cfg);
-    address_space::install(cfg);
+    if (full) address_space::install(cfg);
     if (!hooks::enable_all()) return;
-    if (cfg.telemetry && cfg.profiler) profiler::start(cfg);
+    if (full && cfg.telemetry && cfg.profiler) profiler::start(cfg);
     session::start_watchdog();
     LOG("initialization complete");
 }

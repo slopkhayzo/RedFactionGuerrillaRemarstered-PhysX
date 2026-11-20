@@ -16,6 +16,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/session.h"
+#include "game/layout.h"  // OpenRFG64: layouts by name
 #include "game/rfg.h"
 #include "physx/bridge.h"
 #include "physx/havok_shapes.h"
@@ -35,7 +36,7 @@ constexpr double kScanBudgetMs = 20;              // export work per scan; the r
 // with more body slots, 2026-11-07/09). The host takes the commands no faster than it cooks them anyway.
 constexpr size_t kOutboxCap = size_t(6) << 20;
 constexpr uint32_t kChunkTriangles = 16384;       // triangles per StaticMesh record
-constexpr uint32_t kDestroyableExisting = 0x48;   // rfg_destroyable_shape::num_existing_child_shapes
+const uint32_t& kDestroyableExisting = layout::destroyable_existing_children;  // rfg_destroyable_shape::num_existing_child_shapes
 
 bool g_on = false, g_check = false;
 int g_hf_variant = 0;  // Experiment.PhysXWorldHf (diagnostic): bit 0 x-major heights, bit 1 the other cell split
@@ -43,8 +44,8 @@ int g_hf_variant = 0;  // Experiment.PhysXWorldHf (diagnostic): bit 0 x-major he
 // Only what debris collides with is mirrored: the body's layer must collide with a debris layer in the game's layer
 // table (havok_game_filter: bit a * 128 + b), and system group 6 never collides with debris (01 §10.3). That leaves
 // out triggers, invisible barriers and the like, which Havok's own debris never meets either.
-constexpr uint32_t kFilterInfo = 0x2C;   // hkpEntity: m_collidable.m_broadPhaseHandle.m_collisionFilterInfo
-constexpr uint32_t kLayerTable = 0x34;   // havok_game_filter::m_layer_lookup_table
+const uint32_t& kFilterInfo = layout::hk_entity_filter_info;     // hkpEntity: m_collidable.m_broadPhaseHandle.m_collisionFilterInfo
+const uint32_t& kLayerTable = layout::game_filter_layer_table;   // havok_game_filter::m_layer_lookup_table
 
 bool collides_with_debris(const uint8_t* entity) {
     const uint32_t info = *reinterpret_cast<const uint32_t*>(entity + kFilterInfo);
@@ -66,7 +67,7 @@ bool collides_with_debris(const uint8_t* entity) {
 // never reached the host, and the old stayed there. A long session in the open world gathered such holes until
 // pieces fell through the ground everywhere (players: "fixed by loading the game"). hkpEntity::m_uid is new for every
 // entity the world adds.
-constexpr uint32_t kEntityUid = 0xD0;  // hkpEntity::m_uid
+const uint32_t& kEntityUid = layout::hk_entity_uid;  // hkpEntity::m_uid
 struct Mirrored {
     uint32_t group;
     uint32_t signature;            // destroyables: 1 + existing pieces; 0: never changes
@@ -243,15 +244,18 @@ struct Export : hs::Sink {
     // shape's space. PhysX wants rows along x, row-major, as int16 samples around a midpoint.
     void height_field(const uint8_t* s, const hs::Transform& t) override {
         if (only || !s) return;
-        const int xr = *reinterpret_cast<const int*>(s + 0x28), zr = *reinterpret_cast<const int*>(s + 0x2C);
-        const uint8_t kind = s[0x35];
-        const float* scale = reinterpret_cast<const float*>(s + 0x40);
-        const uint8_t* storage = *reinterpret_cast<const uint8_t* const*>(s + 0x80);
-        if (xr < 2 || zr < 2 || xr > 4096 || zr > 4096 || !storage || kind > 1) {
+        const int xr = *reinterpret_cast<const int*>(s + layout::hk_hf_xres), zr = *reinterpret_cast<const int*>(s + layout::hk_hf_zres);
+        const uint8_t kind = s[layout::hk_hf_kind];
+        const float* scale = reinterpret_cast<const float*>(s + layout::hk_hf_int_to_float);
+        const uint8_t* storage = *reinterpret_cast<const uint8_t* const*>(s + layout::hk_hf_storage);
+        // OpenRFG64: the compressed kind's fields are 0 where the build has no such class.
+        const bool compressed_known = layout::hk_hf_compressed_offset != 0 && layout::hk_hf_compressed_scale != 0;
+        if (xr < 2 || zr < 2 || xr > 4096 || zr > 4096 || !storage || kind > 1 || (kind == 1 && !compressed_known)) {
             ++g_unsupported[hs::kSampledHeightField];
             return;
         }
-        const float offset = *reinterpret_cast<const float*>(s + 0x90), hscale = *reinterpret_cast<const float*>(s + 0x94);
+        const float offset = kind == 1 ? *reinterpret_cast<const float*>(s + layout::hk_hf_compressed_offset) : 0.0f,
+                    hscale = kind == 1 ? *reinterpret_cast<const float*>(s + layout::hk_hf_compressed_scale) : 0.0f;
         auto height = [&](int x, int z) {
             const int i = (g_hf_variant & 1) ? x * zr + z : z * xr + x;
             const float h = kind == 0 ? reinterpret_cast<const float*>(storage)[i]
@@ -274,7 +278,7 @@ struct Export : hs::Sink {
         // Havok splits an unflipped cell along the other diagonal than PhysX's tessellation flag: the 1,024-ray
         // check matched 935 rays this way (on the remaining ones Havok hits bodies the mirror leaves out) against
         // 758 the other way, 06 §13.
-        c.flip = (s[0x8C] != 0 ? 0u : 1u) ^ ((g_hf_variant & 2) ? 1u : 0u);
+        c.flip = (s[layout::hk_hf_flip] != 0 ? 0u : 1u) ^ ((g_hf_variant & 2) ? 1u : 0u);
         const float centre[3] = {0, mid, 0};
         float o[3];
         t.apply(centre, o);
@@ -352,15 +356,21 @@ uint8_t* world() { return rfg::global<uint8_t*>(rfg::rva::Havok_world); }
 void scan() {
     uint8_t* w = world();
     if (!w) return;
-    const uint8_t* island = *reinterpret_cast<uint8_t* const*>(w + 0x20);  // hkpWorld::m_fixedIsland
+    const uint8_t* island = *reinterpret_cast<uint8_t* const*>(w + layout::hk_world_fixed_island);  // hkpWorld::m_fixedIsland
     if (!island) return;
-    const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + 0x4C);
-    const int n = *reinterpret_cast<const int*>(island + 0x50);
+    const uint8_t* const* entities = *reinterpret_cast<const uint8_t* const* const*>(island + layout::hk_island_entities);
+    const int n = *reinterpret_cast<const int*>(island + layout::hk_island_entity_count);
     const int64_t t0 = session::qpc();
     for (auto& [e, m] : g_bodies) m.seen = false;
     bool budget_left = g_outbox_bytes < kOutboxCap;
     uint32_t added = 0, changed = 0, removed = 0;
     uint32_t reused = 0;
+    // OpenRFG64: bodies not mirrored yet are exported nearest the player first (by their origin). A big map's
+    // export takes minutes (ten avenues: 544 bodies, 252 MB of commands, 160 s), and in the island's order the debris
+    // around the player fell through what was not there yet: the plateau's ground among it.
+    std::vector<std::pair<float, int>> fresh;  // (squared distance to the player, island index)
+    const uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(rfg::rva::player_get_local_player)();
+    const float* pp = player ? reinterpret_cast<const float*>(player + layout::object_pos) : nullptr;
     for (int i = 0; i < n; ++i) {
         const uint8_t* e = entities[i];
         if (!e || !hs::body_shape(e) || !collides_with_debris(e)) continue;
@@ -390,17 +400,43 @@ void scan() {
                 ++changed;
             }
         } else if (budget_left) {
-            auto& m = g_bodies.emplace(e, Mirrored{g_next_group++, sig, true, {}, uid}).first->second;
-            if (const uint8_t* obj = rfg::fn<uint8_t*(__cdecl*)(const uint8_t*)>(rfg::rva::object_from_world_obj)(e))
-                m.object = *reinterpret_cast<const uint32_t*>(obj + 0x6C);  // object::handle
-            export_body(e, m);
-            ++added;
+            float d2 = 0.0f;
+            if (pp) {
+                const hs::Transform t = hs::body_transform(e);
+                const float dx = t.pos[0] - pp[0], dy = t.pos[1] - pp[1], dz = t.pos[2] - pp[2];
+                d2 = dx * dx + dy * dy + dz * dz;
+            }
+            fresh.emplace_back(d2, i);
+            continue;
         } else {
             continue;  // next scan
         }
         if (session::ticks_to_ms(session::qpc() - t0) > kScanBudgetMs || g_outbox_bytes >= kOutboxCap)
             budget_left = false;
     }
+    std::sort(fresh.begin(), fresh.end());
+    static uint32_t s_first_logged = 0;  // the level's first exports, in the log (which went first)
+    if (g_bodies.empty()) s_first_logged = 0;  // nothing mirrored yet: a level's first scan (on_frame clears a gone one)
+    for (const auto& [d2, i] : fresh) {
+        if (!budget_left) break;  // next scan
+        const uint8_t* e = entities[i];
+        const uint32_t sig = signature(hs::body_shape(e));
+        const uint32_t uid = *reinterpret_cast<const uint32_t*>(e + kEntityUid);
+        auto& m = g_bodies.emplace(e, Mirrored{g_next_group++, sig, true, {}, uid}).first->second;
+        if (const uint8_t* obj = rfg::fn<uint8_t*(__cdecl*)(const uint8_t*)>(rfg::rva::object_from_world_obj)(e))
+            m.object = *reinterpret_cast<const uint32_t*>(obj + layout::object_handle);  // object::handle
+        export_body(e, m);
+        ++added;
+        if (!g_initial_done && s_first_logged < 3) {
+            ++s_first_logged;
+            LOG("world mirror: exported %s nearest: group %u, %zu shapes, its origin %.0f m from the player",
+                s_first_logged == 1 ? "1st" : s_first_logged == 2 ? "2nd" : "3rd", m.group, m.keys.size(),
+                double(std::sqrt(d2)));
+        }
+        if (session::ticks_to_ms(session::qpc() - t0) > kScanBudgetMs || g_outbox_bytes >= kOutboxCap)
+            budget_left = false;
+    }
+    if (!fresh.empty() && added < fresh.size()) budget_left = false;  // some wait for the next scan
     for (auto it = g_bodies.begin(); it != g_bodies.end();) {
         if (!it->second.seen) {
             remove_group(it->second.group);
@@ -481,36 +517,40 @@ std::vector<HavokHit> g_havok_hit;
 // raycast_input (start, end, radius, filter params, filter callback, filter info, collector type, flags) and
 // raycast_output (hkArray<hit_info>: data, size, capacity); hit_info: hit_fraction +0x24, hit_havok_handle +0x30.
 float havok_distance(uint32_t fn_rva, const ipc::Ray& r, HavokHit* what = nullptr) {
-    alignas(16) uint8_t in[0x30] = {};
+    // OpenRFG64: the buffers are as large as the running build's raycast_input / raycast_output (64 and 16 bytes
+    // on x64, 48 and 12 in rfg.exe), zeroed; start and end are their first members in both.
+    alignas(16) uint8_t in[0x80] = {};
+    alignas(16) uint8_t out[0x40] = {};
+    if (layout::raycast_input_size > sizeof(in) || layout::raycast_output_size > sizeof(out)) return -1.0f;
     float* f = reinterpret_cast<float*>(in);
     f[0] = r.origin.x, f[1] = r.origin.y, f[2] = r.origin.z;
     f[3] = r.origin.x + r.direction.x * r.max_distance;
     f[4] = r.origin.y + r.direction.y * r.max_distance;
     f[5] = r.origin.z + r.direction.z * r.max_distance;
-    alignas(16) uint8_t out[0x10] = {};
-    rfg::fn<void(__fastcall*)(void*, void*)>(rfg::rva::raycast_output__raycast_output)(out, nullptr);
+    rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(rfg::rva::raycast_output__raycast_output)(out RFG_EDX_ARG);
     const bool hit = rfg::fn<bool(__cdecl*)(void*, void*)>(fn_rva)(in, out);
     float d = -1.0f;
     const uint8_t* hits = *reinterpret_cast<const uint8_t* const*>(out);
-    const int count = *reinterpret_cast<const int*>(out + 4);
+    const int count = *reinterpret_cast<const int*>(out + layout::raycast_output_count);
+    const uint32_t stride = layout::raycast_hit_size;
     if (hit && hits && count > 0) {
         float best = 2.0f;
         int best_i = 0;
         for (int i = 0; i < count; ++i) {
-            const float fr = *reinterpret_cast<const float*>(hits + i * 0x38 + 0x24);
+            const float fr = *reinterpret_cast<const float*>(hits + i * stride + layout::raycast_hit_fraction);
             if (fr < best) best = fr, best_i = i;
         }
         if (best <= 1.0f) {
             d = best * r.max_distance;
-            const uint32_t handle = *reinterpret_cast<const uint32_t*>(hits + best_i * 0x38 + 0x30);
-            const uint32_t object = *reinterpret_cast<const uint32_t*>(hits + best_i * 0x38 + 0x28);
+            const uint32_t handle = *reinterpret_cast<const uint32_t*>(hits + best_i * stride + layout::raycast_hit_havok_handle);
+            const uint32_t object = *reinterpret_cast<const uint32_t*>(hits + best_i * stride + layout::raycast_hit_object);
             if (what) {
                 what->havok_handle = handle;
                 if (object != 0xFFFFFFFFu) {
-                    const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(
+                    const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(
                         rfg::rva::world__object_from_handle);
-                    if (const uint8_t* obj = from_handle(rfg::addr(rfg::rva::World), nullptr, object))
-                        what->object_type = int8_t(obj[0x7E]);
+                    if (const uint8_t* obj = from_handle(rfg::addr(rfg::rva::World) RFG_EDX_ARG, object))
+                        what->object_type = int8_t(obj[layout::object_type]);
                 }
             }
             if (what && handle != 0xFFFFFFFFu) {
@@ -524,14 +564,14 @@ float havok_distance(uint32_t fn_rva, const ipc::Ray& r, HavokHit* what = nullpt
             }
         }
     }
-    rfg::fn<void(__fastcall*)(void*, void*)>(rfg::rva::raycast_output___raycast_output)(out, nullptr);
+    rfg::fn<void(__fastcall*)(void* RFG_EDX_TYPE)>(rfg::rva::raycast_output___raycast_output)(out RFG_EDX_ARG);
     return d;
 }
 
 void check_start() {
     uint8_t* player = rfg::fn<uint8_t*(__cdecl*)()>(rfg::rva::player_get_local_player)();
     if (!player) return;
-    const float* p = reinterpret_cast<const float*>(player + 0x04);
+    const float* p = reinterpret_cast<const float*>(player + layout::object_pos);
     std::mt19937 rng(20261020);
     std::uniform_real_distribution<float> u(-kCheckRadius, kCheckRadius);
     g_rays.clear();
@@ -689,8 +729,8 @@ uint8_t* object_of_group(uint32_t group) {
     for (const auto& [e, m] : g_bodies) {
         if (m.group != group) continue;
         if (m.object == 0xFFFFFFFFu) return nullptr;
-        return rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(rfg::rva::world__object_from_handle)(
-            rfg::addr(rfg::rva::World), nullptr, m.object);  // null once the object is gone
+        return rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(rfg::rva::world__object_from_handle)(
+            rfg::addr(rfg::rva::World) RFG_EDX_ARG, m.object);  // null once the object is gone
     }
     return nullptr;
 }

@@ -68,10 +68,10 @@ void __cdecl d_mesh_query(void* renderer, void* entry) {
     o_mesh_query(renderer, entry);
 }
 
-bool(__fastcall* o_poll)(void*, void*, void*, uint32_t, uint64_t*);
-bool __fastcall d_poll(void* manager, void* edx, void* buffer, uint32_t query, uint64_t* result) {
+bool(__fastcall* o_poll)(void* RFG_EDX_TYPE, void*, uint32_t, uint64_t*);
+bool __fastcall d_poll(void* manager RFG_EDX_PARAM, void* buffer, uint32_t query, uint64_t* result) {
     ++t_polls;
-    return o_poll(manager, edx, buffer, query, result);
+    return o_poll(manager RFG_EDX_PASS, buffer, query, result);
 }
 
 }  // namespace

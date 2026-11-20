@@ -1,6 +1,7 @@
 #include "core/gameloop.h"
 
 #include <windows.h>
+#include <intrin.h>
 
 #include <atomic>
 #include <cstdint>
@@ -67,11 +68,27 @@ bool patch_frametime_call() {
     return true;
 }
 
+// OpenRFG64: in OpenRFG64 the call is not at +0x91, so frametime_calculate itself is hooked; the callbacks run
+// only for rfg_do_frame's call (the one the upstream patch redirects), the function's other callers get it as is.
+void(__cdecl* o_frametime)(bool, float, float) = nullptr;
+void __cdecl d_frametime(bool quantize, float quantum, float fixed_rate) {
+    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
+    const bool from_frame = caller - rfg::rva::rfg_do_frame < rfg::size::rfg_do_frame;
+    if (from_frame && g_fixed_rate) fixed_rate = g_fixed_rate();
+    o_frametime(quantize, quantum, fixed_rate);
+    if (!from_frame) return;
+    if (g_after_frametime) g_after_frametime();
+    for (auto fn : g_after_frametime_fns) fn();
+}
+
 }  // namespace
 
 bool install() {
     bool ok = hooks::create(rfg::rva::rfg_do_frame, &d_do_frame, &o_do_frame, "rfg_do_frame");
-    ok &= patch_frametime_call();
+    if (rfg::is_openrfg64())
+        ok &= hooks::create(rfg::rva::frametime_calculate, &d_frametime, &o_frametime, "frametime_calculate");
+    else
+        ok &= patch_frametime_call();
     return ok;
 }
 

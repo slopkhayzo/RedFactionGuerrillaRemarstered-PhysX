@@ -108,12 +108,12 @@ uint32_t forwarder_caller(void* const* frame, uintptr_t caller) {
 }
 
 // world::create_object_internal(class hash, obj_prop_block*, world_zone*, flags)
-uint8_t*(__fastcall* o_create)(void*, void*, uint32_t, void*, void*, uint32_t);
-uint8_t* __fastcall d_create(void* world, void* edx, uint32_t cls, void* props, void* zone, uint32_t flags) {
+uint8_t*(__fastcall* o_create)(void* RFG_EDX_TYPE, uint32_t, void*, void*, uint32_t);
+uint8_t* __fastcall d_create(void* world RFG_EDX_PARAM, uint32_t cls, void* props, void* zone, uint32_t flags) {
     void* const* frame = static_cast<void* const*>(_AddressOfReturnAddress());
     const uintptr_t caller = reinterpret_cast<uintptr_t>(frame[0]);
     const uint32_t outer = forwarder_caller(frame, caller);
-    uint8_t* obj = o_create(world, edx, cls, props, zone, flags);
+    uint8_t* obj = o_create(world RFG_EDX_PASS, cls, props, zone, flags);
     if (obj) {
         const int32_t type = int8_t(obj[0x7E]);
         g_created.add(rva_of(caller), outer, type);
@@ -142,8 +142,8 @@ void __cdecl d_mark_for_fade(uint8_t* mover, int arg) {
 }
 
 // world::destroy_object(object*, bool): flags the object for deletion (the world frees flagged objects later).
-bool(__fastcall* o_destroy)(void*, void*, uint8_t*, bool);
-bool __fastcall d_destroy(void* world, void* edx, uint8_t* obj, bool flag) {
+bool(__fastcall* o_destroy)(void* RFG_EDX_TYPE, uint8_t*, bool);
+bool __fastcall d_destroy(void* world RFG_EDX_PARAM, uint8_t* obj, bool flag) {
     // The same checks the function makes before it destroys anything: a valid handle (+0x6C) and type (+0x7E).
     const bool valid = obj && *reinterpret_cast<uint32_t*>(obj + 0x6C) != 0xFFFFFFFFu && int8_t(obj[0x7E]) != -1;
     const int32_t type = valid ? int8_t(obj[0x7E]) : -1;
@@ -153,7 +153,7 @@ bool __fastcall d_destroy(void* world, void* edx, uint8_t* obj, bool flag) {
         outer = t_outer_caller;
     }
     const uint32_t handle = valid ? *reinterpret_cast<uint32_t*>(obj + 0x6C) : 0xFFFFFFFFu;
-    const bool done = o_destroy(world, edx, obj, flag);
+    const bool done = o_destroy(world RFG_EDX_PASS, obj, flag);
     if (done && valid) {
         g_destroyed.add(caller, outer, type);
         g_last_destroyed[g_last_destroyed_at.fetch_add(1, std::memory_order_relaxed) % kDestroyedKept] = {handle, outer ? outer : caller};
@@ -167,11 +167,11 @@ bool __fastcall d_destroy(void* world, void* edx, uint8_t* obj, bool flag) {
 }
 
 // world::destroy_object(handle, bool) looks the object up and calls the overload above.
-bool(__fastcall* o_destroy_by_handle)(void*, void*, uint32_t, bool);
-bool __fastcall d_destroy_by_handle(void* world, void* edx, uint32_t handle, bool flag) {
+bool(__fastcall* o_destroy_by_handle)(void* RFG_EDX_TYPE, uint32_t, bool);
+bool __fastcall d_destroy_by_handle(void* world RFG_EDX_PARAM, uint32_t handle, bool flag) {
     const uint32_t saved = t_outer_caller;
     t_outer_caller = rva_of(reinterpret_cast<uintptr_t>(_ReturnAddress()));
-    const bool done = o_destroy_by_handle(world, edx, handle, flag);
+    const bool done = o_destroy_by_handle(world RFG_EDX_PASS, handle, flag);
     t_outer_caller = saved;
     return done;
 }
