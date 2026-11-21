@@ -1241,12 +1241,20 @@ void scan() {
 
 // The urgent records first (area mode), then the rest, in order, while the ring has room. Records counted for a body
 // move its pending count; its last one in the ring marks the frame after which the host has applied them all.
+// OpenRFG64: the ring (4 MB) is everyone's: the debris coming over, explosions, the player. The static world fills
+// it only up to kMirrorRingBytes (a record larger than that goes alone into an empty ring), so the others always find
+// room; the host cooks statics far slower than a megabyte a frame anyway. On ten avenues the area mode kept the ring
+// full through a demolition, and the debris stayed in Havok: 1,142 pieces taken in 80 s of 5,000-5,700 adoptable,
+// the game at 5 fps (2026-11-21).
+constexpr uint32_t kMirrorRingBytes = 1u << 20;
 bool flush_box(std::deque<Out>& box) {
     uint32_t last_group = 0;
     Mirrored* last = nullptr;
     while (!box.empty()) {
         const Out& o = box.front();
         if (pxbridge::ring_free() < o.rec.size()) return false;
+        const uint32_t used = pxbridge::ring_used();
+        if (used > 0 && used + o.rec.size() > kMirrorRingBytes) return false;
         if (!pxbridge::send_record(o.rec.data(), uint32_t(o.rec.size()))) return false;
         g_stats.sent_kb += uint32_t(o.rec.size() >> 10);
         g_outbox_bytes -= o.rec.size();
