@@ -143,6 +143,16 @@ struct Config {
     int exp_physx_world = 0;
     int exp_physx_world_check = 0;
     int exp_physx_world_hf = 0;  // diagnostic: bit 0 x-major heights, bit 1 flipped height-field split
+    // OpenRFG64 (big maps): a level whose static world makes more statics in the host than PhysXWorldStatics is
+    // mirrored in part: what is within PhysXWorldNearM of the player, and of the other buildings the pieces near the
+    // debris in PhysX and near where pieces wait to come over (0: always the whole static world, rfg.exe's default).
+    // A map of 48 tall buildings makes about 383,000 statics; one of 480, 4.1 million, which never got there.
+#if defined(_WIN64)
+    int exp_physx_world_statics = 400000;
+#else
+    int exp_physx_world_statics = 0;
+#endif
+    int exp_physx_world_near_m = 60;
     // X2 (physx/debris_offload.h): debris pieces leave the game for the PhysX host (needs PhysX and PhysXWorld).
     int exp_physx_debris = 0;
     int exp_physx_debris_batch = 1;  // their render instances stay batchable (drawn instanced; 0: one by one)

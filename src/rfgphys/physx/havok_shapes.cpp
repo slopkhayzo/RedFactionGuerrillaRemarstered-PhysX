@@ -59,6 +59,29 @@ Transform from_qs_transform(const uint8_t* p) {
     return r;
 }
 
+// OpenRFG64: the first container under `shape`, through MOPP and transform wrappers, with the transform its children
+// are placed by (applied to `t`) and its depth; null if `shape` is a leaf or has none.
+const uint8_t* first_container(const uint8_t* shape, Transform& t, int& depth) {
+    while (shape && depth < kMaxDepth) {
+        switch (type_of(shape)) {
+            case kMopp:
+                shape = ptr(shape, layout::hk_mopp_child);
+                continue;
+            case kTransform:
+                t = t * from_hk_transform(shape + layout::hk_transform_t);
+                shape = ptr(shape, layout::hk_transform_child);
+                continue;
+            case kTriangle: case kBox: case kConvexVertices: case kCapsule: case kCylinder: case kConvexTranslate:
+            case kConvexTransform: case kTriSampledHeightFieldBvTree: case kTriSampledHeightFieldCollection:
+            case kSampledHeightField:
+                return nullptr;
+            default:
+                return vfn<GetContainer>(shape, 15)(shape);
+        }
+    }
+    return nullptr;
+}
+
 #pragma warning(disable : 4324)  // Walker is padded for its 16-byte aligned shape buffers, as intended
 struct Walker {
     alignas(16) uint8_t buffers[kMaxDepth + 1][kShapeBuffer];
@@ -184,6 +207,19 @@ struct Walker {
         for (uint32_t k = first(container); k != kInvalidKey && guard < 4000000; k = next(container, k), ++guard)
             leaf_or_container(child(container, k, buffers[depth + 1]), t, depth + 1, k);
     }
+
+    // OpenRFG64: only the children of the first container under `shape` with these keys.
+    void keys_of(const uint8_t* shape, const Transform& placed, const uint32_t* keys, size_t n) {
+        Transform t = placed;
+        int depth = 0;
+        const uint8_t* container = first_container(shape, t, depth);
+        if (!container) {
+            ok = false;
+            return;
+        }
+        const auto child = vfn<ChildShape>(container, 5);
+        for (size_t i = 0; i < n; ++i) leaf_or_container(child(container, keys[i], buffers[depth + 1]), t, depth + 1, keys[i]);
+    }
 };
 
 }  // namespace
@@ -229,6 +265,24 @@ const char* type_name(uint8_t type) {
 bool walk(const uint8_t* shape, const Transform& t, Sink& sink) {
     Walker w(sink);  // 7 KB of shape buffers on the stack
     w.leaf_or_container(shape, t, 0, kInvalidKey);
+    return w.ok;
+}
+
+bool container_keys(const uint8_t* shape, std::vector<uint32_t>& out) {
+    Transform t = Transform::identity();
+    int depth = 0;
+    const uint8_t* container = first_container(shape, t, depth);
+    if (!container) return false;
+    const auto first = vfn<FirstKey>(container, 2);
+    const auto next = vfn<NextKey>(container, 3);
+    int guard = 0;
+    for (uint32_t k = first(container); k != kInvalidKey && guard < 4000000; k = next(container, k), ++guard) out.push_back(k);
+    return true;
+}
+
+bool walk_keys(const uint8_t* shape, const Transform& t, const uint32_t* keys, size_t count, Sink& sink) {
+    Walker w(sink);
+    w.keys_of(shape, t, keys, count);
     return w.ok;
 }
 

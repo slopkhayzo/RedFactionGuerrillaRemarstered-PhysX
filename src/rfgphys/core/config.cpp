@@ -141,6 +141,10 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_world = get_int(ini_path, L"Experiment", L"PhysXWorld", 0);
     c.exp_physx_world_check = get_int(ini_path, L"Experiment", L"PhysXWorldCheck", 0);
     c.exp_physx_world_hf = get_int(ini_path, L"Experiment", L"PhysXWorldHf", 0);
+    c.exp_physx_world_statics = get_int(ini_path, L"Experiment", L"PhysXWorldStatics", c.exp_physx_world_statics);
+    if (c.exp_physx_world_statics < 0) c.exp_physx_world_statics = 0;
+    c.exp_physx_world_near_m = get_int(ini_path, L"Experiment", L"PhysXWorldNearM", 60);
+    if (c.exp_physx_world_near_m < 10) c.exp_physx_world_near_m = 10;
     c.exp_physx_debris = get_int(ini_path, L"Experiment", L"PhysXDebris", 0);
     c.exp_physx_debris_batch = get_int(ini_path, L"Experiment", L"PhysXDebrisBatch", 1);
     c.exp_physx_debris_drop_meshes = get_int(ini_path, L"Experiment", L"PhysXDebrisDropMeshes", 1);
@@ -216,7 +220,7 @@ std::string describe(const Config& c) {
              "block_save_writes=%d exp_debris_collide=%d (solver buffer %d MB) exp_gpu_occlusion=%d "
              "exp_shadow_min_radius_cm=%d/%d/%d exp_havok_threads=%d%s (min island size %d) exp_keep_debris=%d (debris "
              "pool %d, render instances %d, Havok heap %d MB, zone reserve %d) exp_physx=%d (%d Hz, %d slots, test %d bodies, "
-             "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d) exp_physx_debris=%d (piles %d) fly_camera=%d "
+             "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d, statics %d, near %d m) exp_physx_debris=%d (piles %d) fly_camera=%d "
              "(key %d, %d m/s, look speed %d%%, hide HUD %d) harness=%s (recordings '%s', recording '%s', seed %08X, "
              "checkpoint every %d, virtual clock %d, auto start '%s', input script '%s', max frames %d, trace rng %d, "
              "screenshots '%s' every %d, track %d, lock track %d within %d cm)",
@@ -228,7 +232,8 @@ std::string describe(const Config& c) {
              c.exp_havok_min_island_size, c.exp_keep_debris,
              c.exp_debris_pool, c.exp_render_instances, c.exp_havok_heap_mb, c.exp_zone_reserve, c.exp_physx,
              c.exp_physx_rate, c.exp_physx_max_bodies, c.exp_physx_test, c.exp_physx_test_crash_after_s,
-             c.exp_collision_survey, c.exp_physx_world, c.exp_physx_world_check, c.exp_physx_debris, c.exp_physx_debris_piles,
+             c.exp_collision_survey, c.exp_physx_world, c.exp_physx_world_check, c.exp_physx_world_statics,
+             c.exp_physx_world_near_m, c.exp_physx_debris, c.exp_physx_debris_piles,
              c.fly_camera, c.fly_camera_key, c.fly_camera_speed, c.fly_camera_look_speed, c.fly_camera_hide_hud,
              kModes[c.harness_mode],
              narrow(c.harness_recordings_dir).c_str(), narrow(c.harness_recording).c_str(), c.harness_seed,

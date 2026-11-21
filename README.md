@@ -105,6 +105,37 @@ python tools\package.py                                                  # dist\
   generates it from `tools/symbols.txt`, the GOG game's `rfg.pdb` (read with analysis scripts that aren't part of this
   repository) and `tools/steam_map.json`, which `tools/match_builds.py` makes from the two builds' `rfg.exe`.
 
+## OpenRFG64 (64-bit)
+
+The `openrfg64` branch also builds the plugin for [OpenRFG64](https://github.com/gamerscruffy/OpenRFG64), a 64-bit
+OpenRFG (the game rebuilt from its decompiled source). The `memtest` branch of
+[slopkhayzo/OpenRFG64](https://github.com/slopkhayzo/OpenRFG64) lifts the game's memory limits, which big maps need.
+The same source still builds the 32-bit plugin for `rfg.exe`.
+
+```powershell
+cmake -S . -B build-x64 -A x64
+cmake --build build-x64 --config RelWithDebInfo   # build-x64\RelWithDebInfo\rfgphys.asi
+```
+
+- OpenRFG64 moves every address with each build, so at start-up the plugin looks the game's functions, globals and
+  struct layouts up by name in the running program's own PDB (`OpenRFG.pdb`, next to its exe). Without it the plugin
+  stays inactive.
+- It uses the same 64-bit PhysX host, built as above.
+- Settings that differ, in `scripts\rfgphys.ini` (section `[Experiment]`):
+  - The body slots start at `PhysXMaxBodies` and grow up to `PhysXSlotsMax` (4,194,304) while the GPU has room:
+    every program's graphics memory in use stays below the total minus `PhysXVramReserveMB` (0: an eighth of it, at
+    least 2 GB). Past that the farthest pieces go, pieces younger than `PhysXRecycleMinAgeS` (60) last.
+  - `PhysXWorldStatics` (400,000 in the 64-bit build, 0 in the 32-bit one): a map whose static world would make more
+    statics than that in PhysX is mirrored in part. The ground and buildings within `PhysXWorldNearM` (60 m) of the
+    player go whole. Of the other buildings only the pieces near the debris in PhysX go, and those where pieces wait
+    to come over. Areas come and go as the player and the debris move, and a piece stays with Havok until the area
+    around it is in PhysX. 0: always the whole static world.
+- Tested on Wrecking Crew maps of generated tall buildings. With 48 buildings (383,000 statics) the whole static world
+  goes to PhysX, as with `rfg.exe`. With 480 (4.1 million statics) PhysX is ready 9 s into the match with the 15
+  buildings around the player, and holds 350,000-720,000 statics during a 4-minute demolition.
+- On x64 the plugin logs where its own frame time goes every 5 s (`debris offload: the last N frames took here`, and
+  the world mirror's scans), since the telemetry module is 32-bit only.
+
 ## Repository layout
 
 | Path | Contents |

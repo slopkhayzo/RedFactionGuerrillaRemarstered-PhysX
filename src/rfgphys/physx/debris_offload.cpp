@@ -528,7 +528,17 @@ struct Waiting {
     uint32_t since_ms;       // game ms adopt() first saw it
     uint32_t calm_since_ms;  // since when it has been calm (valid with calm)
     bool calm;
+    bool area_waited = false;  // OpenRFG64: it was due, but the static world around it was not in the host yet
 };
+uint64_t g_area_waits = 0;  // OpenRFG64: pieces that waited for the static world around them (world_mirror::ready_at)
+// OpenRFG64: where the frame's time goes here, every 5 s of gameplay (the 64-bit build runs without telemetry).
+enum { kTimeExplosions, kTimeSlots, kTimeAdopt, kTimePlayer, kTimeVehicles, kTimeStandIns, kTimeTask, kTimeZone, kTimeParts };
+const char* const kTimeNames[kTimeParts] = {"explosions and sweeps", "slots", "adopt", "player", "vehicles and chunks",
+                                            "stand-ins", "render task", "zone checks"};
+double g_time_ms[kTimeParts] = {};
+uint32_t g_time_frames = 0;
+uint64_t g_time_zone_calls = 0, g_time_movers = 0;
+double g_time_next_ms = 0;
 std::unordered_map<uint32_t, Waiting> g_first_seen;  // object handle -> waiting piece
 
 std::vector<std::pair<uint32_t, uint8_t*>> g_waiting_list;  // this pass's waiting pieces (handle, render instance)
@@ -584,18 +594,28 @@ const void* g_zone_check_return = nullptr;
 const void* g_chunk_zone_check_return = nullptr;  // in object_mover::check_for_movement_delete
 std::atomic<uint32_t> g_chunks_kept_in_zone{0};
 bool(__fastcall* o_in_original_zone)(void* RFG_EDX_TYPE, uint8_t*) = nullptr;
+// The detour times the check (OpenRFG64's 5 s line); `caller` is the game's call site.
+bool in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj, const void* caller);
 bool __fastcall d_in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj) {
+    const int64_t t0 = session::qpc();
+    const bool in = in_original_zone(w RFG_EDX_PASS, obj, _ReturnAddress());
+    g_time_ms[kTimeZone] += session::ticks_to_ms(session::qpc() - t0);
+    ++g_time_zone_calls;
+    return in;
+}
+bool in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj, const void* caller) {
     const bool in = o_in_original_zone(w RFG_EDX_PASS, obj);
     // A loose chunk in the host goes where the host takes it, past a zone's edge too.
-    if (!in && obj && _ReturnAddress() == g_chunk_zone_check_return && g_driven.count(*reinterpret_cast<const uint32_t*>(obj + kObjHandle))) {
+    if (!in && obj && caller == g_chunk_zone_check_return && g_driven.count(*reinterpret_cast<const uint32_t*>(obj + kObjHandle))) {
         g_chunks_kept_in_zone.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
-    if (in || !g_on || _ReturnAddress() != g_zone_check_return || !obj) return in;
+    if (in || !g_on || caller != g_zone_check_return || !obj) return in;
     // Destroyed already (adopt() took it this frame; the object goes at the frame's end): the game's second destroy
     // would do nothing (world::destroy_object skips a destroyed object), so it is not asked to.
     if (obj[kObjFlags] & kObjDestroyed) return true;
-    if (!pxbridge::ready() || !world_mirror::ready()) {
+    // OpenRFG64: where the static world around it is in the host (world_mirror's area mode on big maps).
+    if (!pxbridge::ready() || !world_mirror::ready_at(reinterpret_cast<const float*>(obj + layout::object_pos), 16.0f)) {
         ++g_zone_deleted[kZoneNotReady];
         return in;
     }
@@ -646,6 +666,7 @@ void adopt() {
         g_waiting > kMaxWaiting ? uint32_t(uint64_t(g_adopt_delay_ms) * kMaxWaiting / g_waiting) : g_adopt_delay_ms;
     uint32_t waiting = 0;
     g_waiting_list.clear();
+    g_time_movers += uint64_t(n);
     for (int i = 0; i < n && budget && !g_free.empty(); ++i) {
         uint8_t* obj = all[movers[i]];
         if (!obj || (obj[kObjFlags] & kObjDestroyed)) continue;
@@ -662,6 +683,12 @@ void adopt() {
         const uint8_t motion = body[kBodyMotionType];
         if (motion == 0 || motion == 4 || motion == 5) continue;  // invalid, keyframed, fixed
         const uint32_t obj_handle = *reinterpret_cast<const uint32_t*>(obj + kObjHandle);
+        // OpenRFG64: on a big map the host holds the static world only where it is wanted (world_mirror's area mode):
+        // a piece goes over once the ground and buildings around it, and where it is headed, are there. Asking for
+        // them while it waits (or is past waiting) brings them; meanwhile it stays with Havok.
+        const float* alv = reinterpret_cast<const float*>(body + kBodyLinVel);
+        const float reach = 8.0f + 0.5f * std::min(std::sqrt(alv[0] * alv[0] + alv[2] * alv[2]), 32.0f);
+        const bool area_ready = world_mirror::ready_at(hs::body_transform(body).pos, reach);
         bool at_rest = false, waited = false;
         if (g_adopt_delay_ms) {
             const auto [seen, first_sight] = g_first_seen.try_emplace(obj_handle, Waiting{now_ms, 0, false});
@@ -680,7 +707,12 @@ void adopt() {
                                     (*reinterpret_cast<const uint32_t*>(body + kBodyFilterInfo) & 0x7F) == kLayerWorldOnly;
             const bool from_driven =
                 !g_driven.empty() && g_driven.count(*reinterpret_cast<const uint32_t*>(obj + kGmOriginalObject)) != 0;
-            if (!left_zone && !world_only && !from_driven && now_ms - wt.since_ms < wait_ms) {
+            const bool due = left_zone || world_only || from_driven || now_ms - wt.since_ms >= wait_ms;
+            if (!due || !area_ready) {
+                if (due && !wt.area_waited) {
+                    wt.area_waited = true;
+                    ++g_area_waits;
+                }
                 g_waiting_list.emplace_back(obj_handle, inst);
                 ++waiting;
                 continue;
@@ -689,6 +721,9 @@ void adopt() {
             waited = world_only || from_driven || now_ms - wt.since_ms >= kGentleAfterMs;
             if (world_only) ++g_world_only_went;
             if (from_driven) ++g_from_driven_went;
+        } else if (!area_ready) {
+            ++g_area_waits;
+            continue;
         }
         Parts parts;
         if (!walk_guarded(hs::body_shape(body), parts) || parts.has_triangles || parts.parts.empty()) continue;
@@ -1057,6 +1092,7 @@ constexpr float kVehicleRange = 200.0f;       // m from the player
 // Handed back to Havok's physics as they used to be, they sank through the piles, which Havok does not see (research/docs/08
 // §15); kept in the host for good, a long match had a thousand of them, and the solver's buffers killed the host.
 constexpr float kChunkRange = 400.0f, kChunkBackRange = 110.0f, kChunkParkRange = 150.0f;
+constexpr float kChunkAreaM = 24.0f;  // OpenRFG64: around a chunk, the static world that must be in the host first
 constexpr double kVehicleScanMs = 250.0, kVehicleScanSoonMs = 50.0;  // with a chunk just made, to have it out of Havok
 constexpr float kVehicleJump = 4.0f;          // m in one frame: a teleport (a spawn, a reset), not a move
 constexpr size_t kProxyMaxParts = 256;        // a body of more convex parts is left out (a large part of a building)
@@ -1752,7 +1788,10 @@ void scan_vehicles(const float* player_pos) {
                         const float* m = parked->second.mid;
                         const float mx = m[0] - player_pos[0], my = m[1] - player_pos[1], mz = m[2] - player_pos[2];
                         const bool whole = parked->second.signature == signature;
-                        if (whole && (mx * mx + my * my + mz * mz > kChunkBackRange * kChunkBackRange || g_vehicle_free.size() <= kSlotsKeptFree)) continue;
+                        // OpenRFG64: and once the static world around it is in the host (asked for when in range).
+                        if (whole && (mx * mx + my * my + mz * mz > kChunkBackRange * kChunkBackRange || g_vehicle_free.size() <= kSlotsKeptFree ||
+                                      (world_mirror::partial() && !world_mirror::ready_at(m, kChunkAreaM))))
+                            continue;
                         unparked = true;
                         g_driven.erase(parked->second.obj_handle);  // back as it comes into the host
                         back_at_rest = whole;
@@ -1791,7 +1830,8 @@ void scan_vehicles(const float* player_pos) {
                         mirror_asked = true;
                         mirror_ready = world_mirror::catch_up();
                     }
-                    if (!mirror_ready) {
+                    // OpenRFG64: and the static world around it is in the host (world_mirror's area mode).
+                    if (!mirror_ready || (world_mirror::partial() && !world_mirror::ready_at(pos, kChunkAreaM))) {
                         g_next_vehicle_scan = 0;
                         ++g_chunks_waited_for_mirror;
                         continue;
@@ -5404,6 +5444,7 @@ void __cdecl render_task(void*, int) {
                      session::ticks_to_ms(t1 - t0) + session::ticks_to_ms(t4 - t3)});
     g_stats.move_ms += float(session::ticks_to_ms(t4 - t0));
     publish_for_routing();
+    g_time_ms[kTimeTask] += session::ticks_to_ms(session::qpc() - t0);
 }
 
 void on_frame(int game_state) {
@@ -5443,18 +5484,51 @@ void on_frame(int game_state) {
         }
     }
     const int64_t t0 = session::qpc();
+    int64_t ta = t0;
+    auto lap = [&](int part) {
+        const int64_t tb = session::qpc();
+        g_time_ms[part] += session::ticks_to_ms(tb - ta);
+        ta = tb;
+    };
     send_explosions();
     send_melee_sweeps();
+    lap(kTimeExplosions);
     cool_slots(g_cooling, g_free);
     cool_slots(g_vehicle_cooling, g_vehicle_free);
     grow_slots();  // OpenRFG64
+    lap(kTimeSlots);
     if (world_mirror::ready()) adopt();  // not before the pieces have a world to land on
+    lap(kTimeAdopt);
     player_proxy();
+    lap(kTimePlayer);
     move_vehicles();
+    lap(kTimeVehicles);
     update_stand_ins();
+    lap(kTimeStandIns);
     if (g_probe) probe_frame();
     if (!g_inspect_frames.empty()) inspect_frame();
     g_stats.adopt_ms += float(session::ticks_to_ms(session::qpc() - t0));
+    ++g_time_frames;
+    const double now_ms = session::since_start_ms();
+    if (now_ms >= g_time_next_ms) {
+        if (g_time_next_ms > 0 && g_time_frames) {
+            char parts[512];
+            int at = 0;
+            double total = 0;
+            for (int i = 0; i < kTimeParts; ++i) {
+                total += g_time_ms[i];
+                at += snprintf(parts + at, sizeof(parts) - size_t(at), "%s%s %.0f", i ? ", " : "", kTimeNames[i], g_time_ms[i]);
+                if (at >= int(sizeof(parts))) at = int(sizeof(parts)) - 1;
+            }
+            LOG("debris offload: the last %u frames took here %.0f ms (%s; %llu zone checks, %llu movers looked at); "
+                "%u pieces waiting in Havok", g_time_frames, total, parts,
+                static_cast<unsigned long long>(g_time_zone_calls), static_cast<unsigned long long>(g_time_movers), g_waiting);
+        }
+        for (double& t : g_time_ms) t = 0;
+        g_time_frames = 0;
+        g_time_zone_calls = g_time_movers = 0;
+        g_time_next_ms = now_ms + 5000;
+    }
 }
 
 // The game's pool of compile requests: s_params_pool, a pool_list of 4,096 rl_mesh_recompile_parameters (+8 their
@@ -6009,6 +6083,10 @@ void __cdecl d_level_shutdown() {
         if (g_adopt_delay_ms)
             LOG("debris offload: level end; at most %u new pieces were waiting in Havok at once; %u went over at rest "
                 "(frozen), %u moving", g_waiting_peak, g_went_at_rest, g_went_moving);
+        if (g_area_waits)
+            LOG("debris offload: level end; %llu pieces waited in Havok for the static world around them to reach the host",
+                static_cast<unsigned long long>(g_area_waits));
+        g_area_waits = 0;
         log_zone_crossings();
         g_first_seen.clear();
         g_waiting_list.clear();
