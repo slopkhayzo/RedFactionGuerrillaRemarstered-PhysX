@@ -26,6 +26,9 @@ void select_build(int index);
 // A code RVA of the running build as the GOG build's, whose PDB names it (diagnostics); 0 if the GOG build has no
 // such code.
 uint32_t gog_rva(uint32_t rva);
+// A call site's RVA as the record/replay harness keys it: the GOG build's, so every rfg.exe build replays alike;
+// OpenRFG64's own (its code has no GOG address), so its recordings replay alike in the same build.
+uint32_t site_rva(uint32_t rva);
 
 inline void* addr(uint32_t rva) { return reinterpret_cast<void*>(base() + rva); }
 

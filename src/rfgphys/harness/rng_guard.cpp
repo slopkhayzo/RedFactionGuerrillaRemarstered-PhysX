@@ -90,8 +90,9 @@ public:
     Guard(uint32_t id, void* ret) {
         if (t_depth++ > 0) return;
         const bool sim = gameloop::on_sim_thread();
-        // Streams are keyed and seeded by the call site as the GOG build's RVA, so every build replays alike.
-        caller_ = rfg::gog_rva(uint32_t(reinterpret_cast<uintptr_t>(ret) - rfg::base()));
+        // Streams are keyed and seeded by the call site as the GOG build's RVA, so every build replays alike
+        // (rfg::site_rva).
+        caller_ = rfg::site_rva(uint32_t(reinterpret_cast<uintptr_t>(ret) - rfg::base()));
         if (!sim) {
             std::lock_guard<std::mutex> lock(g_other_mutex);
             ++g_other[(uint64_t(id) << 32) | caller_];
@@ -202,6 +203,14 @@ uint32_t map_hash(const std::unordered_map<uint32_t, uint32_t>& m) {
     return h;
 }
 
+// A generator function OpenRFG64 has no symbol for (vector4::rand_sphere and rand_around_z: inlined there) draws
+// through the ones it calls, which are hooked.
+template <class Fn>
+bool hook_draw(uint32_t rva, Fn detour, Fn* original, const char* name) {
+    if (rva == 0 && rfg::is_openrfg64()) return true;
+    return hooks::create(rva, detour, original, name);
+}
+
 }  // namespace
 
 bool install() {
@@ -215,9 +224,9 @@ bool install() {
     ok &= hooks::create(r::int_rand_chance, &d_int_rand_chance, &o_int_rand_chance, "int_rand_chance");
     ok &= hooks::create(r::fl_rand_chance, &d_fl_rand_chance, &o_fl_rand_chance, "fl_rand_chance");
     ok &= hooks::create(r::vector__rand_sphere, &d_vec_sphere, &o_vec_sphere, "vector::rand_sphere");
-    ok &= hooks::create(r::vector4__rand_sphere, &d_vec4_sphere, &o_vec4_sphere, "vector4::rand_sphere");
+    ok &= hook_draw(r::vector4__rand_sphere, &d_vec4_sphere, &o_vec4_sphere, "vector4::rand_sphere");
     ok &= hooks::create(r::vector__rand_around_z, &d_vec_around_z, &o_vec_around_z, "vector::rand_around_z");
-    ok &= hooks::create(r::vector4__rand_around_z, &d_vec4_around_z, &o_vec4_around_z, "vector4::rand_around_z");
+    ok &= hook_draw(r::vector4__rand_around_z, &d_vec4_around_z, &o_vec4_around_z, "vector4::rand_around_z");
     ok &= hooks::create(r::timestamp__set_rand, &d_ts_set_rand, &o_ts_set_rand, "timestamp::set_rand");
     ok &= hooks::create(r::timestamp_realtime__set_rand, &d_tsr_set_rand, &o_tsr_set_rand,
                         "timestamp_realtime::set_rand");
@@ -244,7 +253,7 @@ void reseed(uint32_t seed, bool session_start) {
 
 bool crt_rand(uintptr_t caller, int& value) {
     if (!g_isolate.load(std::memory_order_acquire) || g_cells_depth > 0) return false;
-    const uint32_t site = rfg::gog_rva(uint32_t(caller - rfg::base()));  // as the GOG build's (see Guard)
+    const uint32_t site = rfg::site_rva(uint32_t(caller - rfg::base()));  // as the GOG build's (see Guard)
     auto it = g_crt_streams.find(site);
     if (it == g_crt_streams.end()) it = g_crt_streams.emplace(site, mix(g_seed + 0x6A09E667u) ^ mix(site)).first;
     trace(kCrtRand, uint16_t(it->second >> 16), site);

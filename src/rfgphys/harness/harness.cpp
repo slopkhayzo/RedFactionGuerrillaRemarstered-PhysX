@@ -44,9 +44,9 @@ constexpr int kEndStates[] = {0 /* MAINMENU */,  2 /* LOAD */,      3 /* BOOT */
                               19 /* WC_MAIN_MENU */, 48 /* MAINMENU_IDLE */, 55 /* VERIFY_SAVEGAME */,
                               56 /* SHUTDOWN */, 59 /* WC_INIT */,   60 /* WC_SHUTDOWN */};
 
-// Game layouts (rfg.pdb).
+// Game layouts (rfg.pdb). OpenRFG64's x64 build has the same (plain data, checked against its PDB).
 constexpr uint32_t kWcOptionsSize = 0x2C;             // wrecking_crew_options
-constexpr uint32_t kWcOptionsMode = 0x0, kWcOptionsMap = 0x8;
+constexpr uint32_t kWcOptionsMode = 0x0, kWcOptionsMap = 0x8, kWcOptionsOldMap = 0xC;
 constexpr uint32_t kWcPlayerInfoSize = 0xC14;         // wc_player_info
 constexpr uint32_t kWcPlayerCharacterIndex = 0x58;
 constexpr int kWcMenuLoaded = 1;                      // wc_shell_info::state MMS_WC_LOADED
@@ -303,8 +303,8 @@ int __cdecl d_rand() {
     if (g_phase != Phase::kIdle) {
         if (!gameloop::on_sim_thread()) {
             const uint32_t n = g_rand_other.fetch_add(1, std::memory_order_relaxed);
-            if (n < 4)  // as the GOG build's RVA, comparable between builds
-                g_rand_other_callers[n] = rfg::gog_rva(uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base()));
+            if (n < 4)  // as the GOG build's RVA, comparable between builds (rfg::site_rva)
+                g_rand_other_callers[n] = rfg::site_rva(uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base()));
         } else {
             int value;
             if (rng_guard::crt_rand(reinterpret_cast<uintptr_t>(_ReturnAddress()), value)) return value;
@@ -545,6 +545,24 @@ std::string wc_map_name(int map) {
     if (map < 0 || map >= rfg::global<int32_t>(rfg::rva::Wrecking_crew_num_maps)) return "?";
     const char* name = rfg::fn<const char*(__cdecl*)(int)>(rfg::rva::wrecking_crew_get_map_file_name)(map);
     return name ? name : "?";
+}
+
+// The map's index in this build by its file name (another build may list the maps in another order or lack some);
+// -1 when it has no such map.
+int wc_map_index(const char* file) {
+    const int n = rfg::global<int32_t>(rfg::rva::Wrecking_crew_num_maps);
+    for (int i = 0; i < n; ++i) {
+        const char* name = rfg::fn<const char*(__cdecl*)(int)>(rfg::rva::wrecking_crew_get_map_file_name)(i);
+        if (name && _stricmp(name, file) == 0) return i;
+    }
+    return -1;
+}
+
+std::string wc_map_list() {
+    std::string s;
+    const int n = rfg::global<int32_t>(rfg::rva::Wrecking_crew_num_maps);
+    for (int i = 0; i < n; ++i) s += (s.empty() ? "" : ", ") + std::to_string(i) + " " + wc_map_name(i);
+    return s.empty() ? "none" : s;
 }
 
 std::string wc_mode_name(int mode) {
@@ -1140,10 +1158,31 @@ void drive_start(int state) {
             // Replays restore the recorded setup; AutoStartFrom gives a scripted recording another recording's setup.
             const rec::Header* setup = g_mode == Mode::kReplay ? &g_header : g_has_setup_from ? &g_setup_from : nullptr;
             if (setup) {
+                // old_map_index stays the menu's own: the map image it holds, which it releases on leaving.
+                int32_t old_map = 0;
+                memcpy(&old_map, options + kWcOptionsOldMap, 4);
                 memcpy(options, setup->wc_options, kWcOptionsSize);
+                memcpy(options + kWcOptionsOldMap, &old_map, 4);
                 auto* players = static_cast<uint8_t*>(rfg::addr(rfg::rva::Wc_player_infos));
                 for (int i = 0; i < 4 && !(setup == &g_setup_from && g_setup_options_only); ++i)
                     memcpy(players + i * kWcPlayerInfoSize + kWcPlayerCharacterIndex, &setup->wc_character_index[i], 4);
+                // The recorded map by its file name: this build's index for it may differ.
+                if (setup->wc_map_file[0] && !(setup == &g_setup_from && g_setup_options_only)) {
+                    int32_t map = 0;
+                    memcpy(&map, options + kWcOptionsMap, 4);
+                    const int32_t found = wc_map_index(setup->wc_map_file);
+                    if (found < 0) {
+                        LOG("harness: this build has no Wrecking Crew map %s; its maps: %s", setup->wc_map_file,
+                            wc_map_list().c_str());
+                        if (g_mode == Mode::kReplay) finish_replay("the recorded Wrecking Crew map is not in this build", false);
+                        session::exit_now("harness: the recorded Wrecking Crew map is not in this build");
+                        return;
+                    }
+                    if (found != map) {
+                        LOG("harness: map %s is %d in this build (%d where it was recorded)", setup->wc_map_file, found, map);
+                        memcpy(options + kWcOptionsMap, &found, 4);
+                    }
+                }
             }
             LOG("harness: starting the Wrecking Crew match: %s", describe_wc(options).c_str());
             g_replay_starting = true;
@@ -1574,7 +1613,7 @@ bool install(const Config& cfg) {
     ok &= hooks::create(r::verify_gamesave_start, &d_verify_save, &o_verify_save, "verify_gamesave_start");
     ok &= hooks::create(r::video_cutscene_play, &d_video_play, &o_video_play, "video_cutscene_play");
     // rfg.exe's C runtime is MSVCR100.dll; a 64-bit OpenRFG64's is the Universal CRT.
-    for (const char* crt : {"MSVCR100.dll", "api-ms-win-crt-utility-l1-1-0.dll", "ucrtbase.dll"}) {
+    for (const char* crt : {rfg::is_openrfg64() ? "api-ms-win-crt-utility-l1-1-0.dll" : "MSVCR100.dll", "ucrtbase.dll"}) {
         if (!o_srand)
             o_srand = reinterpret_cast<void(__cdecl*)(unsigned)>(
                 hooks::patch_import(crt, "srand", reinterpret_cast<void*>(&d_srand)));
