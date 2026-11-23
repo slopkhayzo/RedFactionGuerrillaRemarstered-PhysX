@@ -131,6 +131,7 @@ Config load_config(const std::wstring& ini_path) {
     c.exp_physx_rate = get_int(ini_path, L"Experiment", L"PhysXRate", 60);
     c.exp_physx_change_every = get_int(ini_path, L"Experiment", L"PhysXChangeEverySteps", 3);
     c.exp_physx_cpu_threads = get_int(ini_path, L"Experiment", L"PhysXCpuThreads", 0);
+    c.exp_physx_in_process = get_int(ini_path, L"Experiment", L"PhysXInProcess", 0);
     c.exp_physx_max_bodies = get_int(ini_path, L"Experiment", L"PhysXMaxBodies", 65536);
     c.exp_physx_slots_max = get_int(ini_path, L"Experiment", L"PhysXSlotsMax", 4194304);
     c.exp_physx_vram_reserve_mb = get_int(ini_path, L"Experiment", L"PhysXVramReserveMB", 0);

@@ -214,6 +214,7 @@ void logf(const char* fmt, ...) {
 // for PhysX's GPU module, which has no symbols here).
 std::atomic<int64_t> g_last_progress_qpc{0};  // the main loop's last finished step (or start)
 HANDLE g_main_thread = nullptr;
+std::atomic<bool> g_host_stop{false};  // the heartbeat thread ends with the main loop (in the game's process)
 
 // Walks a thread's stack from `ctx` and logs its frames.
 void log_stack(HANDLE thread, CONTEXT& ctx, bool suspended) {
@@ -2911,18 +2912,18 @@ std::wstring arg_value(int argc, wchar_t** argv, const wchar_t* name) {
     return {};
 }
 
-}  // namespace
-
-int wmain(int argc, wchar_t** argv) {
+// The host's loop: in its own process (wmain) or, in a 64-bit game with PhysXInProcess, on a thread of the game
+// (rfgphysx_core.dll, rfgphysx_core_main). In the game's process the host leaves the process to the game: no crash
+// filter or symbol handler of its own, no watch on the game's process (the game asks it to quit), and it returns
+// instead of ending the process.
+int run_host(const std::wstring& map_name, const std::wstring& log_path, const std::wstring& csv_path, bool in_process) {
     QueryPerformanceFrequency(&g_freq);
     QueryPerformanceCounter(&g_t0);
-    const std::wstring map_name = arg_value(argc, argv, L"--map");
-    const std::wstring log_path = arg_value(argc, argv, L"--log");
-    const std::wstring csv_path = arg_value(argc, argv, L"--steps-csv");
+    g_host_stop.store(false);
     // Shared reads: the logs can be followed while the host runs.
     if (!log_path.empty()) g_log = _wfsopen(log_path.c_str(), L"w", _SH_DENYNO);
     g_log_dir = log_path.substr(0, log_path.find_last_of(L'\\'));
-    logf("rfgphysx_host starting, mapping '%ls'", map_name.c_str());
+    logf("rfgphysx_host starting, mapping '%ls'%s", map_name.c_str(), in_process ? " (in the game's process)" : "");
 
     Host host;
     if (map_name.empty() || !host.sh.open(map_name.c_str())) {
@@ -2931,10 +2932,13 @@ int wmain(int argc, wchar_t** argv) {
     }
     ipc::Control* ctl = host.sh.control;
     ctl->host_pid.store(GetCurrentProcessId(), std::memory_order_relaxed);
-    HANDLE game = OpenProcess(SYNCHRONIZE, FALSE, ctl->game_pid);
-    if (!game) {
-        host.fail("cannot open the game process");
-        return 2;
+    HANDLE game = nullptr;
+    if (!in_process) {
+        game = OpenProcess(SYNCHRONIZE, FALSE, ctl->game_pid);
+        if (!game) {
+            host.fail("cannot open the game process");
+            return 2;
+        }
     }
     host.max_bodies = ctl->max_bodies;
     host.dt = ctl->step_hz > 0 ? 1.0f / ctl->step_hz : 1.0f / 60.0f;
@@ -2960,21 +2964,27 @@ int wmain(int argc, wchar_t** argv) {
     // The heartbeat says the process lives; it comes from a thread of its own, since cooking one large static (the
     // open world's meshes and height fields) can keep the main loop busy for seconds. The game judges progress by
     // the steps (snapshots) separately.
-    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_main_thread, 0, FALSE,
-                    DUPLICATE_SAME_ACCESS);
-    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-    SymInitialize(GetCurrentProcess(), nullptr, TRUE);
-    SetUnhandledExceptionFilter(&log_crash);
+    if (!in_process) {
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_main_thread, 0, FALSE,
+                        DUPLICATE_SAME_ACCESS);
+        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+        SymInitialize(GetCurrentProcess(), nullptr, TRUE);
+        SetUnhandledExceptionFilter(&log_crash);
+    }
     g_last_progress_qpc.store(qpc());
-    std::thread([ctl] {
+    std::thread([ctl, in_process] {
         bool told = false;
-        for (;;) {
+        while (!g_host_stop.load()) {
             ctl->host_heartbeat.fetch_add(1, std::memory_order_relaxed);
             Sleep(100);
             const double stuck = double(qpc() - g_last_progress_qpc.load()) * 1000.0 / double(g_freq.QuadPart);
             if (stuck > 15000.0 && !told) {
                 told = true;
-                log_main_stack(stuck);
+                // The stack walk needs the symbol handler, which only the host process has.
+                if (in_process)
+                    logf("main loop stuck: no step finished for %.0f s", stuck / 1000.0);
+                else
+                    log_main_stack(stuck);
             } else if (stuck < 1000.0) {
                 told = false;
             }
@@ -2987,10 +2997,11 @@ int wmain(int argc, wchar_t** argv) {
     double next_stats = now_ms() + 5000.0;
     double next_vram = now_ms();  // OpenRFG64: the GPU's memory for the game (its slots grow while there is room)
     const char* reason = "quit requested";
+    int exit_code = 0;
     for (;;) {
         ctl->host_heartbeat.fetch_add(1, std::memory_order_relaxed);
         if (ctl->quit.load(std::memory_order_acquire)) break;
-        if (WaitForSingleObject(game, 0) == WAIT_OBJECT_0) {
+        if (game && WaitForSingleObject(game, 0) == WAIT_OBJECT_0) {
             reason = "the game process is gone";
             break;
         }
@@ -2998,13 +3009,17 @@ int wmain(int argc, wchar_t** argv) {
         if (t >= next_step) {
             if (!host.drain()) {
                 host.fail("command ring corrupt");
-                return 2;
+                reason = "command ring corrupt";
+                exit_code = 2;
+                break;
             }
             host.step();
             if (host.gpu_failed()) {
                 host.log_stats();
                 host.fail("the GPU failed: PhysX's scene cannot go on");
-                return 3;
+                reason = "the GPU failed";
+                exit_code = 3;
+                break;
             }
 #if RFGPHYS_HOST_ZONES
             g_zones.end_step(now_ms() - t);
@@ -3034,13 +3049,45 @@ int wmain(int argc, wchar_t** argv) {
             next_stats += 5000.0;
         }
     }
-    host.log_stats();
+    if (exit_code == 0) {
+        host.log_stats();
+        ctl->host_state.store(uint32_t(ipc::HostState::Exited), std::memory_order_release);
+    }
     logf("exiting: %s", reason);
-    ctl->host_state.store(uint32_t(ipc::HostState::Exited), std::memory_order_release);
+    g_host_stop.store(true);
     if (host.steps_csv) fclose(host.steps_csv);
+    host.steps_csv = nullptr;
     if (g_log) fclose(g_log);
+    g_log = nullptr;
+    // In the game's process the thread ends here. PhysX is not torn down: a second start in one process is not
+    // supported yet (the game's backend does not try it); the process's end frees everything.
+    if (in_process) return exit_code;
     // The process exits without tearing PhysX down: the OS frees everything at once, and a CUDA context release can
     // take long enough to matter when the game is closing.
-    TerminateProcess(GetCurrentProcess(), 0);
-    return 0;
+    TerminateProcess(GetCurrentProcess(), UINT(exit_code));
+    return exit_code;
 }
+
+}  // namespace
+
+#if defined(RFGPHYSX_CORE_DLL)
+// rfgphysx_core.dll: the host's loop on the calling thread, in the game's process (rfgphys's bridge, PhysXInProcess).
+// PhysX finds its GPU module by name, and a module already loaded wins: it is loaded first from this DLL's folder.
+extern "C" __declspec(dllexport) int __cdecl rfgphysx_core_main(const wchar_t* map, const wchar_t* log, const wchar_t* steps_csv) {
+    HMODULE self = nullptr;
+    wchar_t path[MAX_PATH] = {};
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&rfgphysx_core_main), &self) &&
+        GetModuleFileNameW(self, path, MAX_PATH)) {
+        std::wstring gpu(path);
+        gpu = gpu.substr(0, gpu.find_last_of(L'\\')) + L"\\PhysXGpu_64.dll";
+        LoadLibraryW(gpu.c_str());  // missing or failing: PhysX runs on the CPU
+    }
+    return run_host(map ? map : L"", log ? log : L"", steps_csv ? steps_csv : L"", true);
+}
+#else
+int wmain(int argc, wchar_t** argv) {
+    return run_host(arg_value(argc, argv, L"--map"), arg_value(argc, argv, L"--log"), arg_value(argc, argv, L"--steps-csv"),
+                    false);
+}
+#endif

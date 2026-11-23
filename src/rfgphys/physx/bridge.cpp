@@ -30,6 +30,9 @@ constexpr DWORD kStartTimeoutMs = 30000;          // PhysX and CUDA start-up
 bool g_on = false;
 State g_state = State::Off;
 HANDLE g_mapping = nullptr, g_process = nullptr, g_job = nullptr;
+// PhysXInProcess: the host's loop runs on a thread of the game (rfgphysx_core.dll) and g_process is that thread's
+// handle, waited on and read the same way.
+bool g_in_process = false;
 uint8_t* g_base = nullptr;
 ipc::Control* g_ctl = nullptr;
 uint8_t* g_ring = nullptr;
@@ -56,7 +59,12 @@ void lose(const char* why) {
     if (g_state == State::Lost || g_state == State::Failed) return;
     LOG("PhysX host lost: %s; the game goes on without it", why);
     g_state = State::Lost;
-    if (g_process) TerminateProcess(g_process, 1);
+    if (g_in_process) {
+        // A thread cannot be ended safely: it is asked to stop (a stuck one stays stuck, the game goes on).
+        if (g_ctl) g_ctl->quit.store(1, std::memory_order_release);
+    } else if (g_process) {
+        TerminateProcess(g_process, 1);
+    }
 }
 
 bool write(const void* record, uint32_t size) {
@@ -100,10 +108,14 @@ void watch_host() {
     const DWORD now = GetTickCount();
     if (g_process && WaitForSingleObject(g_process, 0) == WAIT_OBJECT_0) {
         DWORD code = 0;
-        GetExitCodeProcess(g_process, &code);
+        if (g_in_process)
+            GetExitCodeThread(g_process, &code);
+        else
+            GetExitCodeProcess(g_process, &code);
         if (g_state == State::Starting || g_state == State::Ready) {
             char why[96];
-            snprintf(why, sizeof(why), "the host process exited (code %lu)", code);
+            snprintf(why, sizeof(why), g_in_process ? "the PhysX core's thread ended (code %lu)" : "the host process exited (code %lu)",
+                     code);
             lose(why);
         }
         return;
@@ -190,6 +202,41 @@ void on_exit(bool) {
 
 std::wstring quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 
+// PhysXInProcess (64-bit games): the PhysX core, the host's code built as rfgphysx\rfgphysx_core.dll, runs the host's
+// loop on a thread of the game, on the same shared memory (it opens the region by name, as the process does).
+typedef int(__cdecl* core_main_fn)(const wchar_t* map, const wchar_t* log, const wchar_t* steps_csv);
+struct CoreArgs {
+    std::wstring map, log, csv;
+    core_main_fn main;
+};
+
+DWORD WINAPI core_thread(void* param) {
+    CoreArgs* args = static_cast<CoreArgs*>(param);
+    const int code = args->main(args->map.c_str(), args->log.c_str(), args->csv.empty() ? nullptr : args->csv.c_str());
+    delete args;
+    return DWORD(code);
+}
+
+bool start_in_process(const std::wstring& map, const std::wstring& log, const std::wstring& csv, DWORD& thread_id) {
+    const std::wstring dll = session::plugin_dir() + L"\\rfgphysx\\rfgphysx_core.dll";
+    HMODULE core = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    const auto main = core ? reinterpret_cast<core_main_fn>(reinterpret_cast<void*>(GetProcAddress(core, "rfgphysx_core_main")))
+                           : nullptr;
+    if (!main) {
+        LOG("experiment PhysX: cannot load the PhysX core %ls (error %lu)", dll.c_str(), GetLastError());
+        return false;
+    }
+    auto* args = new CoreArgs{map, log, csv, main};
+    g_process = CreateThread(nullptr, 0, core_thread, args, 0, &thread_id);
+    if (!g_process) {
+        LOG("experiment PhysX: cannot start the PhysX core's thread (error %lu)", GetLastError());
+        delete args;
+        return false;
+    }
+    g_in_process = true;
+    return true;
+}
+
 }  // namespace
 
 bool install(const Config& cfg) {
@@ -252,38 +299,50 @@ bool install(const Config& cfg) {
     g_ctl->snapshot_latest.store(1, std::memory_order_relaxed);
     g_ring = g_base + kControlBytes;
 
-    const std::wstring exe = session::plugin_dir() + L"\\rfgphysx\\rfgphysx_host.exe";
-    std::wstring cmd = quote(exe) + L" --map " + name + L" --log " + quote(session::run_dir() + L"\\physx_host.log");
-    if (cfg.telemetry) cmd += L" --steps-csv " + quote(session::run_dir() + L"\\physx_steps.csv");  // ~10 MB an hour
-    // The job ends the host when the game's last handle to it closes, that is when the game process ends however it
-    // ends. Job objects nest, so this works when the game itself runs in one (launchers, the test queue).
-    g_job = CreateJobObjectW(nullptr, nullptr);
-    if (g_job) {
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(g_job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    const std::wstring log_path = session::run_dir() + L"\\physx_host.log";
+    const std::wstring csv_path = cfg.telemetry ? session::run_dir() + L"\\physx_steps.csv" : std::wstring();  // ~10 MB an hour
+    DWORD host_id = 0;
+    const bool in_process = cfg.exp_physx_in_process != 0 && sizeof(void*) == 8;
+    if (cfg.exp_physx_in_process && !in_process)
+        LOG("experiment PhysX: PhysXInProcess needs a 64-bit game (PhysX is 64-bit only): the host process instead");
+    if (in_process) {
+        if (!start_in_process(name, log_path, csv_path, host_id)) return true;
+    } else {
+        const std::wstring exe = session::plugin_dir() + L"\\rfgphysx\\rfgphysx_host.exe";
+        std::wstring cmd = quote(exe) + L" --map " + name + L" --log " + quote(log_path);
+        if (!csv_path.empty()) cmd += L" --steps-csv " + quote(csv_path);
+        // The job ends the host when the game's last handle to it closes, that is when the game process ends however it
+        // ends. Job objects nest, so this works when the game itself runs in one (launchers, the test queue).
+        g_job = CreateJobObjectW(nullptr, nullptr);
+        if (g_job) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(g_job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+        }
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                            nullptr, (session::plugin_dir() + L"\\rfgphysx").c_str(), &si, &pi)) {
+            LOG("experiment PhysX: cannot start %ls (error %lu)", exe.c_str(), GetLastError());
+            return true;
+        }
+        if (g_job && !AssignProcessToJobObject(g_job, pi.hProcess))
+            LOG("experiment PhysX: the host is not in a job object (error %lu); it ends when it sees the game gone",
+                GetLastError());
+        ResumeThread(pi.hThread);
+        CloseHandle(pi.hThread);
+        g_process = pi.hProcess;
+        host_id = pi.dwProcessId;
     }
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                        nullptr, (session::plugin_dir() + L"\\rfgphysx").c_str(), &si, &pi)) {
-        LOG("experiment PhysX: cannot start %ls (error %lu)", exe.c_str(), GetLastError());
-        return true;
-    }
-    if (g_job && !AssignProcessToJobObject(g_job, pi.hProcess))
-        LOG("experiment PhysX: the host is not in a job object (error %lu); it ends when it sees the game gone",
-            GetLastError());
-    ResumeThread(pi.hThread);
-    CloseHandle(pi.hThread);
-    g_process = pi.hProcess;
     g_on = true;
     g_state = State::Starting;
     g_start_tick = GetTickCount();
     session::add_frame_callback(&on_frame);
     session::add_flush_handler(&on_exit);
-    LOG("experiment PhysX: host started (pid %lu, %s backend requested, %.0f Hz, %u body slots, %u MB shared memory)",
-        pi.dwProcessId, cfg.exp_physx == 2 ? "CPU" : "GPU", double(g_ctl->step_hz), initial, total >> 20);
+    LOG("experiment PhysX: %s (%s %lu, %s backend requested, %.0f Hz, %u body slots, %u MB shared memory)",
+        in_process ? "core started in the game's process" : "host started", in_process ? "thread" : "pid", host_id,
+        cfg.exp_physx == 2 ? "CPU" : "GPU", double(g_ctl->step_hz), initial, total >> 20);
     if (max_bodies > initial)
         LOG("experiment PhysX: the slots grow from %u up to %u while the GPU has room (OpenRFG64); %u MB of "
             "shared memory reserved, committed as the slots are handed out", initial, max_bodies, total >> 20);
@@ -327,7 +386,10 @@ void set_test_flags(uint32_t flags) {
 
 uint64_t host_cpu_100ns() {
     FILETIME created, exited, kernel, user;
-    if (!g_process || !GetProcessTimes(g_process, &created, &exited, &kernel, &user)) return 0;
+    // In the game's process: the core's own thread (PhysX's workers are the game's threads too).
+    if (!g_process || !(g_in_process ? GetThreadTimes(g_process, &created, &exited, &kernel, &user)
+                                     : GetProcessTimes(g_process, &created, &exited, &kernel, &user)))
+        return 0;
     return ((uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
            ((uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
 }

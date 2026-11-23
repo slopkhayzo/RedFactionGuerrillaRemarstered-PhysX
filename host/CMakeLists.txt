@@ -59,6 +59,17 @@ if(RFGPHYS_PHYSX_PROFILE)
     target_compile_definitions(rfgphysx_host PRIVATE RFGPHYS_HOST_ZONES=1)
 endif()
 add_dependencies(rfgphysx_host physx_gpu_dll)
+# The PhysX core for 64-bit games (PhysXInProcess=1 in rfgphys.ini): the same host built as a DLL, whose loop runs on
+# a thread of the game; rfgphys loads it from rfgphysx\rfgphysx_core.dll, next to PhysXGpu_64.dll.
+add_library(rfgphysx_core SHARED src/host_main.cpp)
+set_target_properties(rfgphysx_core PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_include_directories(rfgphysx_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src/shared")
+target_compile_definitions(rfgphysx_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS
+                           RFGPHYSX_CORE_DLL)
+target_compile_options(rfgphysx_core PRIVATE /W4 /permissive- /utf-8 /Zi)
+target_link_options(rfgphysx_core PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF)
+target_link_libraries(rfgphysx_core PRIVATE physx_sdk dbghelp)
+add_dependencies(rfgphysx_core physx_gpu_dll)
 # Version resource (../src/shared/version.rc.in).
 set(RC_DESCRIPTION "rfgphys PhysX host - debris physics for Red Faction Guerrilla Re-Mars-tered")
 set(RC_INTERNAL_NAME "rfgphysx_host")

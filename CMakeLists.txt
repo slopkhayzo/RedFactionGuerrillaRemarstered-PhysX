@@ -22,6 +22,7 @@ target_include_directories(minhook PUBLIC third_party/minhook/include)
 
 add_library(rfgphys SHARED
     src/rfgphys/main.cpp
+    src/rfgphys/core/startup.cpp
     src/rfgphys/core/log.cpp
     src/rfgphys/core/config.cpp
     src/rfgphys/core/build_check.cpp

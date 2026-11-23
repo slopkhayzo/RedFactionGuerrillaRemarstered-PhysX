@@ -125,6 +125,7 @@ struct Config {
     // instead of twice (research/docs/08 §14). 1: every step.
     int exp_physx_change_every = 3;
     int exp_physx_cpu_threads = 0;      // PhysX's CPU threads in the host; 0: 4 with GPU dynamics, 6 without
+    int exp_physx_in_process = 0;       // 64-bit games: 1 runs the host's loop on a thread of the game (rfgphysx_core.dll)
     int exp_physx_max_bodies = 65536;   // body slots (shared memory: 192 bytes per slot); 64-bit: the slots at start
     // OpenRFG64 (64-bit only): the slots grow from PhysXMaxBodies while the GPU has room, up to PhysXSlotsMax;
     // room: every program's graphics memory in use stays under the GPU's total less PhysXVramReserveMB (0: an eighth
