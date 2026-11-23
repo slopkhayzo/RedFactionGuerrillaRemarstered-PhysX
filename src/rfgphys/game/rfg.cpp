@@ -129,6 +129,12 @@ const uint8_t* rel_ptr(const uint8_t* field) {
     return field + *reinterpret_cast<const int32_t*>(field);
 }
 
+uint32_t object_index(const void* list, int i) {
+    static const int* const wide = reinterpret_cast<const int*>(GetProcAddress(GetModuleHandleW(nullptr), "openrfg_object_index_size"));
+    if (wide && *wide == 4) return static_cast<const uint32_t*>(list)[i];
+    return static_cast<const uint16_t*>(list)[i];
+}
+
 const char* game_state_name(int value) {
     for (const auto& s : game_state_names)
         if (s.value == value) return s.name;

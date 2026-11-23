@@ -648,7 +648,7 @@ bool in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj, const void* caller) {
 void adopt() {
     uint8_t* w = world();
     uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
-    const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldGeneralMovers);
+    const void* movers = *reinterpret_cast<const void* const*>(w + kWorldGeneralMovers);
     const int n = *reinterpret_cast<const int*>(w + kWorldGeneralMoverCount);
     if (!all || !movers || n <= 0) return;
     uint8_t* const* bodies = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies));
@@ -668,7 +668,7 @@ void adopt() {
     g_waiting_list.clear();
     g_time_movers += uint64_t(n);
     for (int i = 0; i < n && budget && !g_free.empty(); ++i) {
-        uint8_t* obj = all[movers[i]];
+        uint8_t* obj = all[rfg::object_index(movers, i)];
         if (!obj || (obj[kObjFlags] & kObjDestroyed)) continue;
         const uint32_t mflags = *reinterpret_cast<const uint32_t*>(obj + kMoverFlags);
         if (!(mflags & kMoverLoadBalanced) || (mflags & kMoverFading) || is_fading(obj)) continue;
@@ -3474,11 +3474,11 @@ void update_stand_ins() {
         };
         uint8_t* w = world();
         uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
-        const uint16_t* projectiles = *reinterpret_cast<const uint16_t* const*>(w + kWorldProjectiles);
+        const void* projectiles = *reinterpret_cast<const void* const*>(w + kWorldProjectiles);
         const int np = *reinterpret_cast<const int*>(w + kWorldProjectileCount);
         uint8_t* const* bodies = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies));
         for (int i = 0; all && projectiles && i < np && i < 64; ++i) {
-            const uint8_t* obj = all[projectiles[i]];
+            const uint8_t* obj = all[rfg::object_index(projectiles, i)];
             if (!obj || (obj[kObjFlags] & kObjDestroyed)) continue;
             const uint32_t handle = *reinterpret_cast<const uint32_t*>(obj + kObjHavokHandle);
             const uint8_t* body = handle == 0xFFFFFFFFu ? nullptr : bodies[handle];
@@ -4064,7 +4064,7 @@ bool census_walk(const uint8_t* shape, ShapeCensus& c) {
 void census_general_movers() {
     uint8_t* w = world();
     uint8_t* const* all = *reinterpret_cast<uint8_t* const**>(w + kWorldAllObjects);
-    const uint16_t* movers = *reinterpret_cast<const uint16_t* const*>(w + kWorldGeneralMovers);
+    const void* movers = *reinterpret_cast<const void* const*>(w + kWorldGeneralMovers);
     const int n = *reinterpret_cast<const int*>(w + kWorldGeneralMoverCount);
     if (!all || !movers || n <= 0) return;
     uint8_t* const* bodies = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies));
@@ -4079,7 +4079,7 @@ void census_general_movers() {
     uint32_t unsupported_leaf[hs::kTypeCount + 1] = {}, unsupported_top[hs::kTypeCount + 1] = {};
     uint32_t constrained_with_shape = 0;
     for (int i = 0; i < n; ++i) {
-        uint8_t* obj = all[movers[i]];
+        uint8_t* obj = all[rfg::object_index(movers, i)];
         if (!obj) continue;
         if (obj[kObjFlags] & kObjDestroyed) { ++count[kDestroyed]; continue; }
         const uint32_t mflags = *reinterpret_cast<const uint32_t*>(obj + kMoverFlags);

@@ -43,6 +43,10 @@ const void* code_target(const void* p);
 // lists). In OpenRFG64 such a field may hold an index into its far table (a target more than 2 GB away), which only the
 // program can resolve (it exports openrfg_et_ptr_target); elsewhere it is field + offset.
 const uint8_t* rel_ptr(const uint8_t* field);
+// The i-th entry of one of the world's object index lists (world::all_objects indices: subtype_objects[].elt and the
+// like). rfg.exe's indices are 16-bit; a game build that widens them (OpenRFG64 VOM: 32-bit) says so through an export
+// of the program, openrfg_object_index_size.
+uint32_t object_index(const void* list, int i);
 
 template <typename T>
 inline T& global(uint32_t rva) {
