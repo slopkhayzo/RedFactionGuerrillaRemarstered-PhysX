@@ -37,8 +37,8 @@
 namespace harness {
 namespace {
 
-constexpr int GS_MAINMENU = 0, GS_GAMEPLAY = 1, GS_LOAD = 2, GS_WRECKING_CREW_MAIN_MENU = 19, GS_MAINMENU_IDLE = 48,
-              GS_SAVE_LOAD_SCREEN = 50;
+constexpr int GS_MAINMENU = 0, GS_GAMEPLAY = 1, GS_LOAD = 2, GS_INGAME_OPTIONS = 15, GS_WRECKING_CREW_MAIN_MENU = 19,
+              GS_MAINMENU_IDLE = 48, GS_SAVE_LOAD_SCREEN = 50;
 // A recording ends when the game reaches one of these states (left gameplay or started another load).
 constexpr int kEndStates[] = {0 /* MAINMENU */,  2 /* LOAD */,      3 /* BOOT */,       4 /* MULTI_INIT */,
                               19 /* WC_MAIN_MENU */, 48 /* MAINMENU_IDLE */, 55 /* VERIFY_SAVEGAME */,
@@ -980,6 +980,7 @@ bool load_recording() {
 // way a play session goes on to another game after the first one ends (the level ends, the world and every thread
 // stay). Each pass but the last keeps its outputs under the _pass<k> names; replay.json is the last pass's.
 uint32_t g_pass = 1;
+int64_t g_pass_ended_qpc = 0;  // a pass that ended with the game still leaving its level (drive_start)
 
 bool next_pass(int state) {
     if (int(g_pass) >= g_cfg.harness_replay_passes) return false;
@@ -1015,9 +1016,15 @@ bool next_pass(int state) {
     g_ready_since = 0;
     g_last_state = -1000;
     automation::reset_new_game();
-    if (state != GS_MAINMENU && state != GS_MAINMENU_IDLE) {
-        LOG("harness: not at the main menu after the pass: leaving the game for it");
+    // Only a level still running is left here. A recording that ended with its own quit is on its way to the main
+    // menu already (the pause menu, then GS_WC_SHUTDOWN): leaving again stops every sound and asks for the shutdown
+    // a second time while the first runs, and in OpenRFG64 VOM the main menu then sometimes never loaded.
+    if (state == GS_GAMEPLAY) {
+        LOG("harness: the level still runs after the pass: leaving it for the main menu");
         rfg::fn<void(__cdecl*)()>(rfg::rva::ingame_options_exit_to_main_menu)();
+    } else if (state != GS_MAINMENU && state != GS_MAINMENU_IDLE) {
+        LOG("harness: the game is on its way to the main menu (game state %d)", state);
+        g_pass_ended_qpc = session::qpc();
     }
     return true;
 }
@@ -1110,6 +1117,15 @@ void __cdecl d_video_play(const char* name, uint32_t flags, const char* subtitle
 // Main menu -> Wrecking Crew (restore the recorded setup) or Load Game (select the recorded slot). Also used by
 // record mode's AutoStart=wc self-test, which keeps the Wrecking Crew menu's current setup.
 void drive_start(int state) {
+    // After a pass whose quit was replayed: a game still in the level 10 s later (the quit did not happen) is taken to
+    // the main menu.
+    if (state == GS_MAINMENU || state == GS_MAINMENU_IDLE) g_pass_ended_qpc = 0;
+    if (g_pass_ended_qpc && (state == GS_GAMEPLAY || state == GS_INGAME_OPTIONS) &&
+        session::ticks_to_ms(session::qpc() - g_pass_ended_qpc) > 10000) {
+        g_pass_ended_qpc = 0;
+        LOG("harness: still in the level 10 s after the pass: leaving it for the main menu");
+        rfg::fn<void(__cdecl*)()>(rfg::rva::ingame_options_exit_to_main_menu)();
+    }
     if (state != g_last_state) {
         g_last_state = state;
         g_state_since = session::qpc();
