@@ -297,6 +297,15 @@ struct Shared {
     uint32_t tail = 0;
     uint32_t back = 0;  // the snapshot buffer the host writes next (the game starts with 2, latest with 1)
 
+    Shared() = default;
+    Shared(const Shared&) = delete;
+    Shared& operator=(const Shared&) = delete;
+    // In the game's process the core may run again: its view and handle go with it.
+    ~Shared() {
+        if (base) UnmapViewOfFile(base);
+        if (mapping) CloseHandle(mapping);
+    }
+
     bool open(const wchar_t* name) {
         mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
         if (!mapping) return false;
@@ -571,6 +580,26 @@ struct Host {
         sh.message(what);
         sh.control->host_state.store(uint32_t(ipc::HostState::Failed), std::memory_order_release);
         return false;
+    }
+
+    // In the game's process the core can start again (a game's backend switches PhysX off and on at its main menu):
+    // everything PhysX made goes, in the order of its snippets, the foundation last (a second PxCreateFoundation needs
+    // it gone). The steps are synchronous (simulate, then fetchResults), so none is in flight here.
+    void release_physx() {
+        if (scene) reset();  // bodies, statics, shapes and the cooked meshes
+        if (scene) scene->release();
+        scene = nullptr;
+        if (material) material->release();
+        material = nullptr;
+        if (dispatcher) dispatcher->release();
+        dispatcher = nullptr;
+        if (physics) physics->release();
+        physics = nullptr;
+        if (cuda) cuda->release();
+        cuda = nullptr;
+        if (foundation) foundation->release();
+        foundation = nullptr;
+        logf("PhysX released");
     }
 
     // A CUDA failure (a pinned allocation PhysX could not get leaves it writing through a null buffer) puts the context
@@ -2920,14 +2949,27 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
     QueryPerformanceFrequency(&g_freq);
     QueryPerformanceCounter(&g_t0);
     g_host_stop.store(false);
+    // In the game's process the core may start again (g_runs): its log goes on, and PhysX's error counts start again.
+    static int g_runs = 0;
+    const bool again = g_runs++ > 0;
+    g_errors.reported = 0;
+    g_errors.warned = 0;
+    g_errors.unlogged = 0;
+    g_errors.aborted = false;
     // Shared reads: the logs can be followed while the host runs.
-    if (!log_path.empty()) g_log = _wfsopen(log_path.c_str(), L"w", _SH_DENYNO);
+    if (!log_path.empty()) g_log = _wfsopen(log_path.c_str(), again ? L"a" : L"w", _SH_DENYNO);
     g_log_dir = log_path.substr(0, log_path.find_last_of(L'\\'));
-    logf("rfgphysx_host starting, mapping '%ls'%s", map_name.c_str(), in_process ? " (in the game's process)" : "");
+    logf("rfgphysx_host starting, mapping '%ls'%s%s", map_name.c_str(), in_process ? " (in the game's process)" : "",
+         again ? ", again" : "");
 
+    const auto close_log = [] {
+        if (g_log) fclose(g_log);
+        g_log = nullptr;
+    };
     Host host;
     if (map_name.empty() || !host.sh.open(map_name.c_str())) {
         logf("cannot open the shared memory (error %lu)", GetLastError());
+        close_log();
         return 2;
     }
     ipc::Control* ctl = host.sh.control;
@@ -2955,7 +2997,11 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
     // Normal priority: at above-normal the host's threads took cores from the game's own (the multithreaded Havok
     // step slowed by 1.0-1.4 ms in heavy frames with 20,000 awake test bodies, 06 §13), and a step that starts a
     // little late costs nothing in an asynchronous world.
-    if (!host.init_physx(ctl->backend)) return 2;
+    if (!host.init_physx(ctl->backend)) {
+        host.release_physx();  // what it made before it failed: a later start in the game's process needs it gone
+        close_log();
+        return 2;
+    }
     ctl->host_gpu.store(host.gpu ? 1u : 0u, std::memory_order_relaxed);
     host.sh.message(host.gpu ? "GPU PhysX ready" : "CPU PhysX ready");
     ctl->host_state.store(uint32_t(ipc::HostState::Ready), std::memory_order_release);
@@ -2972,7 +3018,7 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
         SetUnhandledExceptionFilter(&log_crash);
     }
     g_last_progress_qpc.store(qpc());
-    std::thread([ctl, in_process] {
+    std::thread heartbeat([ctl, in_process] {
         bool told = false;
         while (!g_host_stop.load()) {
             ctl->host_heartbeat.fetch_add(1, std::memory_order_relaxed);
@@ -2989,7 +3035,7 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
                 told = false;
             }
         }
-    }).detach();
+    });
 
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
     const double period_ms = 1000.0 / (ctl->step_hz > 0 ? ctl->step_hz : 60.0);
@@ -3057,14 +3103,21 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
     g_host_stop.store(true);
     if (host.steps_csv) fclose(host.steps_csv);
     host.steps_csv = nullptr;
-    if (g_log) fclose(g_log);
-    g_log = nullptr;
-    // In the game's process the thread ends here. PhysX is not torn down: a second start in one process is not
-    // supported yet (the game's backend does not try it); the process's end frees everything.
-    if (in_process) return exit_code;
-    // The process exits without tearing PhysX down: the OS frees everything at once, and a CUDA context release can
-    // take long enough to matter when the game is closing.
-    TerminateProcess(GetCurrentProcess(), UINT(exit_code));
+    if (!in_process) {
+        // The process exits without tearing PhysX down: the OS frees everything at once, and a CUDA context release
+        // can take long enough to matter when the game is closing.
+        close_log();
+        heartbeat.detach();
+        TerminateProcess(GetCurrentProcess(), UINT(exit_code));
+        return exit_code;
+    }
+    // In the game's process the thread ends here, and the core may start again: PhysX and the CUDA context are
+    // released (their memory goes back to the game), then the heartbeat thread is joined.
+    const double t_release = now_ms();
+    host.release_physx();
+    heartbeat.join();
+    logf("the core's thread ends (%.0f ms to release PhysX)", now_ms() - t_release);
+    close_log();
     return exit_code;
 }
 

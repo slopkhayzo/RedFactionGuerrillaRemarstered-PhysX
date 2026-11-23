@@ -91,7 +91,8 @@ struct alignas(64) Control {
 
     // Game -> host.
     std::atomic<uint32_t> game_heartbeat;  // +1 every game frame
-    std::atomic<uint32_t> quit;            // 1: the host exits
+    std::atomic<uint32_t> quit;            // 1: the host exits (the game is closing); 2: it stops, and in the game's
+                                           // process the core releases PhysX first, so that it can start again
     std::atomic<uint32_t> test_flags;      // TestFlags: tests only, 0 in play (a host before them reads nothing here)
     std::atomic<uint32_t> event_tail;      // events read by the game
     float chunk_rest_strength;             // set before the host starts: a chunk's parts under a load lying still, times their strength when hit

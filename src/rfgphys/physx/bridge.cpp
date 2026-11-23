@@ -51,6 +51,17 @@ FrameStats g_stats{};
 
 uint32_t g_committed = 0;  // OpenRFG64: slots whose snapshot memory is committed (commit_slots)
 
+// What each start of a host needs (install keeps it): the shared memory's name, the logs, the kind of host.
+std::wstring g_map_name, g_log_path, g_csv_path;
+bool g_want_in_process = false;
+uint32_t g_launches = 0;
+bool g_start_pending = false;  // start() while the last host was stopping
+DWORD g_stop_tick = 0;
+constexpr DWORD kStopTimeoutMs = 30000;  // a host that has not ended this long after stop() is lost
+// Control::quit: 1 the game is closing (the host leaves at once); 2 a stop (in the game's process the core releases
+// PhysX first, so that it can start again).
+constexpr uint32_t kQuitExit = 1, kQuitStop = 2;
+
 ipc::SnapshotHeader* snapshot_at(uint32_t index) {
     return reinterpret_cast<ipc::SnapshotHeader*>(g_base + g_ctl->snapshot_offset + size_t(index) * g_ctl->snapshot_stride);
 }
@@ -60,8 +71,9 @@ void lose(const char* why) {
     LOG("PhysX host lost: %s; the game goes on without it", why);
     g_state = State::Lost;
     if (g_in_process) {
-        // A thread cannot be ended safely: it is asked to stop (a stuck one stays stuck, the game goes on).
-        if (g_ctl) g_ctl->quit.store(1, std::memory_order_release);
+        // A thread cannot be ended safely: it is asked to stop (a stuck one stays stuck, the game goes on),
+        // releasing PhysX so that it can start again.
+        if (g_ctl) g_ctl->quit.store(kQuitStop, std::memory_order_release);
     } else if (g_process) {
         TerminateProcess(g_process, 1);
     }
@@ -182,10 +194,37 @@ void take_snapshot() {
     g_stats.take_us += float(session::ticks_to_ms(session::qpc() - t0) * 1000.0);
 }
 
+bool launch();
+
+// A stopping host: gone once its thread or process has ended (in the game's process the core has released PhysX).
+void watch_stop() {
+    const DWORD now = GetTickCount();
+    if (g_process && WaitForSingleObject(g_process, 0) != WAIT_OBJECT_0) {
+        if (now - g_stop_tick > kStopTimeoutMs) {
+            LOG("PhysX host lost: it did not end within %lu s of the stop", kStopTimeoutMs / 1000);
+            g_state = State::Lost;
+            g_start_pending = false;
+        }
+        return;
+    }
+    if (g_process) CloseHandle(g_process);
+    g_process = nullptr;
+    g_state = State::Off;
+    LOG("PhysX host stopped after %lu ms%s", now - g_stop_tick, g_in_process ? " (the core released PhysX)" : "");
+    if (g_start_pending) {
+        g_start_pending = false;
+        launch();
+    }
+}
+
 // Simulation thread, end of frame (before the consumers registered after it).
 void on_frame(int) {
     if (!g_on) return;
     g_ctl->game_heartbeat.store(++g_frame, std::memory_order_relaxed);
+    if (g_state == State::Stopping) {
+        watch_stop();
+        return;
+    }
     watch_host();
     take_snapshot();
     if (g_state == State::Ready) {
@@ -197,7 +236,7 @@ void on_frame(int) {
 }
 
 void on_exit(bool) {
-    if (g_ctl) g_ctl->quit.store(1, std::memory_order_release);
+    if (g_ctl) g_ctl->quit.store(kQuitExit, std::memory_order_release);
 }
 
 std::wstring quote(const std::wstring& s) { return L"\"" + s + L"\""; }
@@ -239,7 +278,7 @@ bool start_in_process(const std::wstring& map, const std::wstring& log, const st
 
 }  // namespace
 
-bool install(const Config& cfg) {
+bool install(const Config& cfg, bool launch_now) {
     if (cfg.exp_physx <= 0) return true;
 #if defined(_WIN64)
     // OpenRFG64: in a 64-bit game the slots are no longer bounded by the address space (0.4 KB a slot was
@@ -299,33 +338,90 @@ bool install(const Config& cfg) {
     g_ctl->snapshot_latest.store(1, std::memory_order_relaxed);
     g_ring = g_base + kControlBytes;
 
-    const std::wstring log_path = session::run_dir() + L"\\physx_host.log";
-    const std::wstring csv_path = cfg.telemetry ? session::run_dir() + L"\\physx_steps.csv" : std::wstring();  // ~10 MB an hour
-    DWORD host_id = 0;
-    const bool in_process = cfg.exp_physx_in_process != 0 && sizeof(void*) == 8;
-    if (cfg.exp_physx_in_process && !in_process)
+    g_map_name = name;
+    g_log_path = session::run_dir() + L"\\physx_host.log";
+    g_csv_path = cfg.telemetry ? session::run_dir() + L"\\physx_steps.csv" : std::wstring();  // ~10 MB an hour
+    g_want_in_process = cfg.exp_physx_in_process != 0 && sizeof(void*) == 8;
+    if (cfg.exp_physx_in_process && !g_want_in_process)
         LOG("experiment PhysX: PhysXInProcess needs a 64-bit game (PhysX is 64-bit only): the host process instead");
-    if (in_process) {
-        if (!start_in_process(name, log_path, csv_path, host_id)) return true;
-    } else {
-        const std::wstring exe = session::plugin_dir() + L"\\rfgphysx\\rfgphysx_host.exe";
-        std::wstring cmd = quote(exe) + L" --map " + name + L" --log " + quote(log_path);
-        if (!csv_path.empty()) cmd += L" --steps-csv " + quote(csv_path);
-        // The job ends the host when the game's last handle to it closes, that is when the game process ends however it
-        // ends. Job objects nest, so this works when the game itself runs in one (launchers, the test queue).
+    if (!g_want_in_process) {
+        // The job ends the host when the game's last handle to it closes, that is when the game process ends however
+        // it ends. Job objects nest, so this works when the game itself runs in one (launchers, the test queue).
         g_job = CreateJobObjectW(nullptr, nullptr);
         if (g_job) {
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             SetInformationJobObject(g_job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
         }
+    }
+    if (launch_now) launch();  // a failure leaves it Failed: the game may start one again later
+    g_on = true;
+    session::add_frame_callback(&on_frame);
+    session::add_flush_handler(&on_exit);
+    if (!launch_now)
+        LOG("experiment PhysX: shared memory ready (%u MB), no host yet: it starts when the game asks for PhysX",
+            total >> 20);
+    if (max_bodies > initial)
+        LOG("experiment PhysX: the slots grow from %u up to %u while the GPU has room (OpenRFG64); %u MB of "
+            "shared memory reserved, committed as the slots are handed out", initial, max_bodies, total >> 20);
+    return true;
+}
+
+namespace {
+
+// Before each start: the control block's host-side and per-run fields as a new host expects them (install wrote the
+// layout and the settings once), and the bridge's view of the last host.
+void reset_control() {
+    g_ctl->host_state.store(uint32_t(ipc::HostState::Starting), std::memory_order_relaxed);
+    g_ctl->host_heartbeat.store(0, std::memory_order_relaxed);
+    g_ctl->host_pid.store(0, std::memory_order_relaxed);
+    g_ctl->host_gpu.store(0, std::memory_order_relaxed);
+    g_ctl->snapshot_latest.store(1, std::memory_order_relaxed);
+    g_ctl->query_done.store(0, std::memory_order_relaxed);
+    g_ctl->statics.store(0, std::memory_order_relaxed);
+    g_ctl->event_head.store(0, std::memory_order_relaxed);
+    g_ctl->event_tail.store(0, std::memory_order_relaxed);
+    g_ctl->vram_used_mb.store(0, std::memory_order_relaxed);
+    g_ctl->vram_total_mb.store(0, std::memory_order_relaxed);
+    g_ctl->gpu_heap_mb.store(0, std::memory_order_relaxed);
+    g_ctl->slots_capacity.store(0, std::memory_order_relaxed);
+    g_ctl->host_message[0] = '\0';
+    g_ctl->ring_head.store(0, std::memory_order_relaxed);
+    g_ctl->ring_tail.store(0, std::memory_order_relaxed);
+    g_ctl->quit.store(0, std::memory_order_release);
+    g_head = 0;
+    g_front = 2;
+    g_snapshot = nullptr;
+    g_fresh = false;
+    g_last_heartbeat = 0;
+    g_heartbeat_tick = 0;
+    g_step_tick = 0;
+    g_period_qpc = 0;
+    g_period_sequence = 0;
+    g_period_ms = 0;
+}
+
+// A host on the shared memory: the core's thread in the game's process, or the host process.
+bool launch() {
+    reset_control();
+    DWORD host_id = 0;
+    if (g_want_in_process) {
+        if (!start_in_process(g_map_name, g_log_path, g_csv_path, host_id)) {
+            g_state = State::Failed;
+            return false;
+        }
+    } else {
+        const std::wstring exe = session::plugin_dir() + L"\\rfgphysx\\rfgphysx_host.exe";
+        std::wstring cmd = quote(exe) + L" --map " + g_map_name + L" --log " + quote(g_log_path);
+        if (!g_csv_path.empty()) cmd += L" --steps-csv " + quote(g_csv_path);
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
         if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
                             nullptr, (session::plugin_dir() + L"\\rfgphysx").c_str(), &si, &pi)) {
             LOG("experiment PhysX: cannot start %ls (error %lu)", exe.c_str(), GetLastError());
-            return true;
+            g_state = State::Failed;
+            return false;
         }
         if (g_job && !AssignProcessToJobObject(g_job, pi.hProcess))
             LOG("experiment PhysX: the host is not in a job object (error %lu); it ends when it sees the game gone",
@@ -333,21 +429,52 @@ bool install(const Config& cfg) {
         ResumeThread(pi.hThread);
         CloseHandle(pi.hThread);
         g_process = pi.hProcess;
+        g_in_process = false;
         host_id = pi.dwProcessId;
     }
-    g_on = true;
     g_state = State::Starting;
     g_start_tick = GetTickCount();
-    session::add_frame_callback(&on_frame);
-    session::add_flush_handler(&on_exit);
-    LOG("experiment PhysX: %s (%s %lu, %s backend requested, %.0f Hz, %u body slots, %u MB shared memory)",
-        in_process ? "core started in the game's process" : "host started", in_process ? "thread" : "pid", host_id,
-        cfg.exp_physx == 2 ? "CPU" : "GPU", double(g_ctl->step_hz), initial, total >> 20);
-    if (max_bodies > initial)
-        LOG("experiment PhysX: the slots grow from %u up to %u while the GPU has room (OpenRFG64); %u MB of "
-            "shared memory reserved, committed as the slots are handed out", initial, max_bodies, total >> 20);
+    ++g_launches;
+    LOG("experiment PhysX: %s%s (%s %lu, %s backend requested, %.0f Hz, %u body slots committed, %u MB shared memory)",
+        g_want_in_process ? "core started in the game's process" : "host started", g_launches > 1 ? " again" : "",
+        g_want_in_process ? "thread" : "pid", host_id, g_ctl->backend == ipc::kBackendCpu ? "CPU" : "GPU",
+        double(g_ctl->step_hz), g_committed, g_ctl->total_size >> 20);
     return true;
 }
+
+}  // namespace
+
+bool installed() { return g_ctl != nullptr && g_on; }
+
+bool start() {
+    if (!installed()) return false;
+    if (g_state == State::Starting || g_state == State::Ready) return true;
+    if (g_state == State::Stopping) {
+        g_start_pending = true;
+        return true;
+    }
+    // Off, Failed or Lost: the last host must have ended (a stuck one still holds the shared memory).
+    if (g_process) {
+        if (WaitForSingleObject(g_process, 0) != WAIT_OBJECT_0) {
+            LOG("PhysX host: the last one has not ended; no new one starts");
+            return false;
+        }
+        CloseHandle(g_process);
+        g_process = nullptr;
+    }
+    return launch();
+}
+
+void stop() {
+    g_start_pending = false;
+    if (g_state != State::Starting && g_state != State::Ready) return;
+    g_ctl->quit.store(kQuitStop, std::memory_order_release);
+    g_state = State::Stopping;
+    g_stop_tick = GetTickCount();
+    LOG("PhysX host asked to stop");
+}
+
+State state() { return g_state; }
 
 bool active() { return g_state == State::Starting || g_state == State::Ready; }
 bool ready() { return g_state == State::Ready; }

@@ -12,7 +12,10 @@ struct Config;
 // answering is logged and left alone while the game goes on.
 namespace pxbridge {
 
-bool install(const Config& cfg);
+// Creates the shared memory and registers the bridge's frame callback; with launch it starts the host too (the plugins
+// always do; a game whose PhysX backend is off at its start does not).
+bool install(const Config& cfg, bool launch = true);
+bool installed();  // the shared memory exists: start() can start a host
 bool active();  // the host was started and has not been lost
 bool ready();   // the host is stepping and applies commands
 
@@ -71,7 +74,17 @@ inline const rfgphysx::BodyPose* poses(const rfgphysx::SnapshotHeader* s) {
 // Each slot's PoseFlags as one byte (slots 0 .. s->slots - 1).
 inline const uint8_t* states(const rfgphysx::SnapshotHeader* s) { return rfgphysx::snapshot_states(s, max_bodies()); }
 
-enum class State : uint8_t { Off = 0, Starting = 1, Ready = 2, Failed = 3, Lost = 4 };
+enum class State : uint8_t { Off = 0, Starting = 1, Ready = 2, Failed = 3, Lost = 4, Stopping = 5 };
+
+// A game's PhysX backend switched at its main menu (simulation thread, no level loaded; a level's end has emptied the
+// host and the game's tables already). start(): a host on the same shared memory, unless one runs; asked while the last
+// one is stopping, it starts once that one has ended. A Failed or Lost host starts again once its thread or process has
+// ended. false: no host can start now. stop(): asks a running host to quit and returns at once; in the game's process
+// the core releases PhysX (its memory, the CUDA context) on its own thread and ends, and the bridge sees it gone a
+// few frames later (Stopping, then Off).
+bool start();
+void stop();
+State state();
 
 struct FrameStats {
     State state;

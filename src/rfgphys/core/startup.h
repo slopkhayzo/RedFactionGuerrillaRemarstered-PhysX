@@ -6,6 +6,8 @@
 namespace startup {
 
 // `dir`: the folder of rfgphys.ini and of rfgphysx\ (the host or the PhysX core). Logs why it stops early. Call once.
-void run(const std::wstring& dir);
+// launch_physx false: everything installs but the PhysX host, which the game starts later (pxbridge::start), as when a
+// game's PhysX backend is off at its start and the record/replay harness runs.
+void run(const std::wstring& dir, bool launch_physx = true);
 
 }  // namespace startup

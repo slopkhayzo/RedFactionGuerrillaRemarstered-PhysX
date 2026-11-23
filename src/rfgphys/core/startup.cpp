@@ -79,7 +79,7 @@ void log_system_info() {
 
 }  // namespace
 
-void run(const std::wstring& dir) {
+void run(const std::wstring& dir, bool launch_physx) {
     Config cfg = load_config(dir + L"\\rfgphys.ini");
     session::init(cfg, dir);
     LOG("rfgphys %s starting (plugin folder %ls)", RFGPHYS_VERSION, dir.c_str());
@@ -124,7 +124,8 @@ void run(const std::wstring& dir) {
         if (cfg.telemetry) telemetry::install(cfg);  // frame callbacks: telemetry first, so it measures whole frames
     }
     gameloop::add_end(&session::on_frame);
-    pxbridge::install(cfg);  // frame callbacks: the bridge takes the host's snapshot before its consumers run
+    // Frame callbacks: the bridge takes the host's snapshot before its consumers run.
+    pxbridge::install(cfg, launch_physx);
     if (full) {
         pxtest::install(cfg);
         collision_survey::install(cfg);
