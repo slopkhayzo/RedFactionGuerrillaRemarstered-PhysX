@@ -6,6 +6,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/session.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
@@ -24,9 +25,11 @@ bool g_pressed_load = false, g_selected_save = false, g_refreshed_list = false;
 bool g_caught_input = false;
 
 // keen::InputSystem: ControllerInfo[16] at +0x11AC, 0x18 bytes each, device class at +0 (1 keyboard, 2 mouse).
-constexpr uint32_t kInputControllerInfos = 0x11AC, kControllerInfoSize = 0x18, kMaxControllers = 16;
+const uint32_t& kInputControllerInfos = layout::input_controller_infos;
+constexpr uint32_t kMaxControllers = 16;
 constexpr int kClassKeyboard = 1, kClassMouse = 2;
-constexpr uint32_t kHumanFlags = 0xB4, kHumanInvulnerable = 0x20;  // human: flags, the invulnerable bit
+const uint32_t& kHumanFlags = layout::human_hflags;
+constexpr uint32_t kHumanInvulnerable = 0x20;  // human: flags, the invulnerable bit
 
 }  // namespace
 
@@ -38,7 +41,7 @@ void catch_keyboard_and_mouse() {
     if (!system) return;
     auto set_player = rfg::fn<void(__cdecl*)(void*, uint32_t, void*)>(rfg::rva::keen__input__setControllerPlayerId);
     for (uint32_t i = 0; i < kMaxControllers; ++i) {
-        const int cls = *reinterpret_cast<int32_t*>(system + kInputControllerInfos + i * kControllerInfoSize);
+        const int cls = *reinterpret_cast<int32_t*>(system + kInputControllerInfos + i * (layout::input_controller_info_next - layout::input_controller_infos));
         if (cls == kClassKeyboard || cls == kClassMouse) {
             set_player(system, i, nullptr /* player 0 */);
             LOG("automation: input device %u (%s) assigned to player 1", i, cls == kClassKeyboard ? "keyboard" : "mouse");

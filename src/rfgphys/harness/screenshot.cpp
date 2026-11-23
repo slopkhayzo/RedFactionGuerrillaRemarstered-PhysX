@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
@@ -20,7 +21,7 @@ namespace {
 constexpr UINT kMaxWidth = 1280;
 // keen::GraphicsSystem: the swap chain endFrame presents at +0x20348 (keen::RenderSwapChain*, null when nothing is
 // presented); RenderSwapChain::pSwapChain (IDXGISwapChain*) at +0x13C.
-constexpr uint32_t kGraphicsPresentSwapChain = 0x20348, kRenderSwapChainDxgi = 0x13C;
+const uint32_t &kGraphicsPresentSwapChain = layout::graphics_current_swapchain, &kRenderSwapChainDxgi = layout::render_swapchain_dxgi;
 
 std::mutex g_mutex;
 std::wstring g_pending;  // path of the requested screenshot, empty when none

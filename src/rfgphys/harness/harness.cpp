@@ -21,6 +21,7 @@
 #include "core/gameloop.h"
 #include "core/log.h"
 #include "core/session.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "harness/checkpoint.h"
 #include "harness/rec_file.h"
@@ -253,7 +254,7 @@ void capture_clock(rec::FrameClock& c) {
     memcpy(c.frametimes, rfg::addr(r::Frametimes), sizeof(c.frametimes));
     c.ticker = rfg::global<int32_t>(r::Timestamp_ticker);
     c.realtime_ticker = rfg::global<int32_t>(r::Timestamp_realtime_ticker);
-    c.amount_rounded = rfg::global<float>(r::amount_rounded);
+    c.amount_rounded = r::amount_rounded ? rfg::global<float>(r::amount_rounded) : 0.0f;  // OpenRFG64: a local static
 }
 
 void restore_clock(const rec::FrameClock& c) {
@@ -267,7 +268,7 @@ void restore_clock(const rec::FrameClock& c) {
     memcpy(rfg::addr(r::Frametimes), c.frametimes, sizeof(c.frametimes));
     rfg::global<int32_t>(r::Timestamp_ticker) = c.ticker;
     rfg::global<int32_t>(r::Timestamp_realtime_ticker) = c.realtime_ticker;
-    rfg::global<float>(r::amount_rounded) = c.amount_rounded;
+    if (r::amount_rounded) rfg::global<float>(r::amount_rounded) = c.amount_rounded;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -284,7 +285,9 @@ void seed_rngs(bool session_start) {
 // through), Lua's math.randomseed with whatever a script passes (possibly os.time()). During a session the Lua
 // seeds are replaced by seeds derived from the recording's seed.
 void __cdecl d_srand(unsigned seed) {
-    if (g_phase != Phase::kIdle && _ReturnAddress() == rfg::addr(rfg::rva::math_randomseed + kRandomseedReturn)) {
+    // OpenRFG64: math_randomseed is not in the names (a static function of Lua's), and the offset is rfg.exe's.
+    if (g_phase != Phase::kIdle && !rfg::is_openrfg64() && rfg::rva::math_randomseed &&
+        _ReturnAddress() == rfg::addr(rfg::rva::math_randomseed + kRandomseedReturn)) {
         const unsigned replaced = g_header.seed ^ (0x9E3779B9u * ++g_srand_calls);
         LOG("harness: math.randomseed(%u) replaced by %u", seed, replaced);
         seed = replaced;
@@ -401,8 +404,16 @@ bool __fastcall d_input_event(void* app RFG_EDX_PARAM, uint8_t* ev) {
     return o_input_event(app RFG_EDX_PASS, ev);
 }
 
+// controls_poll's call of input_poll, by its return address: rfg.exe's fixed offset, or OpenRFG64's found in the code.
+const void* input_poll_return() {
+    static const void* const ret = rfg::is_openrfg64()
+                                       ? rfg::call_return(rfg::rva::controls_poll, rfg::size::controls_poll, rfg::rva::input_poll)
+                                       : rfg::addr(rfg::rva::controls_poll + kInputPollReturn);
+    return ret;
+}
+
 void __cdecl d_input_poll() {
-    const bool from_controls = _ReturnAddress() == rfg::addr(rfg::rva::controls_poll + kInputPollReturn);
+    const bool from_controls = _ReturnAddress() == input_poll_return();
     if (!from_controls || g_phase == Phase::kIdle) {
         o_input_poll();
         return;
@@ -1482,6 +1493,13 @@ void flush(bool at_exit) {
 
 bool install(const Config& cfg) {
     if (cfg.harness_mode == 0) return true;
+    // OpenRFG64: the harness's layouts are optional ones (game/layout.inc); without all of them it stays off.
+    if (rfg::is_openrfg64() && (!layout::world_all_objects || !layout::world_all_object_count || !layout::item_owner_handle ||
+                                !layout::human_hflags || !layout::input_controller_infos || !layout::input_controller_info_next)) {
+        LOG("harness: this build lacks some of the harness's layouts: off");
+        return false;
+    }
+    if (rfg::is_openrfg64()) LOG("harness: input_poll's call in controls_poll returns to %p", input_poll_return());
     g_cfg = cfg;
     g_mode = cfg.harness_mode == 1 ? Mode::kRecord : Mode::kReplay;
     if (g_mode == Mode::kRecord && !cfg.harness_input_script.empty()) g_has_script = load_script(cfg.harness_input_script);
@@ -1555,9 +1573,14 @@ bool install(const Config& cfg) {
     ok &= hooks::create(r::wrecking_crew_match_begin, &d_match_begin, &o_match_begin, "wrecking_crew_match_begin");
     ok &= hooks::create(r::verify_gamesave_start, &d_verify_save, &o_verify_save, "verify_gamesave_start");
     ok &= hooks::create(r::video_cutscene_play, &d_video_play, &o_video_play, "video_cutscene_play");
-    o_srand = reinterpret_cast<void(__cdecl*)(unsigned)>(
-        hooks::patch_import("MSVCR100.dll", "srand", reinterpret_cast<void*>(&d_srand)));
-    o_rand = reinterpret_cast<int(__cdecl*)()>(hooks::patch_import("MSVCR100.dll", "rand", reinterpret_cast<void*>(&d_rand)));
+    // rfg.exe's C runtime is MSVCR100.dll; a 64-bit OpenRFG64's is the Universal CRT.
+    for (const char* crt : {"MSVCR100.dll", "api-ms-win-crt-utility-l1-1-0.dll", "ucrtbase.dll"}) {
+        if (!o_srand)
+            o_srand = reinterpret_cast<void(__cdecl*)(unsigned)>(
+                hooks::patch_import(crt, "srand", reinterpret_cast<void*>(&d_srand)));
+        if (!o_rand)
+            o_rand = reinterpret_cast<int(__cdecl*)()>(hooks::patch_import(crt, "rand", reinterpret_cast<void*>(&d_rand)));
+    }
     ok &= o_srand && o_rand;
     gameloop::add_begin(&frame_begin);
     gameloop::add_end(&frame_end);

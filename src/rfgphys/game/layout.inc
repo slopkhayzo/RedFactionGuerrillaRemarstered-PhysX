@@ -182,3 +182,13 @@ RFG_LAYOUT_M(recompile_num_verts, 0x30, "rl_mesh_recompile_data", "num_verts", 0
 RFG_LAYOUT_M(recompile_num_render_blocks, 0x3C, "rl_mesh_recompile_data", "num_render_blocks", 0)
 RFG_LAYOUT_M(recompile_index_copy, 0x44, "rl_mesh_recompile_data", "index_data_p", 0)   // the mesh's own copies
 RFG_LAYOUT_M(recompile_vertex_copy, 0x48, "rl_mesh_recompile_data", "vertex_data_p", 0)
+
+// ---- the record/replay harness and the automation (harness/*.cpp, test/automation.cpp). Optional: a build without
+// them keeps the harness off, not the plugin (harness::install checks them on OpenRFG64).
+RFG_LAYOUT_O(world_all_object_count, 0x6C, "world", "all_objects.num", 0)
+RFG_LAYOUT_O(item_owner_handle, 0x13C, "item", "owner_handle", 0)
+RFG_LAYOUT_O(human_hflags, 0xB4, "human", "hflags", 0)
+RFG_LAYOUT_O(input_controller_infos, 0x11AC, "keen::InputSystem", "controllerInfos", 0)
+RFG_LAYOUT_O(input_controller_info_next, 0x11C4, "keen::InputSystem", "controllerInfos[1]", 0)  // the stride: next - first
+RFG_LAYOUT_O(graphics_current_swapchain, 0x20348, "keen::GraphicsSystem", "pCurrentSwapChain", 0)
+RFG_LAYOUT_O(render_swapchain_dxgi, 0x13C, "keen::RenderSwapChain", "pSwapChain", 0)

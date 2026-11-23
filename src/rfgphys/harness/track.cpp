@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "hooks/hooks.h"
 
@@ -19,10 +20,10 @@ namespace {
 
 constexpr char kMagic[8] = {'R', 'F', 'G', 'T', 'R', 'K', '0', '1'};
 // Game layouts (rfg.pdb).
-constexpr uint32_t kCameraRealPos = 0x2C, kCameraRealOrient = 0x50;  // rfg_camera (camera_do_frame_post copies these
+const uint32_t &kCameraRealPos = layout::camera_real_pos, &kCameraRealOrient = layout::camera_real_orient;  // rfg_camera (camera_do_frame_post copies these
                                                                      // into render_pos / render_orient)
-constexpr uint32_t kObjectPos = 0x4, kObjectOrient = 0x10, kObjectHandle = 0x6C;
-constexpr uint32_t kItemOwnerHandle = 0x13C;  // item::owner_handle (a weapon's holder)
+const uint32_t &kObjectPos = layout::object_pos, &kObjectOrient = layout::object_orient, &kObjectHandle = layout::object_handle;
+const uint32_t& kItemOwnerHandle = layout::item_owner_handle;  // item::owner_handle (a weapon's holder)
 
 #pragma pack(push, 1)
 struct FileHeader {

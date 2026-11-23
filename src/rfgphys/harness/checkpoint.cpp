@@ -7,6 +7,7 @@
 #include <cstring>
 #include <vector>
 
+#include "game/layout.h"
 #include "game/rfg.h"
 #include "harness/rec_file.h"
 #include "harness/rng_guard.h"
@@ -18,14 +19,16 @@ constexpr uint32_t kRandInstanceSize = 0x29C8;  // rand_instance: MT state, tabl
 constexpr uint32_t kRandIndex = 0x9C4;          // table index (vrand reads entry [index] and increments it)
 
 // world: all_objects (base_array<object*>: vtable, elt, array_size, num) at +0x60.
-constexpr uint32_t kWorldAllObjects = 0x60;
 // object: pos (vector) at +0x04, orient (matrix 3x3) at +0x10, handle at +0x6C, obj_type / sub_type at +0x7E / +0x7F.
-constexpr uint32_t kObjPos = 0x04, kObjOrient = 0x10, kObjHandle = 0x6C, kObjType = 0x7E;
+const uint32_t &kObjPos = layout::object_pos, &kObjOrient = layout::object_orient, &kObjHandle = layout::object_handle,
+               &kObjType = layout::object_type;
 constexpr uint8_t kTypeEffect = 4;  // OT_EFFECT
 // hkpWorld active islands at +0x28 (hkArray<island*>), island entities at +0x4C; hkpEntity m_uid at +0xD0,
 // m_motion at +0xE0: transform translation at motion+0x10+0x30, linear velocity at motion+0xD0.
-constexpr uint32_t kWorldActiveIslands = 0x28, kIslandEntities = 0x4C;
-constexpr uint32_t kEntityUid = 0xD0, kEntityTranslation = 0xE0 + 0x40, kEntityLinVel = 0xE0 + 0xD0;
+const uint32_t &kWorldActiveIslands = layout::hk_world_active_islands, &kIslandEntities = layout::hk_island_entities;
+const uint32_t &kEntityUid = layout::hk_entity_uid, &kEntityLinVel = layout::hk_body_lin_vel;
+// The motion state's transform: its translation follows the 3x4 rotation.
+uint32_t entity_translation() { return layout::hk_entity_motion_transform + 0x30; }
 
 struct HkPtrArray {
     void** data;
@@ -74,8 +77,8 @@ State capture(uint32_t frame, int game_state) {
     }
 
     auto* world = static_cast<uint8_t*>(rfg::addr(rfg::rva::World));
-    auto** objects = *reinterpret_cast<uint8_t***>(world + kWorldAllObjects + 4);
-    const int32_t n_objects = *reinterpret_cast<int32_t*>(world + kWorldAllObjects + 12);
+    auto** objects = *reinterpret_cast<uint8_t***>(world + layout::world_all_objects);
+    const int32_t n_objects = *reinterpret_cast<int32_t*>(world + layout::world_all_object_count);
     // Effect objects (sounds, particles, decals) are left out: whether one is created can follow audio voices and
     // rendering. Handles are left out too: they are allocated in sequence, so one extra effect shifts every later
     // object's handle. What remains is each object's type, subtype and position.
@@ -99,7 +102,7 @@ State capture(uint32_t frame, int game_state) {
                 const auto* entity = static_cast<const uint8_t*>(entities.data[e]);
                 if (!entity) continue;
                 uint32_t eh = fnv(entity + kEntityUid, 4);
-                eh = fnv(entity + kEntityTranslation, 12, eh);
+                eh = fnv(entity + entity_translation(), 12, eh);
                 eh = fnv(entity + kEntityLinVel, 12, eh);
                 havok_hash += mix(eh);
                 ++s.n_active;
@@ -113,8 +116,8 @@ State capture(uint32_t frame, int game_state) {
 
 void dump_objects(const std::wstring& path) {
     auto* world = static_cast<uint8_t*>(rfg::addr(rfg::rva::World));
-    auto** objects = *reinterpret_cast<uint8_t***>(world + kWorldAllObjects + 4);
-    const int32_t n = *reinterpret_cast<int32_t*>(world + kWorldAllObjects + 12);
+    auto** objects = *reinterpret_cast<uint8_t***>(world + layout::world_all_objects);
+    const int32_t n = *reinterpret_cast<int32_t*>(world + layout::world_all_object_count);
     struct Row {
         uint32_t handle;
         int type, subtype;
@@ -163,7 +166,7 @@ void dump_bodies(const std::wstring& path) {
             Row r{};
             memcpy(&r.uid, entity + kEntityUid, 4);
             r.layer = *reinterpret_cast<const uint32_t*>(entity + 0x2C) & 0xFFFF;
-            memcpy(r.pos, entity + kEntityTranslation, 12);
+            memcpy(r.pos, entity + entity_translation(), 12);
             memcpy(r.vel, entity + kEntityLinVel, 12);
             rows.push_back(r);
         }

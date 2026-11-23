@@ -110,9 +110,11 @@ void run(const std::wstring& dir) {
     const bool full = !rfg::is_openrfg64();
     if (!full)
         LOG("OpenRFG64: only the converted modules run (PhysX bridge, world mirror, debris offload, render routing, hang "
-            "watch); experiments, harness, tests, telemetry and keep_debris stay off");
+            "watch, and the record/replay harness when Harness.Mode is set); experiments, tests, telemetry and keep_debris "
+            "stay off");
+    // OpenRFG64: the record/replay harness and the automation it drives the menus with are converted too.
+    if (full || cfg.harness_mode != 0) automation::install(cfg);
     if (full) {
-        automation::install(cfg);
         experiments::install_debris_collision(cfg);
         experiments::install_render_tweaks(cfg);
         experiments::install_big_buildings(cfg);
@@ -141,9 +143,9 @@ void run(const std::wstring& dir) {
         view_shots::install(cfg);
         stream_report::install(cfg);
         viewpoints::install(cfg);
-        harness::install(cfg);
-        fly_camera::install(cfg);  // never with the harness: both take over the game's input
     }
+    if (full || cfg.harness_mode != 0) harness::install(cfg);
+    if (full) fly_camera::install(cfg);  // never with the harness: both take over the game's input
     hang_watch::start(cfg);
     if (full) address_space::install(cfg);
     if (!hooks::enable_all()) return;
