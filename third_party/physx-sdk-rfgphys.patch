@@ -258,3 +258,105 @@ index 44a5d3b..cc73b4f 100644
  		{
  			PxGetFoundation().error(PxErrorCode::eOUT_OF_MEMORY, PX_FL, "PxgGpuContext: failed to allocate pinned threshold stream.");
  			getNarrowphaseCore()->mCudaContext->setAbortMode(true);
+diff --git a/physx/source/simulationcontroller/src/ScPipeline.cpp b/physx/source/simulationcontroller/src/ScPipeline.cpp
+index f8b3a32..c7db9bf 100644
+--- a/physx/source/simulationcontroller/src/ScPipeline.cpp
++++ b/physx/source/simulationcontroller/src/ScPipeline.cpp
+@@ -25,6 +25,7 @@
+ 
+ #include "ScShapeInteraction.h"
+ #include "ScElementInteractionMarker.h"
++#include "foundation/PxSort.h"  // rfgphys: checkForceThresholdContactEvents
+ 
+ #if PX_SUPPORT_GPU_PHYSX
+ 	#include "PxDeformableSurface.h"
+@@ -2607,11 +2608,73 @@ void Sc::Scene::checkForceThresholdContactEvents(PxU32 ccdPass)
+ 
+ 	const PxU32 nbThresholdElements = thresholdStream.size();
+ 
++	// Modified for rfgphys (not part of NVIDIA's release): the GPU pipeline's stream can carry an element whose
++	// ShapeInteraction is not the scene's: one that no kernel wrote this step (the host crashed here reading a pointer of
++	// 0xFFFFFFFFFFFFFFCF), a pair destroyed while the solver ran, or last step's exceeded pair since gone. Only elements
++	// whose interaction is one of the scene's overlap interactions are processed; the pointers are compared with the
++	// scene's own and are not followed before. A pair destroyed this step had its lost-touch report (force lost
++	// included) from lostTouchReports, and the interactions do not change while this runs.
++	if(!nbThresholdElements)
++		return;
++	PxArray<const ShapeInteraction*> candidates;  // the elements' interactions, sorted, then those that are the scene's
++	candidates.reserve(nbThresholdElements);
++	for(PxU32 i = 0; i < nbThresholdElements; ++i)
++	{
++		if(thresholdStream[i].shapeInteraction)
++			candidates.pushBack(thresholdStream[i].shapeInteraction);
++	}
++	PxU32 nbCandidates = candidates.size();
++	if(nbCandidates)
++		PxSort(candidates.begin(), nbCandidates);
++	PxArray<PxU8> live(nbCandidates, PxU8(0));
++	{
++		ElementSimInteraction** interactions = getInteractions(InteractionType::eOVERLAP);
++		const PxU32 nbInteractions = getNbInteractions(InteractionType::eOVERLAP);
++		const ShapeInteraction* lowest = nbCandidates ? candidates[0] : NULL;
++		const ShapeInteraction* highest = nbCandidates ? candidates[nbCandidates - 1] : NULL;
++		for(PxU32 j = 0; nbCandidates && j < nbInteractions; ++j)
++		{
++			const ShapeInteraction* si = static_cast<const ShapeInteraction*>(interactions[j]);
++			if(si < lowest || si > highest)
++				continue;
++			PxU32 lo = 0, hi = nbCandidates;
++			while(lo < hi)
++			{
++				const PxU32 mid = (lo + hi) / 2;
++				if(candidates[mid] < si)
++					lo = mid + 1;
++				else
++					hi = mid;
++			}
++			for(PxU32 k = lo; k < nbCandidates && candidates[k] == si; ++k)
++				live[k] = 1;
++		}
++	}
++	PxU32 nbSkipped = 0;
++
+ 	for(PxU32 i = 0; i< nbThresholdElements; ++i)
+ 	{
+ 		const ThresholdStreamElement& elem = thresholdStream[i];
+ 		ShapeInteraction* si = elem.shapeInteraction;
+ 
++		if(si)  // rfgphys: and the scene's
++		{
++			PxU32 lo = 0, hi = nbCandidates;
++			while(lo < hi)
++			{
++				const PxU32 mid = (lo + hi) / 2;
++				if(candidates[mid] < si)
++					lo = mid + 1;
++				else
++					hi = mid;
++			}
++			if(lo == nbCandidates || candidates[lo] != si || !live[lo])
++			{
++				++nbSkipped;
++				continue;
++			}
++		}
++
+ 		//If there is a shapeInteraction and the shapeInteraction points to a contactManager (i.e. the CM was not destroyed in parallel with the solver)
+ 		if(si)
+ 		{
+@@ -2643,6 +2706,15 @@ void Sc::Scene::checkForceThresholdContactEvents(PxU32 ccdPass)
+ 			}
+ 		}
+ 	}
++
++	// rfgphys: how often (the first 32 steps that skipped some, then every 1000th).
++	if(nbSkipped)
++	{
++		static PxU32 stepsWithSkips = 0;
++		++stepsWithSkips;
++		if(stepsWithSkips <= 32 || (stepsWithSkips % 1000) == 0)
++			PxGetFoundation().error(PxErrorCode::eDEBUG_WARNING, PX_FL, "rfgphys: %u of %u force threshold elements skipped: their interaction is not the scene's (%u steps so far)", nbSkipped, nbThresholdElements, stepsWithSkips);
++	}
+ }
+ 
+ void Sc::Scene::afterIntegration(PxBaseTask* continuation)
