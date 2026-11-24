@@ -24,6 +24,9 @@ struct Binding {
     const void* (*caller)(const void* return_address);  // see caller() below
 };
 void set_binding(const Binding& binding);
+// A hook only where the binding has a seam for it: false without one (and in the plugins, which have no binding), so
+// the caller attaches another way (rfgphys's vtable entries).
+bool seam(uint32_t rva, void* detour, void** original, const char* name);
 
 // The game's call site of the call a handler handles, given the handler's own return address (_ReturnAddress(), read
 // first thing in the handler): a detour's own, a seam's from the seam (which calls the handler itself).
@@ -32,6 +35,11 @@ const void* caller(const void* return_address);
 template <typename Fn>
 bool create(uint32_t rva, Fn detour, Fn* original, const char* name) {
     return create(rva, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original), name);
+}
+
+template <typename Fn>
+bool seam(uint32_t rva, Fn detour, Fn* original, const char* name) {
+    return seam(rva, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original), name);
 }
 
 }  // namespace hooks

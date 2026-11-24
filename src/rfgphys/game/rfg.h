@@ -36,6 +36,8 @@ uint32_t site_rva(uint32_t rva);
 // OpenRFG64: the entry of the names table that resolved a function to `rva` (its name and parameters in OpenRFG.pdb);
 // null when none did (or the build is not OpenRFG64).
 const ::openrfg64::Name* symbol_of(uint32_t rva);
+// An int the game's program exports for rfgphys (OpenRFG64 builds: openrfg_object_index_size, ...); 0 without it.
+int game_export_int(const char* name);
 
 inline void* addr(uint32_t rva) { return reinterpret_cast<void*>(base() + rva); }
 

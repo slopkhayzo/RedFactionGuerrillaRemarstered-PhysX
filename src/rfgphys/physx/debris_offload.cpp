@@ -3685,10 +3685,14 @@ void push_piece(uint32_t slot, const float j[3], const float at[3], const char* 
 
 thread_local bool g_in_wide_blow = false;  // within a blow passed on whole (below): its stand-in hits are part of it
 
+// Through the vtable (patch_zone_hits) these run for obj_zone's objects only; through a seam in the function's body
+// (OpenRFG64 VOM) for every object that shares the function: the others go on as they were.
+bool is_zone_object(const void* self) { return *static_cast<void* const*>(self) == rfg::addr(r::obj_zone_vftable); }
+
 bool __fastcall d_zone_melee(void* self RFG_EDX_PARAM, void* attacker, float damage, const float* impulse,
                              const float* pos, const float* c, uint32_t u, void* weapon) {
     const bool result = o_zone_melee(self RFG_EDX_PASS, attacker, damage, impulse, pos, c, u, weapon);
-    if (g_on && impulse && pos && !g_in_wide_blow) {
+    if (g_on && impulse && pos && !g_in_wide_blow && is_zone_object(self)) {
         const uint32_t slot = stand_in_piece_at(pos);
         if (slot != kNoSlot) {
             push_piece(slot, impulse, pos, "melee blow");
@@ -3700,7 +3704,7 @@ bool __fastcall d_zone_melee(void* self RFG_EDX_PARAM, void* attacker, float dam
 
 void __fastcall d_zone_bullet(void* self RFG_EDX_PARAM, void* shooter, float damage, const uint8_t* info) {
     o_zone_bullet(self RFG_EDX_PASS, shooter, damage, info);
-    if (!g_on || !info) return;
+    if (!g_on || !info || !is_zone_object(self)) return;
     const float* hit_pos = reinterpret_cast<const float*>(info + layout::weapon_fire_hit_pos);     // weapon_fire_info::hit_pos
     const float* hit_normal = reinterpret_cast<const float*>(info + layout::weapon_fire_hit_normal);  // hit_normal
     const uint32_t slot = stand_in_piece_at(hit_pos);
@@ -3845,6 +3849,10 @@ void send_melee_sweeps() {
 }
 
 bool patch_zone_hits() {
+    // A game with seams for them (OpenRFG64 VOM): obj_zone's melee hit and the bullet hit it shares with object.
+    if (hooks::seam(r::obj_zone__process_melee_hit, &d_zone_melee, &o_zone_melee, "obj_zone::process_melee_hit") &&
+        hooks::seam(r::object__process_bullet_hit, &d_zone_bullet, &o_zone_bullet, "object::process_bullet_hit"))
+        return true;
     void** vt = static_cast<void**>(rfg::addr(r::obj_zone_vftable));
     // OpenRFG64: an incrementally linked build's vtable points at jump thunks (rfg::code_target).
     if (rfg::code_target(vt[kZoneSlotMelee]) != rfg::addr(r::obj_zone__process_melee_hit) ||
@@ -6400,7 +6408,8 @@ bool install(const Config& cfg) {
         if (comma == std::wstring::npos) break;
         at = comma + 1;
     }
-    if (g_solid && !patch_lean_check()) {
+    // OpenRFG64: a build whose source makes that check itself says so (openrfg_lean_check_guarded, VOM): no patch.
+    if (g_solid && !rfg::game_export_int("openrfg_lean_check_guarded") && !patch_lean_check()) {
         LOG("debris offload: unexpected code in MyCharacterListener::processConstraintsCallback; no solid stand-ins");
         g_solid = false;
     }

@@ -138,6 +138,11 @@ const uint8_t* rel_ptr(const uint8_t* field) {
     return field + *reinterpret_cast<const int32_t*>(field);
 }
 
+int game_export_int(const char* name) {
+    const int* value = reinterpret_cast<const int*>(GetProcAddress(GetModuleHandleW(nullptr), name));
+    return value ? *value : 0;
+}
+
 uint32_t object_index(const void* list, int i) {
     static const int* const wide = reinterpret_cast<const int*>(GetProcAddress(GetModuleHandleW(nullptr), "openrfg_object_index_size"));
     if (wide && *wide == 4) return static_cast<const uint32_t*>(list)[i];

@@ -17,6 +17,10 @@ Binding g_binding{};
 
 void set_binding(const Binding& binding) { g_binding = binding; }
 
+bool seam(uint32_t rva, void* detour, void** original, const char* name) {
+    return rva != 0 && g_binding.create && g_binding.create(rva, detour, original, name);
+}
+
 const void* caller(const void* return_address) {
     return g_binding.caller ? g_binding.caller(return_address) : return_address;
 }
@@ -35,7 +39,10 @@ bool create(uint32_t rva, void* detour, void** original, const char* name) {
         LOG("hook %s: no address in this build", name);
         return false;
     }
-    if (g_binding.create && g_binding.create(rva, detour, original, name)) return true;
+    if (g_binding.create) {
+        if (g_binding.create(rva, detour, original, name)) return true;
+        LOG("hook %s: no seam in the game's source; a MinHook detour", name);
+    }
     MH_STATUS s = MH_CreateHook(rfg::addr(rva), detour, original);
     if (s != MH_OK) {
         LOG("hook %s (RVA %08X) failed: %s", name, rva, MH_StatusToString(s));
