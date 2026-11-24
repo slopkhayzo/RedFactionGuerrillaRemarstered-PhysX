@@ -15,6 +15,20 @@ void shutdown();
 // Replaces rfg.exe's import of dll!function in its import address table. Returns the previous pointer, or null.
 void* patch_import(const char* dll, const char* function, void* replacement);
 
+// A game that builds rfgphys in can attach the hooks to seams in its own source instead of MinHook detours (OpenRFG64
+// VOM: its src/backends/seams.h). Set before anything hooks. create() asks the binding first: true when a seam took
+// the hook (`original` then runs the game's function), false for a MinHook detour. enable_all() turns the seams on.
+struct Binding {
+    bool (*create)(uint32_t rva, void* detour, void** original, const char* name);
+    void (*enable_all)();
+    const void* (*caller)(const void* return_address);  // see caller() below
+};
+void set_binding(const Binding& binding);
+
+// The game's call site of the call a handler handles, given the handler's own return address (_ReturnAddress(), read
+// first thing in the handler): a detour's own, a seam's from the seam (which calls the handler itself).
+const void* caller(const void* return_address);
+
 template <typename Fn>
 bool create(uint32_t rva, Fn detour, Fn* original, const char* name) {
     return create(rva, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original), name);

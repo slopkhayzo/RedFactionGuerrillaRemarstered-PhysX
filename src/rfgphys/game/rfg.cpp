@@ -72,6 +72,13 @@ void select_build(int index) {
 
 uint32_t site_rva(uint32_t rva) { return g_build == kBuildOpenRFG64 ? rva : gog_rva(rva); }
 
+const ::openrfg64::Name* symbol_of(uint32_t rva) {
+    if (g_build != kBuildOpenRFG64 || rva == 0) return nullptr;
+    for (const ::openrfg64::Name& n : kOpenRFG64Names)
+        if (n.kind == 'f' && n.value && *n.value == rva) return &n;
+    return nullptr;
+}
+
 uint32_t gog_rva(uint32_t rva) {
     if (g_build == kBuildOpenRFG64) return 0;  // OpenRFG64: no GOG address for OpenRFG64's code
     if (g_build <= 0) return rva;  // the GOG build itself

@@ -3,6 +3,10 @@
 
 #include "game/rfg_symbols.generated.h"
 
+namespace openrfg64 {
+struct Name;
+}
+
 // Access to rfg.exe code and data by RVA. The exe is ASLR-enabled, so everything is relative to its load address.
 // The plugin knows two builds (kBuilds: GOG and Steam, compiled from the same source); every address in rfg::rva is
 // the running build's once select_build() has run, at start-up before anything else uses them. So code takes
@@ -29,6 +33,9 @@ uint32_t gog_rva(uint32_t rva);
 // A call site's RVA as the record/replay harness keys it: the GOG build's, so every rfg.exe build replays alike;
 // OpenRFG64's own (its code has no GOG address), so its recordings replay alike in the same build.
 uint32_t site_rva(uint32_t rva);
+// OpenRFG64: the entry of the names table that resolved a function to `rva` (its name and parameters in OpenRFG.pdb);
+// null when none did (or the build is not OpenRFG64).
+const ::openrfg64::Name* symbol_of(uint32_t rva);
 
 inline void* addr(uint32_t rva) { return reinterpret_cast<void*>(base() + rva); }
 

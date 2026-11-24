@@ -11,6 +11,16 @@
 
 namespace hooks {
 
+namespace {
+Binding g_binding{};
+}  // namespace
+
+void set_binding(const Binding& binding) { g_binding = binding; }
+
+const void* caller(const void* return_address) {
+    return g_binding.caller ? g_binding.caller(return_address) : return_address;
+}
+
 bool init() {
     MH_STATUS s = MH_Initialize();
     if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
@@ -25,6 +35,7 @@ bool create(uint32_t rva, void* detour, void** original, const char* name) {
         LOG("hook %s: no address in this build", name);
         return false;
     }
+    if (g_binding.create && g_binding.create(rva, detour, original, name)) return true;
     MH_STATUS s = MH_CreateHook(rfg::addr(rva), detour, original);
     if (s != MH_OK) {
         LOG("hook %s (RVA %08X) failed: %s", name, rva, MH_StatusToString(s));
@@ -76,6 +87,7 @@ void* patch_import(const char* dll, const char* function, void* replacement) {
 }
 
 bool enable_all() {
+    if (g_binding.enable_all) g_binding.enable_all();
     MH_STATUS s = MH_EnableHook(MH_ALL_HOOKS);
     if (s != MH_OK) {
         LOG("enabling hooks failed: %s", MH_StatusToString(s));

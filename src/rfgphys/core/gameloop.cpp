@@ -72,7 +72,7 @@ bool patch_frametime_call() {
 // only for rfg_do_frame's call (the one the upstream patch redirects), the function's other callers get it as is.
 void(__cdecl* o_frametime)(bool, float, float) = nullptr;
 void __cdecl d_frametime(bool quantize, float quantum, float fixed_rate) {
-    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
+    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(hooks::caller(_ReturnAddress())) - rfg::base());
     const bool from_frame = caller - rfg::rva::rfg_do_frame < rfg::size::rfg_do_frame;
     if (from_frame && g_fixed_rate) fixed_rate = g_fixed_rate();
     o_frametime(quantize, quantum, fixed_rate);

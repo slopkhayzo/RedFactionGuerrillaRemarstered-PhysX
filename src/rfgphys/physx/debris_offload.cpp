@@ -598,7 +598,7 @@ bool(__fastcall* o_in_original_zone)(void* RFG_EDX_TYPE, uint8_t*) = nullptr;
 bool in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj, const void* caller);
 bool __fastcall d_in_original_zone(void* w RFG_EDX_PARAM, uint8_t* obj) {
     const int64_t t0 = session::qpc();
-    const bool in = in_original_zone(w RFG_EDX_PASS, obj, _ReturnAddress());
+    const bool in = in_original_zone(w RFG_EDX_PASS, obj, hooks::caller(_ReturnAddress()));
     g_time_ms[kTimeZone] += session::ticks_to_ms(session::qpc() - t0);
     ++g_time_zone_calls;
     return in;
@@ -5649,6 +5649,7 @@ double g_kick_sum = 0, g_kick_max = 0;
 uint32_t g_kick_n = 0;
 void(__cdecl* o_impulse)(uint32_t, const float*) = nullptr;
 void __cdecl d_impulse(uint32_t handle, const float* impulse) {
+    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(hooks::caller(_ReturnAddress())) - rfg::base());
     // A driven chunk's body is keyframed and takes no push in Havok: the push goes to its body in the host (sent from
     // move_vehicles; this may run inside Havok's step). g_driven holds object handles: the body's object says.
     if (impulse && handle != 0xFFFFFFFFu && !g_driven.empty()) {
@@ -5661,7 +5662,6 @@ void __cdecl d_impulse(uint32_t handle, const float* impulse) {
             ReleaseSRWLockExclusive(&g_chunk_impulse_lock);
         }
     }
-    const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
     if (impulse && handle != 0xFFFFFFFFu &&
         caller - r::object_mover_process_explosion_hit < rfg::size::object_mover_process_explosion_hit) {
         const uint8_t* body = static_cast<uint8_t* const*>(rfg::addr(r::Hk_rigid_bodies))[handle];
