@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "core/session.h"
 #include "game/layout.h"
 #include "game/rfg_symbols_names.generated.h"
 #include "openrfg64_column.h"
@@ -40,29 +41,33 @@ const char* build_name() { return g_build == kBuildOpenRFG64 ? "OpenRFG64" : g_b
 
 void select_build(int index) {
     if (index == kBuildOpenRFG64) {
-        // OpenRFG64: every address and layout value from the program's own PDB, by name.
+        // OpenRFG64: every address and layout value by name: from the names table a game that builds the plugin wrote
+        // beside it at build time (rfgphys.names: src/shared/openrfg64_column.h), else from the program's own PDB.
+        // The lists: the names; the struct layouts (game/layout.inc: one not found is wrong on x64, so the plugin does
+        // not run then: main.cpp); the optional layout values (0 where the build has no such member: their users check).
+        layout::zero_optional();
+        const openrfg64::List lists[] = {{kOpenRFG64Names, std::size(kOpenRFG64Names)},
+                                         {layout::names(), layout::name_count()},
+                                         {layout::optional_names(), layout::optional_count()}};
+        int missing[3] = {};
         std::string report;
-        const int missing = openrfg64::load(kOpenRFG64Names, std::size(kOpenRFG64Names), base(), report);
+        const std::wstring table = session::plugin_dir() + L"\\rfgphys.names";
+        if (openrfg64::load_table(lists, std::size(lists), base(), table.c_str(), missing, report) < 0) {
+            missing[0] = openrfg64::load(lists[0].names, lists[0].count, base(), report);
+            std::string layout_report;
+            missing[1] = openrfg64::load(lists[1].names, lists[1].count, base(), layout_report);
+            missing[2] = openrfg64::load(lists[2].names, lists[2].count, base(), layout_report);
+            report += layout_report;
+        }
         size_t start = 0;
         for (size_t end = report.find('\n'); end != std::string::npos; start = end + 1, end = report.find('\n', start))
             LOG("%s", report.substr(start, end - start).c_str());
-        if (missing > 0) LOG("OpenRFG64: %d names missing: what uses them stays off", missing);
-        // The struct layouts (game/layout.inc). A value not found keeps its x86 default, which is wrong on x64: the
-        // plugin does not run then (main.cpp).
-        std::string layout_report;
-        g_layout_missing = openrfg64::load(layout::names(), layout::name_count(), base(), layout_report);
-        start = 0;
-        for (size_t end = layout_report.find('\n'); end != std::string::npos; start = end + 1, end = layout_report.find('\n', start))
-            LOG("layout: %s", layout_report.substr(start, end - start).c_str());
+        if (missing[0] > 0) LOG("OpenRFG64: %d names missing: what uses them stays off", missing[0]);
+        g_layout_missing = missing[1];
         if (g_layout_missing > 0)
             LOG("OpenRFG64: %d layout values not found (their x86 values would be read on x64): the plugin stays inactive",
                 g_layout_missing);
-        // The optional ones: 0 where the build has no such member (their users check).
-        layout::zero_optional();
-        std::string optional_report;
-        const int optional_missing = openrfg64::load(layout::optional_names(), layout::optional_count(), base(), optional_report);
-        if (optional_missing > 0)
-            LOG("layout: %d optional values not in this build (0: what reads them stays off)", optional_missing);
+        if (missing[2] > 0) LOG("layout: %d optional values not in this build (0: what reads them stays off)", missing[2]);
         g_build = index;
         return;
     }
