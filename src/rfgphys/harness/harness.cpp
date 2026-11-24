@@ -1373,8 +1373,11 @@ void request_screenshot(uint32_t frame) {
     }
     if (series || g_shot_frames.count(frame) ||
         (g_cfg.harness_screenshot_every > 0 && frame % g_cfg.harness_screenshot_every == 0)) {
-        wchar_t name[32];
-        swprintf_s(name, L"\\shot_%06u.png", frame);
+        wchar_t name[48];
+        if (g_cfg.harness_replay_passes > 1)  // each pass's own (Harness.ReplayPasses)
+            swprintf_s(name, L"\\shot_%06u_pass%u.png", frame, g_pass);
+        else
+            swprintf_s(name, L"\\shot_%06u.png", frame);
         screenshot::request(session::run_dir() + name);
     }
     if (g_dump_frames.count(frame)) {
