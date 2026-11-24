@@ -41,7 +41,7 @@ bool create(uint32_t rva, void* detour, void** original, const char* name) {
     }
     if (g_binding.create) {
         if (g_binding.create(rva, detour, original, name)) return true;
-        LOG("hook %s: no seam in the game's source; a MinHook detour", name);
+        LOG("hook %s: not on a seam; a MinHook detour", name);
     }
     MH_STATUS s = MH_CreateHook(rfg::addr(rva), detour, original);
     if (s != MH_OK) {
