@@ -508,6 +508,8 @@ struct Host {
     double stat_since_ms = 0, stat_since_sim = 0;  // the last report: for how fast the world went since
     uint32_t stat_cmd_latency_n = 0;
     FILE* steps_csv = nullptr;
+    bool in_process = false;  // the core on a thread of the game (rfgphysx_core.dll)
+    bool test_failed = false; // TestCrash there: the core ends as a failed one would
 
     bool init_physx(uint32_t backend) {
         foundation = PxCreateFoundation(PX_PHYSICS_VERSION, g_allocator, g_errors);
@@ -2531,6 +2533,12 @@ struct Host {
                 break;
             }
             case ipc::Cmd::TestCrash:
+                // In the game's process the process is the game's: the core ends as a failed one would.
+                if (in_process) {
+                    logf("TestCrash: the core ends as a failed one would");
+                    test_failed = true;
+                    break;
+                }
                 logf("TestCrash: ending the host process abruptly");
                 TerminateProcess(GetCurrentProcess(), 3);
                 break;
@@ -2983,6 +2991,7 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
         }
     }
     host.max_bodies = ctl->max_bodies;
+    host.in_process = in_process;
     host.dt = ctl->step_hz > 0 ? 1.0f / ctl->step_hz : 1.0f / 60.0f;
     host.ensure_slots(4096);  // OpenRFG64: the player's capsule and the vehicles' proxies; they grow from there
     host.change_every = std::max(ctl->change_every, 1u);
@@ -3059,6 +3068,12 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
                 exit_code = 2;
                 break;
             }
+            if (host.test_failed) {
+                host.fail("TestCrash");
+                reason = "TestCrash";
+                exit_code = 3;
+                break;
+            }
             host.step();
             if (host.gpu_failed()) {
                 host.log_stats();
@@ -3111,8 +3126,15 @@ int run_host(const std::wstring& map_name, const std::wstring& log_path, const s
         TerminateProcess(GetCurrentProcess(), UINT(exit_code));
         return exit_code;
     }
-    // In the game's process the thread ends here, and the core may start again: PhysX and the CUDA context are
-    // released (their memory goes back to the game), then the heartbeat thread is joined.
+    // In the game's process the thread ends here. The game closing (quit 1) leaves PhysX to the process's end, as the
+    // host process does: a CUDA context release while the process exits gains nothing and can take long.
+    if (ctl->quit.load(std::memory_order_acquire) == 1) {
+        heartbeat.join();
+        close_log();
+        return exit_code;
+    }
+    // Otherwise the core may start again: PhysX and the CUDA context are released (their memory goes back to the
+    // game), then the heartbeat thread is joined.
     const double t_release = now_ms();
     host.release_physx();
     heartbeat.join();
