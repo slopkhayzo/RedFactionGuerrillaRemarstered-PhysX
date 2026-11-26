@@ -223,8 +223,8 @@ def main():
         out.append('    {&rva::%s, {0x%08X, 0x%08X}},' % (cname, a, s))
     out.append('};')
     out.append('')
-    out.append('// Code size of each function above (call-site range checks: return address - rva < size): rfg.exe's, the')
-    out.append('// same in every build. Variables: an OpenRFG64 build's are read from its PDB at start-up (openrfg64_column).')
+    out.append("// Code size of each function above (call-site range checks: return address - rva < size): rfg.exe's, the")
+    out.append("// same in every build. Variables: an OpenRFG64 build's are read from its PDB at start-up (openrfg64_column).")
     out.append('namespace size {')
     for cname, a, s, comment, size in fns:
         out.append('inline uint32_t %s = %d;' % (cname, size))
