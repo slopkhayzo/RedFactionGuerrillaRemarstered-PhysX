@@ -59,6 +59,7 @@ add_library(rfgphys SHARED
     src/rfgphys/experiments/havok_audit.cpp
     src/rfgphys/experiments/havok_mt.cpp
     src/rfgphys/experiments/keep_debris.cpp
+    src/rfgphys/menu/display_rows.cpp
     src/rfgphys/harness/harness.cpp
     src/rfgphys/harness/rec_file.cpp
     src/rfgphys/harness/checkpoint.cpp

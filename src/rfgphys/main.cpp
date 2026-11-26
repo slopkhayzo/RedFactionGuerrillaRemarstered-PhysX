@@ -21,6 +21,7 @@
 #include "game/rfg.h"
 #include "harness/harness.h"
 #include "hooks/hooks.h"
+#include "menu/display_rows.h"
 #include "physx/bridge.h"
 #include "physx/collision_survey.h"
 #include "physx/debris_offload.h"
@@ -151,6 +152,7 @@ void init() {
     }
     hang_watch::start(cfg);
     if (full) address_space::install(cfg);
+    if (cfg.menu_rows) display_rows::install(cfg, dir + L"\\rfgphys.ini");  // the display menu's PHYSICS and KEEP DEBRIS rows
     if (!hooks::enable_all()) return;
     if (full && cfg.telemetry && cfg.profiler) profiler::start(cfg);
     session::start_watchdog();

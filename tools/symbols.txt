@@ -434,3 +434,23 @@ var Multiplayer
 
 # enums
 enum game_state
+
+# the display menu's rows for the plugin's settings (menu/display_rows.h): set_detail_page makes a page's menu (the
+# general page's rows through display_info_update_menu), display_menu_enter opens the display menu, display_hint_callback
+# takes its accept, back and defaults, and changes_made tells back whether to ask first. The rows' captions go into the
+# localization table (its get and insert, the keys hashed as keen::getCrc32LwrValue does).
+fn set_detail_page
+fn display_menu_enter
+fn display_hint_callback
+fn changes_made
+fn ui_menu_add_char_list_item
+fn ui_menu_add_bool_item
+fn ui_menu_enable_menu_item
+fn ui_menu_get_total_item_count
+var Menu_handle_doptions
+var Doc_handle_main
+var Localization_hash
+fn data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::get as LocalizationHash_get
+fn data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::insert_key_data as LocalizationHash_insert
+enum hint_type
+enum detail_option_pages

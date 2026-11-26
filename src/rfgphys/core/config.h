@@ -240,6 +240,12 @@ struct Config {
     bool harness_lock_track = true;       // replay: lock camera, player and shots to the recording's track.bin
     int harness_track_tolerance_cm = 25;  // replay: put the player back when this far off the recorded path
 
+    // [Menu]
+    bool menu_rows = true;                // Menu.Rows: the display menu's PHYSICS and KEEP DEBRIS rows (menu/display_rows.h)
+    // [Test] DisplayRows: the display menu's rows as a player sets them before its first accept from the main menu
+    // ("physics=0|1,keepdebris=0|1"); the path tracer's Test.DisplayRows opens the menu and accepts
+    std::string test_display_rows;
+
     std::wstring ini_path;
 };
 

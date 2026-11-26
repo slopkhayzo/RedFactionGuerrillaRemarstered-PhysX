@@ -208,6 +208,8 @@ Config load_config(const std::wstring& ini_path) {
     c.harness_lock_track = c.harness_track && get_int(ini_path, L"Harness", L"LockTrack", 1) != 0;
     c.harness_track_tolerance_cm = get_int(ini_path, L"Harness", L"TrackToleranceCm", 25);
     if (c.harness_track_tolerance_cm < 1) c.harness_track_tolerance_cm = 1;
+    c.menu_rows = get_int(ini_path, L"Menu", L"Rows", 1) != 0;
+    c.test_display_rows = narrow(get_string(ini_path, L"Test", L"DisplayRows", L""));
     return c;
 }
 
@@ -223,7 +225,7 @@ std::string describe(const Config& c) {
              "crash after %d s) exp_collision_survey=%d exp_physx_world=%d (check %d, statics %d, near %d m) exp_physx_debris=%d (piles %d) fly_camera=%d "
              "(key %d, %d m/s, look speed %d%%, hide HUD %d) harness=%s (recordings '%s', recording '%s', seed %08X, "
              "checkpoint every %d, virtual clock %d, auto start '%s', input script '%s', max frames %d, trace rng %d, "
-             "screenshots '%s' every %d, track %d, lock track %d within %d cm)",
+             "screenshots '%s' every %d, track %d, lock track %d within %d cm) menu_rows=%d test_display_rows=%s",
              c.enabled, narrow(c.output_dir).c_str(), c.keep_sessions, c.hang_s, c.telemetry, c.contact_counters, c.profiler,
              c.profiler_interval_us, c.profiler_gameplay_only, c.exit_after_main_menu_s, c.exit_after_gameplay_s,
              c.exit_after_s, c.test_hang_after_s, c.auto_load_save, c.block_save_writes, c.exp_debris_collide, c.exp_solver_buffer_mb,
@@ -240,6 +242,6 @@ std::string describe(const Config& c) {
              c.harness_checkpoint_interval, c.harness_virtual_clock, narrow(c.harness_auto_start).c_str(),
              narrow(c.harness_input_script).c_str(), c.harness_max_frames, c.harness_trace_rng,
              narrow(c.harness_screenshot_frames).c_str(), c.harness_screenshot_every, c.harness_track, c.harness_lock_track,
-             c.harness_track_tolerance_cm);
+             c.harness_track_tolerance_cm, int(c.menu_rows), c.test_display_rows.empty() ? "(none)" : c.test_display_rows.c_str());
     return buf;
 }

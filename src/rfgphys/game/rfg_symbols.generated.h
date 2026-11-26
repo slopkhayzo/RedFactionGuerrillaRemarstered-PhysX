@@ -273,6 +273,16 @@ inline uint32_t wrecking_crew_get_weapon_info = 0x003605D0;  // Steam 0x00360660
 inline uint32_t weapons_get_weapon_info = 0x007D9A10;  // Steam 0x007D9DE0; weapons_get_weapon_info, 33 bytes: weapon_info* __cdecl(uint)
 inline uint32_t player_get_local_player = 0x00610540;  // Steam 0x006108D0; player_get_local_player, 6 bytes: player* __cdecl()
 inline uint32_t keen__graphics__endFrame = 0x0086FFF0;  // Steam 0x00870320; keen::graphics::endFrame, 165 bytes: bool __cdecl(keen::GraphicsSystem*)
+inline uint32_t set_detail_page = 0x00502440;  // Steam 0x005024F0; set_detail_page, 1245 bytes: void __cdecl(enum detail_option_pages)
+inline uint32_t display_menu_enter = 0x0050F670;  // Steam 0x0050F800; display_menu_enter, 500 bytes: void __cdecl(enum game_state)
+inline uint32_t display_hint_callback = 0x00501FD0;  // Steam 0x00502080; display_hint_callback, 389 bytes: void __cdecl(enum hint_type)
+inline uint32_t changes_made = 0x004AFAA0;  // Steam 0x004AFAA0; changes_made, 119 bytes: bool __cdecl()
+inline uint32_t ui_menu_add_char_list_item = 0x004B9260;  // Steam 0x004B9260; ui_menu_add_char_list_item, 117 bytes: int __cdecl(int, rchar*, rchar**, int, fn*, int, bool)
+inline uint32_t ui_menu_add_bool_item = 0x004B91D0;  // Steam 0x004B91D0; ui_menu_add_bool_item, 142 bytes: int __cdecl(int, rchar*, bool*, fn*, bool)
+inline uint32_t ui_menu_enable_menu_item = 0x004B8E70;  // Steam 0x004B8E70; ui_menu_enable_menu_item, 87 bytes: void __cdecl(int, int, bool)
+inline uint32_t ui_menu_get_total_item_count = 0x004B9540;  // Steam 0x004B9540; ui_menu_get_total_item_count, 58 bytes: int __cdecl(int)
+inline uint32_t LocalizationHash_get = 0x004BD690;  // Steam 0x004BD690; data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::get, 106 bytes: bool __thiscall data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::(uint, wchar**)
+inline uint32_t LocalizationHash_insert = 0x004CDDF0;  // Steam 0x004CDE10; data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::insert_key_data, 57 bytes: bool __thiscall data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::(uint, wchar**)
 
 inline uint32_t Main_menu_delayed_selection = 0x012621C8;  // Steam 0x012631C8; enum menu_option_types
 inline uint32_t Main_menu_delayed_selection_state = 0x012621CC;  // Steam 0x012631CC; enum main_menu_selection_states
@@ -380,6 +390,9 @@ inline uint32_t RFG_load = 0x01AF729C;  // Steam 0x01AF829C; float
 inline uint32_t Recent_history_objects = 0x01AF72AC;  // Steam 0x01AF82AC; float
 inline uint32_t Movers_destroyed_count = 0x02BEA6E0;  // Steam 0x02BEB6E0; int
 inline uint32_t Multiplayer = 0x02BEA588;  // Steam 0x02BEB588; bool
+inline uint32_t Menu_handle_doptions = 0x0126320C;  // Steam 0x0126420C; int
+inline uint32_t Doc_handle_main = 0x012621AC;  // Steam 0x012631AC; int
+inline uint32_t Localization_hash = 0x0287EC90;  // Steam 0x0287FC90; data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>
 }  // namespace rva
 
 // Every address above in each build, in the order of kBuilds.
@@ -639,6 +652,16 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::weapons_get_weapon_info, {0x007D9A10, 0x007D9DE0}},
     {&rva::player_get_local_player, {0x00610540, 0x006108D0}},
     {&rva::keen__graphics__endFrame, {0x0086FFF0, 0x00870320}},
+    {&rva::set_detail_page, {0x00502440, 0x005024F0}},
+    {&rva::display_menu_enter, {0x0050F670, 0x0050F800}},
+    {&rva::display_hint_callback, {0x00501FD0, 0x00502080}},
+    {&rva::changes_made, {0x004AFAA0, 0x004AFAA0}},
+    {&rva::ui_menu_add_char_list_item, {0x004B9260, 0x004B9260}},
+    {&rva::ui_menu_add_bool_item, {0x004B91D0, 0x004B91D0}},
+    {&rva::ui_menu_enable_menu_item, {0x004B8E70, 0x004B8E70}},
+    {&rva::ui_menu_get_total_item_count, {0x004B9540, 0x004B9540}},
+    {&rva::LocalizationHash_get, {0x004BD690, 0x004BD690}},
+    {&rva::LocalizationHash_insert, {0x004CDDF0, 0x004CDE10}},
     {&rva::Main_menu_delayed_selection, {0x012621C8, 0x012631C8}},
     {&rva::Main_menu_delayed_selection_state, {0x012621CC, 0x012631CC}},
     {&rva::Message_box_handle_main, {0x012621C0, 0x012631C0}},
@@ -745,6 +768,9 @@ inline constexpr RvaEntry kRvaTable[] = {
     {&rva::Recent_history_objects, {0x01AF72AC, 0x01AF82AC}},
     {&rva::Movers_destroyed_count, {0x02BEA6E0, 0x02BEB6E0}},
     {&rva::Multiplayer, {0x02BEA588, 0x02BEB588}},
+    {&rva::Menu_handle_doptions, {0x0126320C, 0x0126420C}},
+    {&rva::Doc_handle_main, {0x012621AC, 0x012631AC}},
+    {&rva::Localization_hash, {0x0287EC90, 0x0287FC90}},
 };
 
 // Code size of each function above (call-site range checks: return address - rva < size): rfg.exe's, the
@@ -1001,6 +1027,16 @@ inline uint32_t wrecking_crew_get_weapon_info = 28;
 inline uint32_t weapons_get_weapon_info = 33;
 inline uint32_t player_get_local_player = 6;
 inline uint32_t keen__graphics__endFrame = 165;
+inline uint32_t set_detail_page = 1245;
+inline uint32_t display_menu_enter = 500;
+inline uint32_t display_hint_callback = 389;
+inline uint32_t changes_made = 119;
+inline uint32_t ui_menu_add_char_list_item = 117;
+inline uint32_t ui_menu_add_bool_item = 142;
+inline uint32_t ui_menu_enable_menu_item = 87;
+inline uint32_t ui_menu_get_total_item_count = 58;
+inline uint32_t LocalizationHash_get = 106;
+inline uint32_t LocalizationHash_insert = 57;
 }  // namespace size
 
 // The Steam build's code ranges (GOG RVA + delta = Steam RVA), for diagnostics: stack and profiler addresses
@@ -1703,6 +1739,23 @@ inline constexpr game_state_name game_state_names[] = {
     {62, "GS_QUICK_PAUSE"},
     {63, "GS_MULTIPLAYER_LIVE_FIND_SERVERS"},
     {64, "GS_NUM_STATES"},
+};
+
+struct hint_type_name { int value; const char* name; };
+inline constexpr hint_type_name hint_type_names[] = {
+    {0, "HT_SELECTION"},
+    {1, "HT_ABORT"},
+    {2, "HT_MISC"},
+    {3, "HT_MISC_2"},
+    {4, "HT_LAST"},
+};
+
+struct detail_option_pages_name { int value; const char* name; };
+inline constexpr detail_option_pages_name detail_option_pages_names[] = {
+    {-1, "DETAIL_OPTIONS_PAGE_INVALID"},
+    {0, "DETAIL_OPTIONS_PAGE_GENERAL"},
+    {1, "DETAIL_OPTIONS_PAGE_ADVANCED"},
+    {2, "NUM_DETAIL_OPTIONS_PAGES"},
 };
 
 }  // namespace rfg

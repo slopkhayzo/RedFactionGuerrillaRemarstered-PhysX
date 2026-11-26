@@ -365,6 +365,19 @@ inline ::openrfg64::Name kOpenRFG64Names[] = {
     {&rva::Recent_history_objects, 'v', "Recent_history_objects", nullptr, nullptr, nullptr, 0},
     {&rva::Movers_destroyed_count, 'v', "Movers_destroyed_count", nullptr, nullptr, nullptr, 0},
     {&rva::Multiplayer, 'v', "Multiplayer", nullptr, nullptr, nullptr, 0},
+    {&rva::set_detail_page, 'f', "set_detail_page", nullptr, "(enum detail_option_pages)", &size::set_detail_page, 0},
+    {&rva::display_menu_enter, 'f', "display_menu_enter", nullptr, "(enum game_state)", &size::display_menu_enter, 0},
+    {&rva::display_hint_callback, 'f', "display_hint_callback", nullptr, "(enum hint_type)", &size::display_hint_callback, 0},
+    {&rva::changes_made, 'f', "changes_made", nullptr, "()", &size::changes_made, 0},
+    {&rva::ui_menu_add_char_list_item, 'f', "ui_menu_add_char_list_item", nullptr, "(int, rchar*, rchar**, int, fn*, int, bool)", &size::ui_menu_add_char_list_item, 0},
+    {&rva::ui_menu_add_bool_item, 'f', "ui_menu_add_bool_item", nullptr, "(int, rchar*, bool*, fn*, bool)", &size::ui_menu_add_bool_item, 0},
+    {&rva::ui_menu_enable_menu_item, 'f', "ui_menu_enable_menu_item", nullptr, "(int, int, bool)", &size::ui_menu_enable_menu_item, 0},
+    {&rva::ui_menu_get_total_item_count, 'f', "ui_menu_get_total_item_count", nullptr, "(int)", &size::ui_menu_get_total_item_count, 0},
+    {&rva::Menu_handle_doptions, 'v', "Menu_handle_doptions", nullptr, nullptr, nullptr, 0},
+    {&rva::Doc_handle_main, 'v', "Doc_handle_main", nullptr, nullptr, nullptr, 0},
+    {&rva::Localization_hash, 'v', "Localization_hash", nullptr, nullptr, nullptr, 0},
+    {&rva::LocalizationHash_get, 'f', "data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::get", nullptr, "(uint, wchar**)", &size::LocalizationHash_get, 0},
+    {&rva::LocalizationHash_insert, 'f', "data_hash_table<unsigned int,wchar_t *,&hash_uint,8192,unsigned int>::insert_key_data", nullptr, "(uint, wchar**)", &size::LocalizationHash_insert, 0},
 };
 
 }  // namespace rfg
