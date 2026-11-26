@@ -12,10 +12,25 @@ struct Config;
 // Experiment.PhysXWorldCheck=1 verifies the mirror once it is complete: 1,024 vertical rays around the player are
 // cast against Havok's static level and destroyable geometry and against the host's statics, and the hit distances
 // are compared (log line "world mirror check").
+//
+// OpenRFG64, big maps (Experiment.PhysXWorldStatics, the area mode): a level whose static world would make more
+// statics in the host than that is mirrored in part. The bodies within PhysXWorldNearM of the player go whole (and any
+// body that is not a building); of the other buildings, only the pieces near the pieces in PhysX (where they lie, and
+// where the moving ones go in the next 2 s) and near where pieces wait to come over (ready_at). A body no longer wanted
+// leaves the host 10 s later. A piece comes over only once the static world around it is in the host (ready_at);
+// until then it stays with Havok, and its area is asked for. A level within the budget goes whole.
 namespace world_mirror {
 
 bool install(const Config& cfg);
-bool ready();  // the level's static world is in the host (first export sent), so debris can be handed over
+// The level's static world is in the host (first export sent), so debris can be handed over. Area mode: the bodies
+// within PhysXWorldNearM of the player are (from then on for the level).
+bool ready();
+// Area mode: the static world around `pos` (`radius` to the sides, from below up to a little above it) is in the
+// host and applied there, with the pieces its buildings lost; if not, the area is asked for and comes within a second
+// or two. Without the area mode: ready().
+bool ready_at(const float pos[3], float radius);
+// The area mode is on (Experiment.PhysXWorldStatics): the static world may be in the host in part.
+bool partial();
 // Complete scans (every body looked at) whose commands are all in the ring (UINT32_MAX without a mirror). Once it has
 // moved on since a change to the level's buildings, and the host has read the ring, the host's statics match them:
 // Test.StressPieces waits for that after it restores the buildings (research/docs/07, B5b: blown up again while the

@@ -14,10 +14,12 @@ PhysX is built by `tools/build_physx.cmd` into `physx-build/release-gpu/` (stati
 patch: `physx/source/compiler/cmakegpu/CMakeLists.txt` accepts `PX_GPU_SASS_ARCHS` / `PX_GPU_PTX_ARCH`, so the GPU
 kernels are compiled for chosen architectures only: by default the release set, 75, 86, 89 and 120 (GTX 16 / RTX 20
 to RTX 50) with PTX 120 for newer GPUs. The modified file says so, and the change is kept as `physx-sdk-rfgphys.patch`,
-which `tools/build_physx.cmd` applies to a fresh checkout. The patch also has the host's three runtime fixes, each marked
+which `tools/build_physx.cmd` applies to a fresh checkout. The patch also has the host's four runtime fixes, each marked
 `rfgphys`: the most static contacts on a body follows the present instead of only growing (`PxgBodySimManager`),
-`PxgConstraintPartition` keeps each slab's node data in pages made when first written (25 s steps before), and the host's
-stream of changed force thresholds has room for last step's as well as this step's (`PxgContext`, which the GPU overran).
+`PxgConstraintPartition` keeps each slab's node data in pages made when first written (25 s steps before), the host's
+stream of changed force thresholds has room for last step's as well as this step's (`PxgContext`, which the GPU overran),
+and `checkForceThresholdContactEvents` (`ScPipeline.cpp`) acts only on the stream's elements whose ShapeInteraction is
+one of the scene's (an element with a garbage pointer crashed the host in two long campaign sessions on OpenRFG64).
 
 `physx-sdk/` is a git submodule, NVIDIA's repository pinned to commit `b97365c6`. Clone with
 `git clone --recurse-submodules`, or run `git submodule update --init third_party/physx-sdk` in an existing clone,

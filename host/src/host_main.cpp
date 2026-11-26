@@ -559,7 +559,7 @@ struct Host {
         }
         scene = physics->createScene(sd);
         if (!scene) return fail("createScene failed");
-        logf("PhysX %d.%d.%d scene ready: %s dynamics, %u CPU threads, TGS solver, %.0f Hz steps, %u body slots, bodies "
+        logf("PhysX %d.%d.%d scene ready: %s dynamics, %u CPU threads, TGS solver, %.0f Hz steps, at most %u body slots, bodies "
              "change every %u steps", PX_PHYSICS_VERSION_MAJOR, PX_PHYSICS_VERSION_MINOR, PX_PHYSICS_VERSION_BUGFIX,
              gpu ? "GPU" : "CPU", cpu_threads, 1.0 / dt, max_bodies, change_every);
         return true;
@@ -789,9 +789,52 @@ struct Host {
         return shape;
     }
 
+    // OpenRFG64: the slots grow during the session (the game commits their snapshot memory as it hands them
+    // out, IPC 23), so the tables by slot grow with the highest slot a body comes into, instead of taking the most
+    // slots' memory at start (about 0.4 KB a slot: 1.6 GB for 4 million). Only between steps, in drain(): nothing
+    // holds an element across it, and PhysX's threads do not touch these tables.
+    uint32_t capacity = 0;
+    void ensure_slots(uint32_t n) {
+        if (n <= capacity) return;
+        uint32_t cap = std::max<uint32_t>(n, capacity + capacity / 4);
+        cap = std::min<uint32_t>((cap + 0x3FFFu) & ~0x3FFFu, std::max(max_bodies, n));
+        bodies.resize(cap);
+        poses.resize(cap, ipc::BodyPose{});
+        was_awake.resize(cap, 0);
+        awake_since.resize(cap, 0);
+        calm.resize(cap, 0);
+        still_from.resize(cap, ipc::BodyPose{});
+        still_step.resize(cap, 0);
+        born_step.resize(cap, 0);
+        born_excused.resize(cap, 1);
+        frozen.resize(cap, 0);
+        user_kinematic.resize(cap, 0);
+        heavy.resize(cap, 0);
+        pusher.resize(cap, 0);
+        chunk.resize(cap, 0);
+        pusher_woke_at.resize(cap, ipc::BodyPose{});
+        blow_of.resize(cap, 0);
+        pusher_mid.resize(cap, PxVec3(0.0f));
+        pusher_half.resize(cap, 0.0f);
+        pusher_wakes.resize(cap, 0);
+        pusher_woken.resize(cap, 0);
+        body_radius.resize(cap, 0.0f);
+        cascade_mark.resize(cap, 0);
+        wake_pos.resize(cap, ipc::Vec3{0, 0, 0});
+        wake_due.resize(cap, 0);
+        frozen_bounds.resize(cap, PxBounds3::empty());
+        moved_late.resize(cap, 0);
+        freeze_pending.resize(cap, 0);
+        thaw_pending.resize(cap, 0);
+        if (capacity) logf("slots: the tables follow the game's slots to %u (of %u at most)", cap, max_bodies);
+        capacity = cap;
+        sh.control->slots_capacity.store(cap, std::memory_order_relaxed);
+    }
+
     uint32_t stat_no_shape = 0, stat_inertia_fixed = 0, stat_born_frozen = 0;
     void create_body(const ipc::CreateBody& c) {
         if (c.slot >= max_bodies) return;
+        ensure_slots(c.slot + 1);  // OpenRFG64
         auto it = shapes.find(c.shape);
         if (it == shapes.end() || it->second.empty()) {
             ++stat_no_shape;
@@ -1557,12 +1600,12 @@ struct Host {
             const PxActor* b = h.actors[1 - side];
             if (!a || a->getType() != PxActorType::eRIGID_DYNAMIC) continue;
             const uint32_t slot = uint32_t(reinterpret_cast<uintptr_t>(a->userData));
-            if (slot >= max_bodies || !chunk[slot] || step_index - born_step[slot] < kEventQuietSteps) continue;
+            if (slot >= capacity || !chunk[slot] || step_index - born_step[slot] < kEventQuietSteps) continue;
             uint32_t other = ipc::kEventNone;
             bool other_chunk = false;
             if (b) {
                 const uintptr_t bu = reinterpret_cast<uintptr_t>(b->userData);
-                if (b->getType() == PxActorType::eRIGID_DYNAMIC && bu < max_bodies) {
+                if (b->getType() == PxActorType::eRIGID_DYNAMIC && bu < capacity) {
                     other = uint32_t(bu);
                     other_chunk = chunk[other] != 0;
                 } else if (b->getType() == PxActorType::eRIGID_STATIC && (bu & ipc::kEventStatic)) {
@@ -1668,7 +1711,7 @@ struct Host {
     // Its mass, centre of mass and inertia follow what is left; it wakes, and so does what rested on what went.
     uint32_t stat_parts_removed = 0;
     void remove_parts(const ipc::RemoveParts& c, uint32_t size) {
-        if (c.slot >= max_bodies || !chunk[c.slot] || !bodies[c.slot].actor || !c.count ||
+        if (c.slot >= capacity || !chunk[c.slot] || !bodies[c.slot].actor || !c.count ||
             sizeof(c) + size_t(c.count) * sizeof(uint32_t) > size)
             return;
         changes |= 1u << kChangeParts;
@@ -2155,7 +2198,7 @@ struct Host {
 
     // A push on one piece at a point (a hammer blow, a bullet): it moves again if it was frozen.
     void impulse(const ipc::Impulse& c) {
-        if (c.slot >= max_bodies || !bodies[c.slot].actor || user_kinematic[c.slot]) return;
+        if (c.slot >= capacity || !bodies[c.slot].actor || user_kinematic[c.slot]) return;
         if (!bodies[c.slot].actor->getScene()) {
             impulses_waiting.push_back(c);
             return;
@@ -2433,7 +2476,7 @@ struct Host {
             case ipc::Cmd::DestroyBody: {
                 HOST_ZONE("host.drain.destroy_body");
                 const auto& c = reinterpret_cast<const ipc::DestroyBody&>(h);
-                if (c.slot >= max_bodies) break;
+                if (c.slot >= capacity) break;
                 // A pusher going (a loose chunk that broke up, a vehicle out of range, a proxy rebuilt): the frozen
                 // pieces resting on it move again, or they would hang in the air.
                 PxBounds3 gone = PxBounds3::empty();
@@ -2517,7 +2560,7 @@ struct Host {
             case ipc::Cmd::KinematicTarget: {
                 HOST_ZONE("host.drain.kinematic_target");
                 const auto& c = reinterpret_cast<const ipc::KinematicTarget&>(h);
-                if (c.slot < max_bodies && bodies[c.slot].actor &&
+                if (c.slot < capacity && bodies[c.slot].actor &&
                     (bodies[c.slot].actor->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)) {
                     if (!bodies[c.slot].actor->getScene()) flush_pending();
                     if (!bodies[c.slot].actor || !bodies[c.slot].actor->getScene()) break;  // refused by the scene
@@ -2585,7 +2628,7 @@ struct Host {
         now_awake.clear();
         for (PxU32 i = 0; i < n; ++i) {
             const uint32_t s = uint32_t(reinterpret_cast<uintptr_t>(active[i]->userData));
-            if (s >= max_bodies || !bodies[s].actor) continue;
+            if (s >= capacity || !bodies[s].actor) continue;
             const PxTransform t = static_cast<PxRigidDynamic*>(active[i])->getGlobalPose();
             ipc::BodyPose& p = poses[s];
             p.prev_pos = p.pos;
@@ -2755,6 +2798,7 @@ struct Host {
         scene->getSimulationStatistics(ss);
         const PxGpuDynamicsMemoryConfigStatistics& gs = ss.gpuDynamicsMemoryConfigStatistics;
         vram_read();
+        sh.control->gpu_heap_mb.store(uint32_t(ss.gpuMemHeap >> 20), std::memory_order_relaxed);  // OpenRFG64
         logf("PhysX's last step: %u contact pairs (%u touching), %u new, %u lost; %u active constraints, %u partitions; GPU "
              "temp buffer %.1f MB, rigid contacts %u, patches %u, found/lost pairs %u; GPU heap %.0f MB (solver %.0f, "
              "narrowphase %.0f, broadphase %.0f); VRAM %.0f MB in use by all programs, at most %.0f, of %.0f; the fastest piece since the last report %.1f m/s (upward %.1f)",
@@ -2894,34 +2938,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     host.max_bodies = ctl->max_bodies;
     host.dt = ctl->step_hz > 0 ? 1.0f / ctl->step_hz : 1.0f / 60.0f;
-    host.bodies.resize(host.max_bodies);
-    host.poses.assign(host.max_bodies, ipc::BodyPose{});
-    host.was_awake.assign(host.max_bodies, 0);
-    host.awake_since.assign(host.max_bodies, 0);
-    host.calm.assign(host.max_bodies, 0);
-    host.still_from.assign(host.max_bodies, ipc::BodyPose{});
-    host.still_step.assign(host.max_bodies, 0);
-    host.born_step.assign(host.max_bodies, 0);
-    host.born_excused.assign(host.max_bodies, 1);
-    host.frozen.assign(host.max_bodies, 0);
-    host.user_kinematic.assign(host.max_bodies, 0);
-    host.heavy.assign(host.max_bodies, 0);
-    host.pusher.assign(host.max_bodies, 0);
-    host.chunk.assign(host.max_bodies, 0);
-    host.pusher_woke_at.assign(host.max_bodies, ipc::BodyPose{});
-    host.blow_of.assign(host.max_bodies, 0);
-    host.pusher_mid.assign(host.max_bodies, PxVec3(0.0f));
-    host.pusher_half.assign(host.max_bodies, 0.0f);
-    host.pusher_wakes.assign(host.max_bodies, 0);
-    host.pusher_woken.assign(host.max_bodies, 0);
-    host.body_radius.assign(host.max_bodies, 0.0f);
-    host.cascade_mark.assign(host.max_bodies, 0);
-    host.wake_pos.assign(host.max_bodies, ipc::Vec3{0, 0, 0});
-    host.wake_due.assign(host.max_bodies, 0);
-    host.frozen_bounds.assign(host.max_bodies, PxBounds3::empty());
-    host.moved_late.assign(host.max_bodies, 0);
-    host.freeze_pending.assign(host.max_bodies, 0);
-    host.thaw_pending.assign(host.max_bodies, 0);
+    host.ensure_slots(4096);  // OpenRFG64: the player's capsule and the vehicles' proxies; they grow from there
     host.change_every = std::max(ctl->change_every, 1u);
     host.rest_strength = std::max(ctl->chunk_rest_strength, 1.0f);
     host.crush_at_contact = ctl->chunk_crush_at_contact != 0;
@@ -2968,6 +2985,7 @@ int wmain(int argc, wchar_t** argv) {
     const double period_ms = 1000.0 / (ctl->step_hz > 0 ? ctl->step_hz : 60.0);
     double next_step = now_ms();
     double next_stats = now_ms() + 5000.0;
+    double next_vram = now_ms();  // OpenRFG64: the GPU's memory for the game (its slots grow while there is room)
     const char* reason = "quit requested";
     for (;;) {
         ctl->host_heartbeat.fetch_add(1, std::memory_order_relaxed);
@@ -3004,6 +3022,12 @@ int wmain(int argc, wchar_t** argv) {
             } else {
                 Sleep(0);
             }
+        }
+        if (now_ms() >= next_vram) {
+            host.vram_read();
+            ctl->vram_used_mb.store(uint32_t(host.vram_used >> 20), std::memory_order_relaxed);
+            ctl->vram_total_mb.store(uint32_t(host.vram_total >> 20), std::memory_order_relaxed);
+            next_vram = now_ms() + 500.0;
         }
         if (now_ms() >= next_stats) {
             host.log_stats();

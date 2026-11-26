@@ -130,8 +130,8 @@ namespace {
 
 // __thiscall SaveDataProviderWin32Steam::writeFileToSteamStorage(const char* name, void* data, uint size).
 // Every save write and erase goes through it; returning OperationResult_Ok (0) without writing keeps the game happy.
-int(__fastcall* o_write_file)(void*, void*, const char*, void*, uint32_t);
-int __fastcall d_write_file(void*, void*, const char* name, void*, uint32_t size) {
+int(__fastcall* o_write_file)(void* RFG_EDX_TYPE, const char*, void*, uint32_t);
+int __fastcall d_write_file(void* RFG_EDX_PARAM, const char* name, void*, uint32_t size) {
     LOG("save write BLOCKED (test mode): %s, %u bytes", name ? name : "?", size);
     return 0;
 }

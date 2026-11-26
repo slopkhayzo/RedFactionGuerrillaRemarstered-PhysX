@@ -1,5 +1,7 @@
 #include "physx/havok_shapes.h"
 
+#include "game/layout.h"  // OpenRFG64: Havok's layouts by name
+
 #include <cmath>
 #include <cstring>
 #include <initializer_list>
@@ -57,6 +59,29 @@ Transform from_qs_transform(const uint8_t* p) {
     return r;
 }
 
+// OpenRFG64: the first container under `shape`, through MOPP and transform wrappers, with the transform its children
+// are placed by (applied to `t`) and its depth; null if `shape` is a leaf or has none.
+const uint8_t* first_container(const uint8_t* shape, Transform& t, int& depth) {
+    while (shape && depth < kMaxDepth) {
+        switch (type_of(shape)) {
+            case kMopp:
+                shape = ptr(shape, layout::hk_mopp_child);
+                continue;
+            case kTransform:
+                t = t * from_hk_transform(shape + layout::hk_transform_t);
+                shape = ptr(shape, layout::hk_transform_child);
+                continue;
+            case kTriangle: case kBox: case kConvexVertices: case kCapsule: case kCylinder: case kConvexTranslate:
+            case kConvexTransform: case kTriSampledHeightFieldBvTree: case kTriSampledHeightFieldCollection:
+            case kSampledHeightField:
+                return nullptr;
+            default:
+                return vfn<GetContainer>(shape, 15)(shape);
+        }
+    }
+    return nullptr;
+}
+
 #pragma warning(disable : 4324)  // Walker is padded for its 16-byte aligned shape buffers, as intended
 struct Walker {
     alignas(16) uint8_t buffers[kMaxDepth + 1][kShapeBuffer];
@@ -97,27 +122,27 @@ struct Walker {
         switch (type) {
             case kTriangle: {
                 float a[3], b[3], c[3];
-                t.apply(vec(shape, 0x20), a);
-                t.apply(vec(shape, 0x30), b);
-                t.apply(vec(shape, 0x40), c);
+                t.apply(vec(shape, layout::hk_triangle_a), a);
+                t.apply(vec(shape, layout::hk_triangle_b), b);
+                t.apply(vec(shape, layout::hk_triangle_c), c);
                 sink.triangle(a, b, c);
                 return;
             }
             case kBox: {
-                const float* h = vec(shape, 0x20);
+                const float* h = vec(shape, layout::hk_box_half_extents);
                 float v[8][3];
                 for (int i = 0; i < 8; ++i) {
                     v[i][0] = (i & 1) ? h[0] : -h[0];
                     v[i][1] = (i & 2) ? h[1] : -h[1];
                     v[i][2] = (i & 4) ? h[2] : -h[2];
                 }
-                emit_convex(v, 8, *reinterpret_cast<const float*>(shape + 0x10), t, key);
+                emit_convex(v, 8, *reinterpret_cast<const float*>(shape + layout::hk_convex_radius), t, key);
                 return;
             }
             case kConvexVertices: {
                 // m_rotatedVertices: hkFourTransposedPointsf blocks (x[4], y[4], z[4]); m_numVertices.
-                const uint8_t* blocks = ptr(shape, 0x40);
-                const int n = *reinterpret_cast<const int*>(shape + 0x4C);
+                const uint8_t* blocks = ptr(shape, layout::hk_convex_vertices_blocks);
+                const int n = *reinterpret_cast<const int*>(shape + layout::hk_convex_vertices_count);
                 if (!blocks || n <= 0) return;
                 float v[256][3];
                 const int count = n > 256 ? 256 : n;
@@ -127,36 +152,38 @@ struct Walker {
                     v[i][1] = b[4 + i % 4];
                     v[i][2] = b[8 + i % 4];
                 }
-                emit_convex(v, count, *reinterpret_cast<const float*>(shape + 0x10), t, key);
+                emit_convex(v, count, *reinterpret_cast<const float*>(shape + layout::hk_convex_radius), t, key);
                 return;
             }
             case kCapsule:
             case kCylinder: {
-                const float r = type == kCapsule ? *reinterpret_cast<const float*>(shape + 0x10)
-                                                 : *reinterpret_cast<const float*>(shape + 0x14);
+                const bool capsule = type == kCapsule;
+                const float r = capsule ? *reinterpret_cast<const float*>(shape + layout::hk_convex_radius)
+                                        : *reinterpret_cast<const float*>(shape + layout::hk_cylinder_radius);
                 float v[32][3];
                 int n = 0;
-                ring(v, n, vec(shape, 0x20), vec(shape, 0x30), r, 12);
+                ring(v, n, vec(shape, capsule ? layout::hk_capsule_a : layout::hk_cylinder_a),
+                     vec(shape, capsule ? layout::hk_capsule_b : layout::hk_cylinder_b), r, 12);
                 emit_convex(v, n, 0, t, key);
                 return;
             }
             case kConvexTranslate:
-                leaf_or_container(ptr(shape, 0x18), t * translate(vec(shape, 0x20)), depth, key);
+                leaf_or_container(ptr(shape, layout::hk_convex_translate_child), t * translate(vec(shape, layout::hk_convex_translate_t)), depth, key);
                 return;
             case kConvexTransform:
-                leaf_or_container(ptr(shape, 0x18), t * from_qs_transform(shape + 0x20), depth, key);
+                leaf_or_container(ptr(shape, layout::hk_convex_transform_child), t * from_qs_transform(shape + layout::hk_convex_transform_t), depth, key);
                 return;
             case kTransform:
-                leaf_or_container(ptr(shape, 0x14), t * from_hk_transform(shape + 0x30), depth, key);
+                leaf_or_container(ptr(shape, layout::hk_transform_child), t * from_hk_transform(shape + layout::hk_transform_t), depth, key);
                 return;
             case kMopp:
-                leaf_or_container(ptr(shape, 0x34), t, depth, key);
+                leaf_or_container(ptr(shape, layout::hk_mopp_child), t, depth, key);
                 return;
             case kTriSampledHeightFieldBvTree:
-                leaf_or_container(ptr(shape, 0x18), t, depth, key);
+                leaf_or_container(ptr(shape, layout::hk_hf_bvtree_child), t, depth, key);
                 return;
             case kTriSampledHeightFieldCollection:
-                sink.height_field(ptr(shape, 0x18), t);
+                sink.height_field(ptr(shape, layout::hk_hf_collection_hf), t);
                 return;
             case kSampledHeightField:
                 sink.height_field(shape, t);
@@ -179,6 +206,19 @@ struct Walker {
         int guard = 0;
         for (uint32_t k = first(container); k != kInvalidKey && guard < 4000000; k = next(container, k), ++guard)
             leaf_or_container(child(container, k, buffers[depth + 1]), t, depth + 1, k);
+    }
+
+    // OpenRFG64: only the children of the first container under `shape` with these keys.
+    void keys_of(const uint8_t* shape, const Transform& placed, const uint32_t* keys, size_t n) {
+        Transform t = placed;
+        int depth = 0;
+        const uint8_t* container = first_container(shape, t, depth);
+        if (!container) {
+            ok = false;
+            return;
+        }
+        const auto child = vfn<ChildShape>(container, 5);
+        for (size_t i = 0; i < n; ++i) leaf_or_container(child(container, keys[i], buffers[depth + 1]), t, depth + 1, keys[i]);
     }
 };
 
@@ -210,7 +250,7 @@ void Sink::convex_placed(const float (*local)[3], int count, float radius, const
     convex(world, count, radius, key);
 }
 
-uint8_t type_of(const uint8_t* shape) { return shape[8]; }
+uint8_t type_of(const uint8_t* shape) { return shape[layout::hk_shape_type]; }
 
 const char* type_name(uint8_t type) {
     static const char* const kNames[kTypeCount] = {
@@ -228,12 +268,30 @@ bool walk(const uint8_t* shape, const Transform& t, Sink& sink) {
     return w.ok;
 }
 
-const uint8_t* body_shape(const uint8_t* entity) { return ptr(entity, 0x10); }  // m_collidable.m_shape
-
-Transform body_transform(const uint8_t* entity) {
-    return from_hk_transform(entity + 0xE0 + 0x10);  // m_motion.m_motionState.m_transform
+bool container_keys(const uint8_t* shape, std::vector<uint32_t>& out) {
+    Transform t = Transform::identity();
+    int depth = 0;
+    const uint8_t* container = first_container(shape, t, depth);
+    if (!container) return false;
+    const auto first = vfn<FirstKey>(container, 2);
+    const auto next = vfn<NextKey>(container, 3);
+    int guard = 0;
+    for (uint32_t k = first(container); k != kInvalidKey && guard < 4000000; k = next(container, k), ++guard) out.push_back(k);
+    return true;
 }
 
-uint8_t body_motion_type(const uint8_t* entity) { return entity[0xE0 + 0x8]; }
+bool walk_keys(const uint8_t* shape, const Transform& t, const uint32_t* keys, size_t count, Sink& sink) {
+    Walker w(sink);
+    w.keys_of(shape, t, keys, count);
+    return w.ok;
+}
+
+const uint8_t* body_shape(const uint8_t* entity) { return ptr(entity, layout::hk_entity_shape); }  // m_collidable.m_shape
+
+Transform body_transform(const uint8_t* entity) {
+    return from_hk_transform(entity + layout::hk_entity_motion_transform);  // m_motion.m_motionState.m_transform
+}
+
+uint8_t body_motion_type(const uint8_t* entity) { return entity[layout::hk_entity_motion_type]; }
 
 }  // namespace havok_shapes

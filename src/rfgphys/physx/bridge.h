@@ -42,6 +42,16 @@ uint32_t host_statics();  // static actors in the host's scene
 uint32_t take_events(rfgphysx::ContactEvent* out, uint32_t max);
 uint32_t max_bodies();
 uint32_t shared_bytes();  // the shared memory mapped into the game: control, ring, snapshots, events
+// OpenRFG64: the slots grow (64-bit). max_bodies() is the most there can be (the shared memory's reservation
+// and the snapshots' layout); committed_slots() the slots 0 .. n-1 whose snapshot memory is committed, which may be
+// handed out. commit_slots(n) commits up to n (false: the system refused).
+uint32_t committed_slots();
+bool commit_slots(uint32_t n);
+// The GPU's memory in use by every program and its total, MB, as the host last read them (NVML); 0: not known.
+uint32_t vram_used_mb();
+uint32_t vram_total_mb();
+uint32_t gpu_heap_mb();  // PhysX's GPU heap
+bool host_gpu();         // the host runs PhysX on the GPU
 float step_hz();
 // The number of the last Frame record sent. A snapshot's last_frame past the number when a command was sent: the host
 // has applied that command, and the snapshot shows it.

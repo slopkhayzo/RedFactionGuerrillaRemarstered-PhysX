@@ -92,8 +92,8 @@ void spawn(double now) {
     g_start_ms = now;
     g_next_burst_ms = now;
     g_next_explosion_ms = now + double((uint32_t(g_target) + kBurst - 1) / kBurst) * kBurstEveryMs + 4000.0;
-    g_copy.assign(pxbridge::max_bodies(), ipc::BodyPose{});
-    g_render.assign(pxbridge::max_bodies(), Pose{});
+    g_copy.assign(pxbridge::committed_slots(), ipc::BodyPose{});
+    g_render.assign(pxbridge::committed_slots(), Pose{});
     LOG("PhysX test: %d bodies in bursts of %u around (%.1f, %.1f, %.1f), ground plane at y %.1f", g_target, kBurst,
         g_origin.x, g_origin.y + 12.0f, g_origin.z, g_origin.y);
 }
@@ -178,7 +178,7 @@ void on_frame(int game_state) {
 
 bool install(const Config& cfg) {
     if (cfg.exp_physx <= 0 || cfg.exp_physx_test <= 0) return true;
-    g_target = cfg.exp_physx_test > int(pxbridge::max_bodies()) ? int(pxbridge::max_bodies()) : cfg.exp_physx_test;
+    g_target = cfg.exp_physx_test > int(pxbridge::committed_slots()) ? int(pxbridge::committed_slots()) : cfg.exp_physx_test;
     g_crash_after_s = cfg.exp_physx_test_crash_after_s;
     g_world_mirrored = cfg.exp_physx_world != 0;
     session::add_frame_callback(&on_frame);

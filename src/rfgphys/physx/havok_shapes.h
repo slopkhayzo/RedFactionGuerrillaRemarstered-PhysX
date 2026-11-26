@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
 // Reads the game's Havok collision shapes (Havok 2014 layouts, research/docs/06 §5) into plain geometry for the
 // PhysX host: triangles, convex hulls and height fields in world space. Containers (MOPP trees, extended,
@@ -45,6 +46,11 @@ const char* type_name(uint8_t type);
 // Walks `shape` (an hkpShape*) placed at `t`. Returns false if the walk hit something it could not read (the rest
 // was still walked). Containers deeper than 6 levels are skipped.
 bool walk(const uint8_t* shape, const Transform& t, Sink& sink);
+// OpenRFG64 (the world mirror's pieces of buildings): the keys of the first container under `shape` (through MOPP
+// and transform wrappers: a building's pieces), without reading the pieces; false if there is no container. And a walk
+// of just the children with these keys, reported as walk() reports them.
+bool container_keys(const uint8_t* shape, std::vector<uint32_t>& out);
+bool walk_keys(const uint8_t* shape, const Transform& t, const uint32_t* keys, size_t count, Sink& sink);
 
 // Body helpers (hkpEntity / hkpRigidBody).
 const uint8_t* body_shape(const uint8_t* entity);

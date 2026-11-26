@@ -232,11 +232,11 @@ void(__cdecl* o_deferred_render)(void*, void*);
 void(__cdecl* o_frametime_calculate)(bool, float, float);
 void(__cdecl* o_render_frame)(void*);
 // __thiscall targets are hooked through __fastcall (ecx = this, edx unused).
-int(__fastcall* o_step)(void*, void*, float);
-int(__fastcall* o_integrate)(void*, void*, float);
-void(__fastcall* o_collide_internal)(void*, void*, void*);
-void(__fastcall* o_broadphase)(void*, void*, void*, int, void*, char*);
-int(__fastcall* o_advance_time)(void*, void*);
+int(__fastcall* o_step)(void* RFG_EDX_TYPE, float);
+int(__fastcall* o_integrate)(void* RFG_EDX_TYPE, float);
+void(__fastcall* o_collide_internal)(void* RFG_EDX_TYPE, void*);
+void(__fastcall* o_broadphase)(void* RFG_EDX_TYPE, void*, int, void*, char*);
+int(__fastcall* o_advance_time)(void* RFG_EDX_TYPE);
 
 template <Timer T, VoidFn* Orig>
 void __cdecl timed() {
@@ -264,29 +264,29 @@ void __cdecl d_frametime_calculate(bool quantize, float quantum, float fixed_rat
     o_frametime_calculate(quantize, quantum, fixed_rate);
 }
 
-int __fastcall d_step(void* world, void* edx, float dt) {
+int __fastcall d_step(void* world RFG_EDX_PARAM, float dt) {
     Scoped s(kStep);
-    return o_step(world, edx, dt);
+    return o_step(world RFG_EDX_PASS, dt);
 }
 
-int __fastcall d_integrate(void* sim, void* edx, float dt) {
+int __fastcall d_integrate(void* sim RFG_EDX_PARAM, float dt) {
     Scoped s(kIntegrate);
-    return o_integrate(sim, edx, dt);
+    return o_integrate(sim RFG_EDX_PASS, dt);
 }
 
-void __fastcall d_collide_internal(void* sim, void* edx, void* step_info) {
+void __fastcall d_collide_internal(void* sim RFG_EDX_PARAM, void* step_info) {
     Scoped s(kCollideDetect);
-    o_collide_internal(sim, edx, step_info);
+    o_collide_internal(sim RFG_EDX_PASS, step_info);
 }
 
-void __fastcall d_broadphase(void* sim, void* edx, void* entities, int count, void* world, char* scratch) {
+void __fastcall d_broadphase(void* sim RFG_EDX_PARAM, void* entities, int count, void* world, char* scratch) {
     Scoped s(kBroadphase);
-    o_broadphase(sim, edx, entities, count, world, scratch);
+    o_broadphase(sim RFG_EDX_PASS, entities, count, world, scratch);
 }
 
-int __fastcall d_advance_time(void* sim, void* edx) {
+int __fastcall d_advance_time(void* sim RFG_EDX_PARAM) {
     Scoped s(kToi);
-    return o_advance_time(sim, edx);
+    return o_advance_time(sim RFG_EDX_PASS);
 }
 
 // Contact points added (core/contacts.h observer), and those between two debris bodies. A multithreaded Havok step
@@ -955,7 +955,7 @@ bool install(const Config& cfg) {
     if (cfg.draw_stacks > 0) {
         g_draw_every = cfg.draw_stacks;
         auto base = reinterpret_cast<const uint8_t*>(rfg::base());
-        auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base +
+        auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base +
                                                                reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
         auto sec = IMAGE_FIRST_SECTION(nt);
         for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i)

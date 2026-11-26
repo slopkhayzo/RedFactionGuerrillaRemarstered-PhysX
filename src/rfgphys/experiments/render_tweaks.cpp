@@ -21,9 +21,9 @@ float g_min_radius_far = 0, g_min_radius_mid = 0, g_min_radius_near = 0;
 // rl_visibility_manager::bounding_volume_is_visible_for_passes(rl_bvolume*, ...): the mask of visibility passes
 // (base pass, shadow cascades, ...) an instance's or a sector's world bounding volume is visible in. rl_bvolume
 // starts with rl_sphere {position, radius}. Called from the visibility worker threads too: no state here.
-uint32_t(__fastcall* o_bv_visible)(uint8_t*, void*, const float*, uint32_t, uint32_t, uint32_t, uint32_t);
-uint32_t __fastcall d_bv_visible(uint8_t* vm, void* edx, const float* bv, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
-    uint32_t mask = o_bv_visible(vm, edx, bv, a, b, c, d);
+uint32_t(__fastcall* o_bv_visible)(uint8_t* RFG_EDX_TYPE, const float*, uint32_t, uint32_t, uint32_t, uint32_t);
+uint32_t __fastcall d_bv_visible(uint8_t* vm RFG_EDX_PARAM, const float* bv, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+    uint32_t mask = o_bv_visible(vm RFG_EDX_PASS, bv, a, b, c, d);
     if (mask && bv) {
         const uint32_t near_bit = *reinterpret_cast<const uint32_t*>(vm + kClbPassIndex);
         if (near_bit < 30) {
@@ -156,33 +156,33 @@ void atomic_max(std::atomic<uint32_t>& a, uint32_t v) {
 // partition_batched_instances runs once the visibility pass has counted the instances of each material batch
 // (rl_batched_material_info, 0x14 bytes: num_instances at +0x0C; m_num_batched_materials +0x24, the array +0x28).
 std::atomic<uint32_t> g_batched_peak{0};
-void(__fastcall* o_partition)(uint8_t*, void*) = nullptr;
-void __fastcall d_partition(uint8_t* pass, void* edx) {
+void(__fastcall* o_partition)(uint8_t* RFG_EDX_TYPE) = nullptr;
+void __fastcall d_partition(uint8_t* pass RFG_EDX_PARAM) {
     const uint32_t n = std::min<uint32_t>(*reinterpret_cast<const uint32_t*>(pass + 0x24), 0x400);
     const uint8_t* infos = *reinterpret_cast<uint8_t* const*>(pass + 0x28);
     uint32_t total = 0;
     if (infos)
         for (uint32_t i = 0; i < n; ++i) total += *reinterpret_cast<const uint32_t*>(infos + i * 0x14 + 0x0C);
     atomic_max(g_batched_peak, total);
-    o_partition(pass, edx);
+    o_partition(pass RFG_EDX_PASS);
 }
 
 // rl_renderer::begin_instancing_batch(GeometryInstancingBatch*, count, stride) returns null when the GPU instancing
 // buffer cannot take the batch; the group is then not drawn, with no warning flag. Counted for telemetry.
 std::atomic<uint32_t> g_instancing_failed{0};
-void*(__fastcall* o_begin_instancing)(void*, void*, void*, uint32_t, uint32_t) = nullptr;
-void* __fastcall d_begin_instancing(void* renderer, void* edx, void* batch, uint32_t count, uint32_t stride) {
-    void* p = o_begin_instancing(renderer, edx, batch, count, stride);
+void*(__fastcall* o_begin_instancing)(void* RFG_EDX_TYPE, void*, uint32_t, uint32_t) = nullptr;
+void* __fastcall d_begin_instancing(void* renderer RFG_EDX_PARAM, void* batch, uint32_t count, uint32_t stride) {
+    void* p = o_begin_instancing(renderer RFG_EDX_PASS, batch, count, stride);
     if (!p && count) g_instancing_failed.fetch_add(1, std::memory_order_relaxed);
     return p;
 }
 
-void(__fastcall* o_finalize)(uint8_t*, void*, void*) = nullptr;
-void __fastcall d_finalize(uint8_t* pass, void* edx, void* renderer) {
+void(__fastcall* o_finalize)(uint8_t* RFG_EDX_TYPE, void*) = nullptr;
+void __fastcall d_finalize(uint8_t* pass RFG_EDX_PARAM, void* renderer) {
     atomic_max(g_unbatched_peak, *reinterpret_cast<const uint32_t*>(pass + 0x14));
     if (const uint8_t* scene = rfg::global<uint8_t*>(rfg::rva::Current_scene_renderer))
         atomic_max(g_sort_peak, *reinterpret_cast<const uint32_t*>(scene + kSceneSortCount));
-    o_finalize(pass, edx, renderer);
+    o_finalize(pass RFG_EDX_PASS, renderer);
 }
 
 }  // namespace

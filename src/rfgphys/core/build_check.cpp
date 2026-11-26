@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "game/rfg.h"
+#include "openrfg64_column.h"
 
 namespace {
 
@@ -24,7 +25,7 @@ int identify_build(std::string& detail) {
         detail = "no MZ header";
         return -1;
     }
-    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
+    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
     const DWORD ts = nt->FileHeader.TimeDateStamp;
     const DWORD size = nt->OptionalHeader.SizeOfImage;
 
@@ -41,6 +42,14 @@ int identify_build(std::string& detail) {
     int found = -1;
     for (int i = 0; rsds && i < rfg::kBuildCount; ++i)
         if (memcmp(&rsds->guid, rfg::kBuilds[i].pdb_guid, 16) == 0 && rsds->age == rfg::kBuilds[i].pdb_age) found = i;
+    // OpenRFG64: a 64-bit OpenRFG, read by name from its own PDB (src/shared/openrfg64_column).
+    if (found < 0 && rsds && openrfg64::detected(reinterpret_cast<const char*>(rsds + 1), nt->FileHeader.Machine)) {
+        char buf[400];
+        snprintf(buf, sizeof(buf), "OpenRFG64 build: machine %04X, pdb %s (addresses from it, by name)", nt->FileHeader.Machine,
+                 reinterpret_cast<const char*>(rsds + 1));
+        detail = buf;
+        return rfg::kBuildOpenRFG64;
+    }
     const rfg::BuildId* b = found >= 0 ? &rfg::kBuilds[found] : nullptr;
     char buf[320];
     snprintf(buf, sizeof(buf),

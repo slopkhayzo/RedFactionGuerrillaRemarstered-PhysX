@@ -57,27 +57,27 @@ int64_t s_start = 0, s_end = 0;
 inline double ms(int64_t ticks) { return session::ticks_to_ms(ticks); }
 inline uintptr_t app_instance() { return uintptr_t(rfg::addr(rfg::rva::s_appInstance)); }
 
-void(__fastcall* o_scene_render)(void*, void*, void*, void*, void*, void*, void*, void*);
-void __fastcall d_scene_render(void* scene, void* edx, void* a, void* b, void* c, void* d, void* e, void* f) {
+void(__fastcall* o_scene_render)(void* RFG_EDX_TYPE, void*, void*, void*, void*, void*, void*);
+void __fastcall d_scene_render(void* scene RFG_EDX_PARAM, void* a, void* b, void* c, void* d, void* e, void* f) {
     g_scene.store(static_cast<uint8_t*>(scene), std::memory_order_relaxed);
     g_render_tid.store(GetCurrentThreadId(), std::memory_order_relaxed);
     r_scene_start = session::qpc();
-    o_scene_render(scene, edx, a, b, c, d, e, f);
+    o_scene_render(scene RFG_EDX_PASS, a, b, c, d, e, f);
     r_scene_end = session::qpc();
 }
 
-void(__fastcall* o_wait)(uint8_t*, void*);
-void __fastcall d_wait(uint8_t* ev, void* edx) {
+void(__fastcall* o_wait)(uint8_t* RFG_EDX_TYPE);
+void __fastcall d_wait(uint8_t* ev RFG_EDX_PARAM) {
     uint8_t* scene = g_scene.load(std::memory_order_relaxed);
     const bool scene_start = scene && ev == scene + kSceneStartEvent;
     const bool scene_done = scene && ev == scene + kSceneDoneEvent;
     const bool handoff = uintptr_t(ev) == app_instance() + kAppHandoffEvent;
     if (!scene_start && !scene_done && !handoff) {
-        o_wait(ev, edx);
+        o_wait(ev RFG_EDX_PASS);
         return;
     }
     const int64_t t0 = session::qpc();
-    o_wait(ev, edx);
+    o_wait(ev RFG_EDX_PASS);
     const int64_t t1 = session::qpc();
     if (scene_start) {  // the scene thread is woken: its part of the frame begins
         g_scene_tid.store(GetCurrentThreadId(), std::memory_order_relaxed);
@@ -90,21 +90,21 @@ void __fastcall d_wait(uint8_t* ev, void* edx) {
     }
 }
 
-void(__fastcall* o_signal)(uint8_t*, void*);
-void __fastcall d_signal(uint8_t* ev, void* edx) {
+void(__fastcall* o_signal)(uint8_t* RFG_EDX_TYPE);
+void __fastcall d_signal(uint8_t* ev RFG_EDX_PARAM) {
     uint8_t* scene = g_scene.load(std::memory_order_relaxed);
     if (scene && ev == scene + kSceneStartEvent) {
         r_kick = session::qpc();
     } else if (scene && ev == scene + kSceneDoneEvent) {
         s_end = session::qpc();
     }
-    o_signal(ev, edx);
+    o_signal(ev RFG_EDX_PASS);
 }
 
-void(__fastcall* o_clb_render)(void*, void*, void*, void*, void*, void*, void*, void*, int);
-void __fastcall d_clb_render(void* scene, void* edx, void* a, void* b, void* c, void* d, void* e, void* f, int g) {
+void(__fastcall* o_clb_render)(void* RFG_EDX_TYPE, void*, void*, void*, void*, void*, void*, int);
+void __fastcall d_clb_render(void* scene RFG_EDX_PARAM, void* a, void* b, void* c, void* d, void* e, void* f, int g) {
     const int64_t t0 = session::qpc();
-    o_clb_render(scene, edx, a, b, c, d, e, f, g);
+    o_clb_render(scene RFG_EDX_PASS, a, b, c, d, e, f, g);
     r_shadows_ms += ms(session::qpc() - t0);
 }
 

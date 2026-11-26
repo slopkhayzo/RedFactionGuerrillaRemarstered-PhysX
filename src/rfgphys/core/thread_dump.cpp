@@ -1,4 +1,5 @@
 #include "core/thread_dump.h"
+#include "core/x64.h"
 
 #include <windows.h>
 #include <intrin.h>
@@ -48,10 +49,10 @@ const Module* find_module(const std::vector<Module>& mods, uintptr_t v) {
 }
 
 // No C++ objects in these two: SEH guards the reads.
-int copy_stack(uint32_t* dst, uintptr_t esp, int max_dwords) {
+int copy_stack(uintptr_t* dst, uintptr_t esp, int max_words) {  // OpenRFG64: pointer-sized stack slots
     int copied = 0;
     __try {
-        for (; copied < max_dwords; ++copied) dst[copied] = reinterpret_cast<const uint32_t*>(esp)[copied];
+        for (; copied < max_words; ++copied) dst[copied] = reinterpret_cast<const uintptr_t*>(esp)[copied];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return copied;
@@ -83,7 +84,7 @@ std::string where(const std::vector<Module>& mods, uintptr_t v) {
     } else if (m) {
         snprintf(buf, sizeof(buf), "%s+0x%X", m->name, unsigned(v - m->lo));
     } else {
-        snprintf(buf, sizeof(buf), "0x%08X", unsigned(v));
+        snprintf(buf, sizeof(buf), "0x%llX", static_cast<unsigned long long>(v));
     }
     return buf;
 }
@@ -91,7 +92,7 @@ std::string where(const std::vector<Module>& mods, uintptr_t v) {
 }  // namespace
 
 void log_thread(unsigned long tid, const char* label) {
-    static uint32_t stack[8192];  // 32 KB
+    static uintptr_t stack[8192];  // 32 KB (64 KB on x64)
     if (!tid) {
         LOG("hang:   thread ? (%s): not known", label);
         return;
@@ -108,7 +109,7 @@ void log_thread(unsigned long tid, const char* label) {
     bool ok = false;
     if (SuspendThread(h) != DWORD(-1)) {
         ok = GetThreadContext(h, &ctx) != FALSE;
-        if (ok) n = copy_stack(stack, ctx.Esp, int(std::size(stack)));
+        if (ok) n = copy_stack(stack, RFG_CTX_SP(ctx), int(std::size(stack)));
         ResumeThread(h);
     }
     CloseHandle(h);
@@ -116,7 +117,8 @@ void log_thread(unsigned long tid, const char* label) {
         LOG("hang:   thread %lu (%s): no context", tid, label);
         return;
     }
-    LOG("hang:   thread %lu (%s): eip %s esp %08lX", tid, label, where(mods, ctx.Eip).c_str(), ctx.Esp);
+    LOG("hang:   thread %lu (%s): eip %s esp %llX", tid, label, where(mods, RFG_CTX_IP(ctx)).c_str(),
+        static_cast<unsigned long long>(RFG_CTX_SP(ctx)));
     std::string line;
     int shown = 0, on_line = 0;
     for (int i = 0; i < n && shown < 64; ++i) {
@@ -134,7 +136,7 @@ void log_thread(unsigned long tid, const char* label) {
 }
 
 void log_own_stack(const char* label, int max_frames) {
-    uint32_t stack[2048];  // 8 KB above this function's frame
+    uintptr_t stack[2048];  // 8 KB above this function's frame (16 KB on x64)
     const int n = copy_stack(stack, reinterpret_cast<uintptr_t>(_AddressOfReturnAddress()), int(std::size(stack)));
     const std::vector<Module> mods = list_modules();
     std::string line;

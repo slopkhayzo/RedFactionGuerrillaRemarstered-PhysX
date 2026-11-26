@@ -1,4 +1,5 @@
 #include "telemetry/profiler.h"
+#include "core/x64.h"
 
 #include <windows.h>
 #include <psapi.h>
@@ -82,10 +83,10 @@ bool sample_thread(const Target& t, Sample& s, uint32_t* stack, int& stack_len) 
     CONTEXT ctx{};
     ctx.ContextFlags = CONTEXT_CONTROL;
     const bool ok = GetThreadContext(t.handle, &ctx) != FALSE;
-    if (ok) stack_len = copy_stack(stack, ctx.Esp);
+    if (ok) stack_len = copy_stack(stack, RFG_CTX_SP(ctx));  // OpenRFG64: x86 only in use (off on OpenRFG64)
     ResumeThread(t.handle);
     if (!ok) return false;
-    s.eip = ctx.Eip;
+    s.eip = uint32_t(RFG_CTX_IP(ctx));
     return true;
 }
 
@@ -207,7 +208,7 @@ void flush(bool at_exit) {
 bool start(const Config& cfg) {
     g_cfg = cfg;
     auto base = reinterpret_cast<const uint8_t*>(rfg::base());
-    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
     auto sec = IMAGE_FIRST_SECTION(nt);
     for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
         if (memcmp(sec[i].Name, ".text", 5) == 0) {

@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.25)
 project(rfgphys VERSION 0.5.0 LANGUAGES C CXX)
 
-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
-    message(FATAL_ERROR "rfg.exe is 32-bit: configure with -A Win32")
+# OpenRFG64: an x64 build for OpenRFG64 (a 64-bit OpenRFG). The upstream plugin is 32-bit only.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(RFGPHYS_X64 ON)
+    set(MINHOOK_HDE third_party/minhook/src/hde/hde64.c)
+else()
+    set(RFGPHYS_X64 OFF)
+    set(MINHOOK_HDE third_party/minhook/src/hde/hde32.c)
 endif()
 
 # Static CRT: no redistributable needed, and no sharing of the game's MSVCR100 heap.
@@ -12,7 +17,7 @@ add_library(minhook STATIC
     third_party/minhook/src/buffer.c
     third_party/minhook/src/hook.c
     third_party/minhook/src/trampoline.c
-    third_party/minhook/src/hde/hde32.c)
+    ${MINHOOK_HDE})
 target_include_directories(minhook PUBLIC third_party/minhook/include)
 
 add_library(rfgphys SHARED
@@ -20,6 +25,7 @@ add_library(rfgphys SHARED
     src/rfgphys/core/log.cpp
     src/rfgphys/core/config.cpp
     src/rfgphys/core/build_check.cpp
+    src/shared/openrfg64_column.cpp
     src/rfgphys/core/session.cpp
     src/rfgphys/core/gameloop.cpp
     src/rfgphys/core/contacts.cpp
@@ -30,6 +36,7 @@ add_library(rfgphys SHARED
     src/rfgphys/dev/fly_camera.cpp
     src/rfgphys/hooks/hooks.cpp
     src/rfgphys/game/rfg.cpp
+    src/rfgphys/game/layout.cpp
     src/rfgphys/telemetry/telemetry.cpp
     src/rfgphys/telemetry/object_census.cpp
     src/rfgphys/telemetry/render_census.cpp
@@ -52,6 +59,7 @@ add_library(rfgphys SHARED
     src/rfgphys/experiments/havok_audit.cpp
     src/rfgphys/experiments/havok_mt.cpp
     src/rfgphys/experiments/keep_debris.cpp
+    src/rfgphys/menu/display_rows.cpp
     src/rfgphys/harness/harness.cpp
     src/rfgphys/harness/rec_file.cpp
     src/rfgphys/harness/checkpoint.cpp

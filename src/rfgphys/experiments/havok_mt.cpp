@@ -81,12 +81,12 @@ struct JobHandlerFuncs {    // hkJobQueue::hkJobHandlerFuncs
 };
 
 // __thiscall functions are called through __fastcall (ecx = this, edx unused).
-using StepBegin = int(__fastcall*)(void* sim, void* edx, void* queue, float dt);
-using StepFinish = int(__fastcall*)(void* sim, void* edx, void* queue, void* thread_pool);
-using ProcessAllJobs = int(__fastcall*)(void* queue, void* edx, bool add_timers);
-using QueueCtor = void*(__fastcall*)(void* queue, void* edx, const void* cinfo);
-using HwSetupCtor = void*(__fastcall*)(void* setup, void* edx);
-using WorldLockFn = void(__fastcall*)(void* world, void* edx);
+using StepBegin = int(__fastcall*)(void* sim RFG_EDX_PARAM, void* queue, float dt);
+using StepFinish = int(__fastcall*)(void* sim RFG_EDX_PARAM, void* queue, void* thread_pool);
+using ProcessAllJobs = int(__fastcall*)(void* queue RFG_EDX_PARAM, bool add_timers);
+using QueueCtor = void*(__fastcall*)(void* queue RFG_EDX_PARAM, const void* cinfo);
+using HwSetupCtor = void*(__fastcall*)(void* setup RFG_EDX_PARAM);
+using WorldLockFn = void(__fastcall*)(void* world RFG_EDX_PARAM);
 using CreateRouter = void*(__cdecl*)();
 using InitThread = int*(__cdecl*)(int* result, void* router);  // hkResult returned through a hidden pointer
 
@@ -229,7 +229,7 @@ DWORD WINAPI worker_main(void* param) {
     for (;;) {
         WaitForSingleObject(g_start[index], INFINITE);
         _mm_setcsr(g_mxcsr);
-        process(g_queue, nullptr, false);
+        process(g_queue RFG_EDX_ARG, false);
         if (g_pending.fetch_sub(1, std::memory_order_acq_rel) == 1) SetEvent(g_done);
     }
 }
@@ -237,13 +237,13 @@ DWORD WINAPI worker_main(void* param) {
 // On the sim thread (the job queue's constructor makes the calling thread Havok thread 0, the master).
 bool init_queue() {
     alignas(16) uint8_t cinfo[kQueueCinfoSize] = {};
-    rfg::fn<HwSetupCtor>(r::hkJobQueueHwSetup__hkJobQueueHwSetup)(cinfo, nullptr);  // no SPUs, no shared caches
+    rfg::fn<HwSetupCtor>(r::hkJobQueueHwSetup__hkJobQueueHwSetup)(cinfo RFG_EDX_ARG);  // no SPUs, no shared caches
     *reinterpret_cast<int*>(cinfo + kCinfoNumCpuThreads) = g_requested + 1;
     *reinterpret_cast<int*>(cinfo + kCinfoMaxNumJobTypes) = kJobTypeMax;
     void* queue = _aligned_malloc(kQueueSize, 16);
     if (!queue) return false;
     memset(queue, 0, kQueueSize);
-    rfg::fn<QueueCtor>(r::hkJobQueue__hkJobQueue)(queue, nullptr, cinfo);
+    rfg::fn<QueueCtor>(r::hkJobQueue__hkJobQueue)(queue RFG_EDX_ARG, cinfo);
 
     // hkpWorld::registerWithJobQueue: processNextJob dispatches every dynamics and collide job by subtype; the queue
     // asks hkpJobQueueUtils how to split and continue them.
@@ -328,7 +328,7 @@ constexpr uint8_t kNarrowphaseTrack = 2;
 const rfg::CodeSite kAfterHeaderAllocate{r::hkpSingleThreadedJobsOnIsland__cpuBroadPhaseJob, 0x931};
 const uint8_t kAfterHeaderAllocateBytes[] = {0x33, 0xFF, 0x8B, 0xD8, 0x83, 0xC4, 0x08};
 
-using AddJobFn = void(__fastcall*)(void* queue, void* edx, void* entry, int priority);  // hkJobQueue::addJob
+using AddJobFn = void(__fastcall*)(void* queue RFG_EDX_PARAM, void* entry, int priority);  // hkJobQueue::addJob
 bool g_split_installed = false;
 std::atomic<uint32_t> g_jobs_split{0};
 
@@ -359,7 +359,7 @@ void __cdecl split_big_sector_jobs(void* queue, uint8_t* header, uint8_t* const*
             *reinterpret_cast<uint16_t*>(more + kJobLastSectorBytes) =
                 start + count == sectors ? *reinterpret_cast<const uint16_t*>(track + kTrackLastSectorBytes)
                                          : kSectorBytes;
-            rfg::fn<AddJobFn>(r::hkJobQueue__addJobEntry)(queue, nullptr, more, 1);
+            rfg::fn<AddJobFn>(r::hkJobQueue__addJobEntry)(queue RFG_EDX_ARG, more, 1);
         }
         const uint32_t n = g_jobs_split.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 10 || n % 1000 == 0)
@@ -471,16 +471,16 @@ StepPlan plan_step(const uint8_t* world) {
 
 // hkpSimulation::stepDeltaTime(dt), called by hkpWorld::stepDeltaTime with the world locked. For the multithreaded
 // simulation it becomes hkpWorld::stepMultithreaded with our threads instead of an hkThreadPool.
-int(__fastcall* o_sim_step)(uint8_t*, void*, float);
-int __fastcall d_sim_step(uint8_t* sim, void* edx, float dt) {
+int(__fastcall* o_sim_step)(uint8_t* RFG_EDX_TYPE, float);
+int __fastcall d_sim_step(uint8_t* sim RFG_EDX_PARAM, float dt) {
     uint8_t* world = sim ? *reinterpret_cast<uint8_t**>(sim + kSimWorld) : nullptr;
     if (!world || *reinterpret_cast<int*>(world + kWorldSimulationType) != kSimulationMultithreaded)
-        return o_sim_step(sim, edx, dt);
+        return o_sim_step(sim RFG_EDX_PASS, dt);
     if (!g_queue && !g_queue_failed && !init_queue()) {
         g_queue_failed = true;
         LOG("experiment HavokThreads: could not create the job queue; falling back to Havok's single-threaded step");
     }
-    if (!g_queue) return o_sim_step(sim, edx, dt);
+    if (!g_queue) return o_sim_step(sim RFG_EDX_PASS, dt);
 
     // The islands against the collide jobs' 16-bit counts (split_big_sector_jobs above).
     const StepPlan plan = plan_step(world);
@@ -497,21 +497,21 @@ int __fastcall d_sim_step(uint8_t* sim, void* edx, float dt) {
             LOG("experiment HavokThreads: %d islands, up to %d bodies and %d agent sectors in one (%d collide tasks): "
                 "beyond Havok's collide jobs, the step runs single-threaded (%llu so far)", plan.islands, plan.bodies,
                 plan.sectors, plan.tasks, static_cast<unsigned long long>(g_steps_single));
-        return o_sim_step(sim, edx, dt);
+        return o_sim_step(sim RFG_EDX_PASS, dt);
     }
 
     g_step_sim = sim;
     g_step_start.store(session::qpc(), std::memory_order_release);
     // Havok's multithreaded step runs without the world lock (hkReferencedObject::lockAll): jobs that queue world
     // operations take it, so a worker would wait for the sim thread while the sim thread waits for the worker.
-    rfg::fn<WorldLockFn>(r::hkpWorld__unlock)(world, nullptr);
+    rfg::fn<WorldLockFn>(r::hkpWorld__unlock)(world RFG_EDX_ARG);
     // Multiplayer keeps the step on the sim thread, like the other experiments.
     int workers = rfg::global<uint8_t>(r::Multiplayer) || g_jobs_on_sim_thread ? 0 : g_workers;
     if (workers > 0 && ref_lock_count() != 0) {
         if (g_steps_alone++ < 5) LOG("experiment HavokThreads: world lock still held, this step runs on the sim thread");
         workers = 0;
     }
-    int result = rfg::fn<StepBegin>(r::hkpMultiThreadedSimulation__stepBeginSt)(sim, nullptr, g_queue, dt);
+    int result = rfg::fn<StepBegin>(r::hkpMultiThreadedSimulation__stepBeginSt)(sim RFG_EDX_ARG, g_queue, dt);
     if (result == 0) {
         const int64_t start = session::qpc();
         g_in_jobs.store(true, std::memory_order_relaxed);
@@ -520,24 +520,24 @@ int __fastcall d_sim_step(uint8_t* sim, void* edx, float dt) {
             g_pending.store(workers, std::memory_order_release);
             for (int i = 1; i <= workers; ++i) SetEvent(g_start[i]);
         }
-        process_all_jobs()(g_queue, nullptr, false);
+        process_all_jobs()(g_queue RFG_EDX_ARG, false);
         if (workers > 0) WaitForSingleObject(g_done, INFINITE);
         g_in_jobs.store(false, std::memory_order_relaxed);
         havok_audit_after_jobs();  // Test.HavokAudit: the islands between the jobs and the step's end
         g_frame_jobs_ms += session::ticks_to_ms(session::qpc() - start);
         ++g_steps;
         // No thread pool: the TOIs and the rest of the step's end run on this thread.
-        result = rfg::fn<StepFinish>(r::hkpMultiThreadedSimulation__finishMtStep)(sim, nullptr, g_queue, nullptr);
+        result = rfg::fn<StepFinish>(r::hkpMultiThreadedSimulation__finishMtStep)(sim RFG_EDX_ARG, g_queue, nullptr);
     }
-    rfg::fn<WorldLockFn>(r::hkpWorld__lock)(world, nullptr);
+    rfg::fn<WorldLockFn>(r::hkpWorld__lock)(world RFG_EDX_ARG);
     g_step_start.store(0, std::memory_order_release);
     return result;
 }
 
 // hkpWorld::hkpWorld(const hkpWorldCinfo&, sdk version): the game's world (from havok_system_init) is created
 // multithreaded.
-void*(__fastcall* o_world_ctor)(void*, void*, uint8_t*, uint32_t);
-void* __fastcall d_world_ctor(void* world, void* edx, uint8_t* cinfo, uint32_t version) {
+void*(__fastcall* o_world_ctor)(void* RFG_EDX_TYPE, uint8_t*, uint32_t);
+void* __fastcall d_world_ctor(void* world RFG_EDX_PARAM, uint8_t* cinfo, uint32_t version) {
     const uint32_t caller = uint32_t(reinterpret_cast<uintptr_t>(_ReturnAddress()) - rfg::base());
     const bool game_world = caller - r::havok_system_init < rfg::size::havok_system_init;
     const bool patch = game_world && cinfo && cinfo[kCinfoSimulationType] == kSimulationContinuous;
@@ -551,7 +551,7 @@ void* __fastcall d_world_ctor(void* world, void* edx, uint8_t* cinfo, uint32_t v
         if (g_min_island_size >= 0)
             *reinterpret_cast<uint32_t*>(cinfo + kCinfoMinDesiredIslandSize) = uint32_t(g_min_island_size);
     }
-    void* result = o_world_ctor(world, edx, cinfo, version);
+    void* result = o_world_ctor(world RFG_EDX_PASS, cinfo, version);
     if (patch) {
         auto* w = static_cast<uint8_t*>(world);
         const int type = *reinterpret_cast<int*>(w + kWorldSimulationType);
@@ -578,8 +578,8 @@ void* __fastcall d_world_ctor(void* world, void* edx, uint8_t* cinfo, uint32_t v
 }
 
 // hkpWorld::~hkpWorld deletes its locks before it removes the entities (whose contact-removed callbacks are guarded).
-void(__fastcall* o_world_dtor)(void*, void*);
-void __fastcall d_world_dtor(void* world, void* edx) {
+void(__fastcall* o_world_dtor)(void* RFG_EDX_TYPE);
+void __fastcall d_world_dtor(void* world RFG_EDX_PARAM) {
     if (world == g_world) {
         game_lock::set(nullptr);
         g_world = nullptr;
@@ -589,16 +589,16 @@ void __fastcall d_world_dtor(void* world, void* edx) {
             static_cast<unsigned long long>(g_steps_single), g_jobs_split.load(), g_removes_skipped.load(),
             g_adds_skipped.load());
     }
-    o_world_dtor(world, edx);
+    o_world_dtor(world RFG_EDX_PASS);
 }
 
 // Game callbacks that run inside Havok's jobs, serialized (the contact-added callback is in core/contacts).
 template <int Id, typename... A>
 struct Guarded {
-    static inline void(__fastcall* original)(void*, void*, A...) = nullptr;
-    static void __fastcall detour(void* self, void* edx, A... args) {
+    static inline void(__fastcall* original)(void* RFG_EDX_TYPE, A...) = nullptr;
+    static void __fastcall detour(void* self RFG_EDX_PARAM, A... args) {
         game_lock::Guard guard;
-        original(self, edx, args...);
+        original(self RFG_EDX_PASS, args...);
     }
     static bool install(uint32_t rva, const char* name) { return hooks::create(rva, &detour, &original, name); }
 };

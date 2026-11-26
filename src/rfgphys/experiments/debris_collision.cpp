@@ -36,18 +36,18 @@ void* g_game_solver_buffer = nullptr;
 int g_game_solver_size = 0;
 bool g_solver_checked = false;
 
-void(__fastcall* o_set_buffer)(void*, void*, void*, int);
-void*(__fastcall* o_main_quit)(void*, void*, void*, int);
+void(__fastcall* o_set_buffer)(void* RFG_EDX_TYPE, void*, int);
+void*(__fastcall* o_main_quit)(void* RFG_EDX_TYPE, void*, int);
 
 // hkSolverAllocator::setBuffer: called once by hkFreeListMemorySystem::mainInit (from havok_memory_init) and once by
 // mainQuit (null) at shutdown.
-void __fastcall d_set_buffer(void* allocator, void* edx, void* buffer, int size) {
+void __fastcall d_set_buffer(void* allocator RFG_EDX_PARAM, void* buffer, int size) {
     if (buffer && size > 0 && !g_game_solver_buffer && g_solver_size > uint32_t(size)) {
         void* own = VirtualAlloc(nullptr, g_solver_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         if (own) {
             g_game_solver_buffer = buffer;
             g_game_solver_size = size;
-            o_set_buffer(allocator, edx, own, int(g_solver_size));
+            o_set_buffer(allocator RFG_EDX_PASS, own, int(g_solver_size));
             // havok_memory_init sets the limit after mainInit returns, and only ever raises it.
             rfg::global<uint32_t>(rfg::rva::Havok_mem_largest_runtime_block) = g_solver_size - kSolverMargin;
             LOG("experiment DebrisCollide: Havok solver buffer %u KB instead of %d KB, island limit %u KB",
@@ -56,17 +56,17 @@ void __fastcall d_set_buffer(void* allocator, void* edx, void* buffer, int size)
         }
         LOG("experiment DebrisCollide: could not allocate a %u KB solver buffer, keeping the game's", g_solver_size / 1024);
     }
-    o_set_buffer(allocator, edx, buffer, size);
+    o_set_buffer(allocator RFG_EDX_PASS, buffer, size);
 }
 
 // hkFreeListMemorySystem::mainQuit(hkResult* result, flags) frees the solver buffer it finds into Havok's pool.
-void* __fastcall d_main_quit(void* system, void* edx, void* result, int flags) {
+void* __fastcall d_main_quit(void* system RFG_EDX_PARAM, void* result, int flags) {
     if (g_game_solver_buffer) {
-        o_set_buffer(static_cast<uint8_t*>(system) + kSolverAllocator, nullptr, g_game_solver_buffer,
+        o_set_buffer(static_cast<uint8_t*>(system) + kSolverAllocator RFG_EDX_ARG, g_game_solver_buffer,
                      g_game_solver_size);
         g_game_solver_buffer = nullptr;
     }
-    return o_main_quit(system, edx, result, flags);
+    return o_main_quit(system RFG_EDX_PASS, result, flags);
 }
 
 // havok_memory_watch_dog_free_memory(world, island, count), from havok_sim_islands_process_post right after the step:
@@ -93,7 +93,7 @@ bool grow_solver_buffer(uint32_t need) {
     if (uint64_t(need) + kSolverMargin > size || size <= current_size) return false;
     void* fresh = VirtualAlloc(nullptr, size_t(size), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!fresh) return false;
-    o_set_buffer(allocator, nullptr, fresh, int(size));
+    o_set_buffer(allocator RFG_EDX_ARG, fresh, int(size));
     if (!g_game_solver_buffer) {  // the game's own: back to Havok at shutdown (d_main_quit)
         g_game_solver_buffer = current;
         g_game_solver_size = int(current_size);

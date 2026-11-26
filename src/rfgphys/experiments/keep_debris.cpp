@@ -189,9 +189,9 @@ void update_budget(int game_state) {
 }
 
 // handle_manager<7280>::allocate_handle(): 0xFFFFFFFF when the zone is full (the game goes on with that handle).
-uint32_t(__fastcall* o_allocate_handle)(void*, void*);
-uint32_t __fastcall d_allocate_handle(void* mgr, void* edx) {
-    const uint32_t h = o_allocate_handle(mgr, edx);
+uint32_t(__fastcall* o_allocate_handle)(void* RFG_EDX_TYPE);
+uint32_t __fastcall d_allocate_handle(void* mgr RFG_EDX_PARAM) {
+    const uint32_t h = o_allocate_handle(mgr RFG_EDX_PASS);
     if (h == 0xFFFFFFFFu) {
         const uint32_t n = g_handle_failures.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 5 || n % 1000 == 0) LOG("experiment KeepDebris: a world zone is out of object handles (%u so far)", n);
@@ -316,9 +316,9 @@ int __cdecl d_collect_sphere(const float* center, float radius, uint32_t* handle
     static std::vector<Hit> hits;
     hits.clear();
     void* world = rfg::addr(r::World);
-    const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void*, void*, uint32_t)>(r::world__object_from_handle);
+    const auto from_handle = rfg::fn<uint8_t*(__fastcall*)(void* RFG_EDX_TYPE, uint32_t)>(r::world__object_from_handle);
     for (int i = 0; i < n; ++i) {
-        const uint8_t* obj = from_handle(world, nullptr, all[size_t(i)]);
+        const uint8_t* obj = from_handle(world RFG_EDX_ARG, all[size_t(i)]);
         if (!obj) continue;
         const float* p = reinterpret_cast<const float*>(obj + kObjPos);
         const float dx = p[0] - center[0], dy = p[1] - center[1], dz = p[2] - center[2];
@@ -334,12 +334,12 @@ int __cdecl d_collect_sphere(const float* center, float radius, uint32_t* handle
 // world::collect_sorted_list(list, bpi): world streaming walks each object's parent chain through object::parent; a
 // parent that no longer resolves (gone, or flagged for destruction) makes the lookup return null and the next read
 // crashes (+0x70 of null). Kept debris can outlive such a parent; the walk is guarded and the hierarchy skipped.
-void(__fastcall* o_collect_sorted)(void*, void*, void*, void*) = nullptr;
+void(__fastcall* o_collect_sorted)(void* RFG_EDX_TYPE, void*, void*) = nullptr;
 std::atomic<uint32_t> g_collect_faults{0};
 
 bool collect_sorted_guarded(void* world, void* list, void* bpi) {  // no C++ objects here: SEH
     __try {
-        o_collect_sorted(world, nullptr, list, bpi);
+        o_collect_sorted(world RFG_EDX_ARG, list, bpi);
         return true;
     } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
                                                                  : EXCEPTION_CONTINUE_SEARCH) {
@@ -347,8 +347,7 @@ bool collect_sorted_guarded(void* world, void* list, void* bpi) {  // no C++ obj
     }
 }
 
-void __fastcall d_collect_sorted(void* world, void* edx, void* list, void* bpi) {
-    (void)edx;
+void __fastcall d_collect_sorted(void* world RFG_EDX_PARAM, void* list, void* bpi) {
     if (collect_sorted_guarded(world, list, bpi)) return;
     const uint32_t n = g_collect_faults.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n <= 5 || n % 1000 == 0)
@@ -367,12 +366,12 @@ void __cdecl d_governor() {
 
 // A mempool_base for object_pool_server::init: it allocates the element, link and list-id arrays through vtable
 // slot 7 (alloc(size, flags)). The other slots are never called by init; they end the process if they ever are.
-void* __fastcall pool_alloc(void*, void*, uint32_t size, uint32_t) {
+void* __fastcall pool_alloc(void* RFG_EDX_PARAM, uint32_t size, uint32_t) {
     void* p = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!p) LOG("experiment DebrisPool: VirtualAlloc of %u bytes failed", size);
     return p;
 }
-void __fastcall pool_trap(void*, void*) {
+void __fastcall pool_trap(void* RFG_EDX_PARAM) {
     session::exit_now("experiment DebrisPool: unexpected mempool call during pool initialization");
 }
 void* g_mempool_vtable[16];
@@ -380,21 +379,21 @@ struct {
     void** vtable;
 } g_mempool{g_mempool_vtable};
 
-using ServerInit = void(__fastcall*)(uint8_t* server, void* edx, void* mempool, uint32_t capacity);
+using ServerInit = void(__fastcall*)(uint8_t* server RFG_EDX_PARAM, void* mempool, uint32_t capacity);
 ServerInit o_server_init = nullptr;
 
 uint8_t* debris_pool() { return static_cast<uint8_t*>(rfg::addr(r::general_moverpool)); }
 
 // object_pool_server<general_mover>::init(mempool_base*, uint capacity): the pool constructor (static
 // initialization) calls it with the pool's own inline storage and 3,072 slots; the bigger pool gets our arrays.
-void __fastcall d_server_init(uint8_t* server, void* edx, void* mempool, uint32_t capacity) {
+void __fastcall d_server_init(uint8_t* server RFG_EDX_PARAM, void* mempool, uint32_t capacity) {
     if (server == debris_pool() && capacity == kGameDebrisPool && g_pool_capacity > kGameDebrisPool) {
-        o_server_init(server, edx, &g_mempool, g_pool_capacity);
+        o_server_init(server RFG_EDX_PASS, &g_mempool, g_pool_capacity);
         LOG("experiment DebrisPool: general_mover pool built with %u slots (game: %u)",
             *reinterpret_cast<uint32_t*>(server + kPoolCapacity), capacity);
         return;
     }
-    o_server_init(server, edx, mempool, capacity);
+    o_server_init(server RFG_EDX_PASS, mempool, capacity);
 }
 
 bool setup_pool() {
@@ -412,7 +411,7 @@ bool setup_pool() {
         LOG("experiment DebrisPool: pool already in use (%u of %u slots free), left at the game's size", free, capacity);
         return true;
     }
-    rfg::fn<ServerInit>(r::object_pool_server_general_mover___init)(pool, nullptr, &g_mempool, g_pool_capacity);
+    rfg::fn<ServerInit>(r::object_pool_server_general_mover___init)(pool RFG_EDX_ARG, &g_mempool, g_pool_capacity);
     LOG("experiment DebrisPool: general_mover pool rebuilt with %u slots (game: %u)",
         *reinterpret_cast<uint32_t*>(pool + kPoolCapacity), capacity);
     return true;
@@ -433,8 +432,8 @@ uint32_t permanent_pool_free() {
     return (*reinterpret_cast<Free* const*>(pool))[3](pool);
 }
 
-void(__fastcall* o_world_system_init)(void*, void*);
-void __fastcall d_world_system_init(void* w, void* edx) {
+void(__fastcall* o_world_system_init)(void* RFG_EDX_TYPE);
+void __fastcall d_world_system_init(void* w RFG_EDX_PARAM) {
     const uint32_t hash_size = rfg::global<uint32_t>(r::obj_class_instantiator__hash_size);
     void* const* alloc_funcs = &rfg::global<void*>(r::obj_class_instantiator__alloc_funcs);
     int32_t* max_objects = &rfg::global<int32_t>(r::obj_class_instantiator__max_objects);
@@ -445,7 +444,7 @@ void __fastcall d_world_system_init(void* w, void* edx) {
         if (alloc_funcs[i] == rfg::addr(r::alloc_general_mover)) slot = int(i);
     if (slot < 0) {
         LOG("experiment DebrisPool: general_mover's class is not registered; its object lists stay at the game's size");
-        o_world_system_init(w, edx);
+        o_world_system_init(w RFG_EDX_PASS);
         return;
     }
     int32_t total = 0;
@@ -457,7 +456,7 @@ void __fastcall d_world_system_init(void* w, void* edx) {
     const int32_t fits = free > kPermanentMargin ? old + int32_t((free - kPermanentMargin) / kListBytesPerObject) : old;
     if (want > fits) want = fits;
     if (want > old) max_objects[slot] = want;
-    o_world_system_init(w, edx);
+    o_world_system_init(w RFG_EDX_PASS);
     LOG("experiment DebrisPool: general_mover object lists %d -> %d (world objects %d -> %d), permanent memory pool "
         "%u -> %u KB free", old, max_objects[slot], total, total - old + max_objects[slot], free >> 10,
         permanent_pool_free() >> 10);
@@ -539,14 +538,14 @@ uint8_t* __cdecl d_mempool_init_alloc(int size) {
 }
 
 // mempool::init(buffer, size, name, alignment, flags)
-void(__fastcall* o_mempool_init)(uint8_t*, void*, void*, uint32_t, const char*, uint32_t, uint8_t);
-void __fastcall d_mempool_init(uint8_t* pool, void* edx, void* buffer, uint32_t size, const char* name, uint32_t align,
+void(__fastcall* o_mempool_init)(uint8_t* RFG_EDX_TYPE, void*, uint32_t, const char*, uint32_t, uint8_t);
+void __fastcall d_mempool_init(uint8_t* pool RFG_EDX_PARAM, void* buffer, uint32_t size, const char* name, uint32_t align,
                                uint8_t flags) {
     if (pool == rfg::addr(r::Havok_mempool) && g_havok_heap && buffer == g_havok_heap && size == kGameHavokHeap) {
         size = g_havok_heap_bytes;
         LOG("experiment HavokHeapMB: Havok heap %u MB at %p (game: %u MB)", size >> 20, buffer, kGameHavokHeap >> 20);
     }
-    o_mempool_init(pool, edx, buffer, size, name, align, flags);
+    o_mempool_init(pool RFG_EDX_PASS, buffer, size, name, align, flags);
 }
 
 // How much of the heap is used: the block is committed whole, so what it does not need is address space the game
@@ -707,8 +706,8 @@ void take_restored_debris(int game_state) {
 
 // havok_memory_listener::allocationFailure(size): the game prints Havok's memory statistics and then loops forever.
 // With kept debris that can happen; end the game with a log line instead of a frozen window.
-void(__fastcall* o_allocation_failure)(void*, void*, uint32_t);
-void __fastcall d_allocation_failure(void*, void*, uint32_t size) {
+void(__fastcall* o_allocation_failure)(void* RFG_EDX_TYPE, uint32_t);
+void __fastcall d_allocation_failure(void* RFG_EDX_PARAM, uint32_t size) {
     char reason[160];
     snprintf(reason, sizeof(reason),
              "Havok is out of memory (a %u-byte allocation failed; Experiment.HavokHeapMB raises the heap)", size);

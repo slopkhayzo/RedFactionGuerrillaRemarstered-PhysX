@@ -125,7 +125,14 @@ struct Config {
     // instead of twice (research/docs/08 §14). 1: every step.
     int exp_physx_change_every = 3;
     int exp_physx_cpu_threads = 0;      // PhysX's CPU threads in the host; 0: 4 with GPU dynamics, 6 without
-    int exp_physx_max_bodies = 65536;   // body slots (shared memory: 192 bytes per slot)
+    int exp_physx_max_bodies = 65536;   // body slots (shared memory: 192 bytes per slot); 64-bit: the slots at start
+    // OpenRFG64 (64-bit only): the slots grow from PhysXMaxBodies while the GPU has room, up to PhysXSlotsMax;
+    // room: every program's graphics memory in use stays under the GPU's total less PhysXVramReserveMB (0: an eighth
+    // of it, at least 2 GB). PhysXRecycleMinAgeS: pieces this young are given up last (the farthest go when the slots
+    // cannot grow or the render instances run short).
+    int exp_physx_slots_max = 4194304;
+    int exp_physx_vram_reserve_mb = 0;
+    int exp_physx_recycle_min_age_s = 60;
     // X0 test scene (physx/test_scene.h): bodies dropped once gameplay starts, and the seconds after which the host
     // is told to crash (0: never).
     int exp_physx_test = 0;
@@ -136,6 +143,16 @@ struct Config {
     int exp_physx_world = 0;
     int exp_physx_world_check = 0;
     int exp_physx_world_hf = 0;  // diagnostic: bit 0 x-major heights, bit 1 flipped height-field split
+    // OpenRFG64 (big maps): a level whose static world makes more statics in the host than PhysXWorldStatics is
+    // mirrored in part: what is within PhysXWorldNearM of the player, and of the other buildings the pieces near the
+    // debris in PhysX and near where pieces wait to come over (0: always the whole static world, rfg.exe's default).
+    // A map of 48 tall buildings makes about 383,000 statics; one of 480, 4.1 million, which never got there.
+#if defined(_WIN64)
+    int exp_physx_world_statics = 400000;
+#else
+    int exp_physx_world_statics = 0;
+#endif
+    int exp_physx_world_near_m = 60;
     // X2 (physx/debris_offload.h): debris pieces leave the game for the PhysX host (needs PhysX and PhysXWorld).
     int exp_physx_debris = 0;
     int exp_physx_debris_batch = 1;  // their render instances stay batchable (drawn instanced; 0: one by one)
@@ -222,6 +239,12 @@ struct Config {
     bool harness_track = true;            // record and replay the player track (harness/track.h); 0: no track hooks
     bool harness_lock_track = true;       // replay: lock camera, player and shots to the recording's track.bin
     int harness_track_tolerance_cm = 25;  // replay: put the player back when this far off the recorded path
+
+    // [Menu]
+    bool menu_rows = true;                // Menu.Rows: the display menu's PHYSICS and KEEP DEBRIS rows (menu/display_rows.h)
+    // [Test] DisplayRows: the display menu's rows as a player sets them before its first accept from the main menu
+    // ("physics=0|1,keepdebris=0|1"); the path tracer's Test.DisplayRows opens the menu and accepts
+    std::string test_display_rows;
 
     std::wstring ini_path;
 };
